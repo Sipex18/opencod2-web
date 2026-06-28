@@ -460,7 +460,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     level_bgs.AllocXAnim   = (void *(*)())Hunk_AllocXAnimServer;
     level_bgs.anim_user    = 1;
 
-    logFile = (const char *)g_log->current.integer;
+    logFile = g_log->current.string;
     if (*logFile != '\0') {
 
         FS_FOpenFileByMode(logFile, &level.logFile, g_logSync->current.integer ? 3 : 2);
@@ -469,7 +469,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
             G_LogPrintf("------------------------------------------------------------\n");
             G_LogPrintf("InitGame: %s\n", info);
         } else {
-            Com_Printf("WARNING: Couldn't open logfile: %s\n", g_log->current.integer);
+            Com_Printf("WARNING: Couldn't open logfile: %s\n", logFile);
         }
     } else {
         Com_Printf("Not logging to disk.\n");
@@ -558,7 +558,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     }
 
     if (g_dedicated->current.integer > 0) {
-        const char *pw = (const char *)g_password->current.integer;
+        const char *pw = g_password->current.string;
         if (*pw != '\0') {
             Com_sprintf(info, sizeof(info), "password: %s\n", pw);
         }
@@ -736,7 +736,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     level_bgs.AllocXAnim   = (void *(*)())Hunk_AllocXAnimServer;
     level_bgs.anim_user    = 1;
 
-    logFile = (const char *)g_log->current.integer;
+    logFile = g_log->current.string;
     if (*logFile != '\0') {
 
         FS_FOpenFileByMode(logFile, &level.logFile, g_logSync->current.integer ? 3 : 2);
@@ -745,7 +745,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
             G_LogPrintf("------------------------------------------------------------\n");
             G_LogPrintf("InitGame: %s\n", info);
         } else {
-            Com_Printf("WARNING: Couldn't open logfile: %s\n", g_log->current.integer);
+            Com_Printf("WARNING: Couldn't open logfile: %s\n", logFile);
         }
     } else {
         Com_Printf("Not logging to disk.\n");
@@ -834,7 +834,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     }
 
     if (g_dedicated->current.integer > 0) {
-        const char *pw = (const char *)g_password->current.integer;
+        const char *pw = g_password->current.string;
         if (*pw != '\0') {
             Com_sprintf(info, sizeof(info), "password: %s\n", pw);
         }
