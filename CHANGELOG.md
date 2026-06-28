@@ -16,6 +16,7 @@ Automation helper:
 ### Removed
 
 ### Fixed
+- Hardened CL_Netchan_SendOOBPacket against short packets before reading OOB marker.
 - Fixed CL_Netchan_PrintProfileStats UI output to avoid drawing a stale duplicate line before Total and aligned Total row rendering.
 - Fixed varargs type mismatches in src/PC/server_mp/sv_net_chan_mp.c by passing int values to %i format slots in Com_sprintf network profile lines.
 - Aligned NetProf_PrepProfiling declaration/cast in src/PC/server_mp/sv_net_chan_mp.c to use netProfileInfo_t**.
