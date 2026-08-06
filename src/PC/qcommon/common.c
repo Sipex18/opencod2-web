@@ -3,6 +3,9 @@
 #include "bytematch.h"
 #include "cod2_feature_config.h"
 #include <stdarg.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 #include <ctype.h>
 
 extern char cl_cdkey[52];
@@ -109,7 +112,7 @@ extern void Sys_ShowConsole(int visLevel, qboolean quitOnClose);
 extern void Sys_NormalExit(void);
 extern void SV_AddDedicatedCommands(void);
 extern qboolean Com_HasPlayerProfile(void);
-extern void Com_BuildPlayerProfilePath(char *buf, int bufsize, const char *suffix);
+extern int Com_BuildPlayerProfilePath(char *path, int pathSize, const char *format, ...);
 
 extern const dvar_t *Dvar_RegisterInt(const char *name, int value, int min, int max, int flags);
 extern int Sys_Milliseconds(void);
@@ -194,6 +197,20 @@ void Com_Printf(const char *fmt, ...)
 {
     char msg[4096];
     va_list argptr;
+
+#ifdef __EMSCRIPTEN__
+    /*
+     * webdbg spam (XAnim/spawn/compiler) can be 10k+ lines per map load and each
+     * print crosses the PROXY_TO_PTHREAD worker→main boundary. Mute unless
+     * COD2_WEB_DEBUG is defined at compile time, or developer >= 1 at runtime.
+     */
+#ifndef COD2_WEB_DEBUG
+    if (fmt && fmt[0] == 'w' && strncmp(fmt, "webdbg:", 7) == 0) {
+        if (!com_developer || com_developer->current.integer < 1)
+            return;
+    }
+#endif
+#endif
 
     va_start(argptr, fmt);
     vsnprintf(msg, sizeof(msg), fmt, argptr);
@@ -516,7 +533,7 @@ static void Com_Crash_f(void)
 void Com_WriteCDKey(void)
 {
     extern qboolean CL_CDKeyValidate(const char *key, const char *checksum);
-    extern unsigned char MacPreferences_PutString(const char *key, const char *value);
+    extern void MacPreferences_PutString(const char *key, const char *value);
     char regkey[21];
 
     if (!CL_CDKeyValidate(cl_cdkey, cl_cdkeychecksum)) {
@@ -676,10 +693,15 @@ static void Com_SetConfigureDvars(int dvarCount, const char *dvarNames, const ch
     for (dvarIndex = 0; dvarIndex < dvarCount; dvarIndex++) {
         const char *name = dvarNames + dvarIndex * 0x20;
         const char *value = dvarValues + dvarIndex * 0x20;
+#ifdef __EMSCRIPTEN__
+        /* WebGL AA is applied at context create / soft recreate — keep configure value. */
+        Dvar_SetFromStringByNameFromSource(name, value, 1);
+#else
         if (strncmp(name, "r_aaSamples", 12) == 0)
             Dvar_SetFromStringByNameFromSource(name, "1", 1);
         else
             Dvar_SetFromStringByNameFromSource(name, value, 1);
+#endif
         {
             const dvar_t *dvar = Dvar_FindVar(name);
             Dvar_AddFlags(dvar, 1);
@@ -1389,7 +1411,7 @@ int Com_EventLoop(void)
 {
     extern void CL_KeyEvent(int key, int down, int time);
     extern void CL_CharEvent(int ch);
-    extern void CL_PacketEvent(netadr_t from, msg_t * msg, int time);
+    extern Bool CL_PacketEvent(netadr_t from, msg_t * msg, int time);
     extern void SV_PacketEvent(netadr_t from, msg_t * msg);
     extern void Cbuf_AddText(const char *text);
     extern void LargeLocal_LargeLocal(LargeLocal * ll, int size);
@@ -1408,6 +1430,10 @@ int Com_EventLoop(void)
     LargeLocal_LargeLocal(&bufData_ll, MAX_MSGLEN);
     data = (byte *)LargeLocal_GetBuf(&bufData_ll);
     MSG_Init(&buf, data, MAX_MSGLEN);
+
+#ifdef __EMSCRIPTEN__
+    printf("Com_EventLoop: enter\n");
+#endif
 
     for (;;) {
         int evType, evValue, evValue2, evPtrLength;
@@ -1440,13 +1466,28 @@ int Com_EventLoop(void)
 
         switch (evType) {
         case 0:
+#ifdef __EMSCRIPTEN__
+            printf("Com_EventLoop: evType=0 processing loopback\n");
+#endif
             while (NET_GetLoopPacket(0, &evFrom, &buf)) {
+#ifdef __EMSCRIPTEN__
+                printf("Com_EventLoop: before CL_PacketEvent\n");
+#endif
                 CL_PacketEvent(evFrom, &buf, evTime);
+#ifdef __EMSCRIPTEN__
+                printf("Com_EventLoop: after CL_PacketEvent\n");
+#endif
             }
             while (NET_GetLoopPacket(1, &evFrom, &buf)) {
                 CL_SwitchToLocalClient(0);
                 if (com_sv_running->current.enabled) {
+#ifdef __EMSCRIPTEN__
+                    printf("Com_EventLoop: before SV_PacketEvent\n");
+#endif
                     SV_PacketEvent(evFrom, &buf);
+#ifdef __EMSCRIPTEN__
+                    printf("Com_EventLoop: after SV_PacketEvent\n");
+#endif
                 } else {
                     CL_PacketEvent(evFrom, &buf, evTime);
                 }
@@ -1558,6 +1599,13 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     int msec, rawMsec, minMsec, maxMsec;
     qboolean useTimescale;
 
+#ifdef __EMSCRIPTEN__
+    static int web_frame_dbg;
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame enter #%d\n", web_frame_dbg);
+    }
+#endif
+
     if (com_fullyInitialized && (dvar_modifiedFlags & 1)) {
         dvar_modifiedFlags &= ~1;
         if (Com_HasPlayerProfile()) {
@@ -1566,6 +1614,12 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
             Com_WriteConfigToFile(path);
         }
     }
+
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after profile #%d\n", web_frame_dbg);
+    }
+#endif
 
     if (com_viewlog->modified) {
         if (!com_dedicated->current.integer) {
@@ -1593,8 +1647,20 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
             NET_Sleep(0);
     } while (rawMsec < minMsec);
 
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after EventLoop #%d\n", web_frame_dbg);
+    }
+#endif
+
     Cbuf_Execute();
     com_lastFrameTime = com_frameTime;
+
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after Cbuf #%d\n", web_frame_dbg);
+    }
+#endif
 
     if (com_fixedtime->current.integer) {
         msec = com_fixedtime->current.integer;
@@ -1637,6 +1703,13 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     CL_SwitchToLocalClient(0);
     SV_Frame(maxMsec);
 
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after SV_Frame #%d\n", web_frame_dbg);
+    }
+    printf("SVDONE: after SV_Frame dedicated=%d\n", com_dedicated->current.integer);
+#endif
+
     if (!(com_dedicated->flags & 0x40)) {
         if (com_dedicated->latched.integer != com_dedicated->current.integer) {
             com_dedicated = Dvar_RegisterInt("dedicated", 0, 0, 2, 0x1020);
@@ -1659,20 +1732,56 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     if (com_dedicated->current.integer)
         return;
 
+#ifdef __EMSCRIPTEN__
+    printf("SVDONE: before CL_RunOnce\n");
+#endif
     CL_SwitchToLocalClient(0);
     CL_RunOncePerClientFrame(maxMsec);
+#ifdef __EMSCRIPTEN__
+    printf("SVDONE: after CL_RunOnce\n");
+#endif
     CL_SwitchToLocalClient(0);
     Com_EventLoop();
+#ifdef __EMSCRIPTEN__
+    printf("SVDONE: after EventLoop\n");
+#endif
     CL_SwitchToLocalClient(0);
     Cbuf_Execute();
+#ifdef __EMSCRIPTEN__
+    printf("SVDONE: after Cbuf\n");
+#endif
     CL_SwitchToLocalClient(0);
     SND_UpdateLoopingSounds();
     SND_Update();
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after SND #%d\n", web_frame_dbg);
+    }
+    printf("SVDONE: after SND\n");
+#endif
     CL_SwitchToLocalClient(0);
     CL_Frame(maxMsec);
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after CL_Frame #%d\n", web_frame_dbg);
+    }
+    printf("SVDONE: after CL_Frame\n");
+#endif
     CL_SwitchToLocalClient(0);
     SCR_UpdateScreenInternal();
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame after SCR #%d\n", web_frame_dbg);
+    }
+#endif
     SCR_RunCinematic();
+
+#ifdef __EMSCRIPTEN__
+    if (web_frame_dbg < 3) {
+        Com_Printf("webdbg: Com_Frame done #%d\n", web_frame_dbg);
+        web_frame_dbg++;
+    }
+#endif
 
     if (com_statmon->current.enabled) {
         if (*com_fileAccessed) {
@@ -1966,7 +2075,11 @@ void Com_Init_Try_Block_Function(char *commandLine)
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    com_maxfps = Dvar_RegisterInt("com_maxfps", 60, 0, 1000, 0x1001);
+#else
     com_maxfps = Dvar_RegisterInt("com_maxfps", 85, 0, 1000, 0x1001);
+#endif
     com_developer = Dvar_RegisterInt("developer", 0, 0, 2, 0x1000);
     com_developer_script = Dvar_RegisterBool("developer_script", 0, 0x1000);
     com_logfile = Dvar_RegisterInt("logfile", 0, 0, 2, 0x1000);
@@ -1996,6 +2109,18 @@ void Com_Init_Try_Block_Function(char *commandLine)
     CL_SwitchToLocalClient(0);
     Cbuf_Execute();
 
+#ifdef __EMSCRIPTEN__
+    /* Web / HU-layout: default console toggle on digit 0.  Set after
+     * config loading so user overrides (config_mp.cfg) take priority;
+     * only applies when 0 has no binding at all. */
+    {
+        extern char *Key_GetBinding(int keynum);
+        extern void Key_SetBinding(int keynum, const char *binding);
+        const char *b0 = Key_GetBinding('0');
+        if (!b0 || !b0[0])
+            Key_SetBinding('0', "toggleconsole");
+    }
+#endif
     com_recommendedSet = Dvar_RegisterBool("com_recommendedSet", 0, 0x1001);
     Com_CheckSetRecommended();
     Com_StartupVariable(NULL);
@@ -2033,11 +2158,15 @@ void Com_Init_Try_Block_Function(char *commandLine)
     shortversion = Dvar_RegisterString("shortversion", COD2_VERSION_SHORT, 0x1044);
 
     FxMem_Init();
+    Com_Printf("webdbg: before Sys_Init\n");
     Sys_Init();
+    Com_Printf("webdbg: after Sys_Init\n");
 
     Netchan_Init(Com_Milliseconds() & 0xffff);
+    Com_Printf("webdbg: after Netchan_Init\n");
 
     Scr_Init();
+    Com_Printf("webdbg: after Scr_Init\n");
     {
         int dev = com_developer->current.integer;
         int enabled = (dev || com_logfile->current.integer) ? 1 : 0;
@@ -2045,9 +2174,13 @@ void Com_Init_Try_Block_Function(char *commandLine)
     }
 
     XAnimInit();
+    Com_Printf("webdbg: after XAnimInit\n");
     DObjInit();
+    Com_Printf("webdbg: after DObjInit\n");
     SV_Init();
+    Com_Printf("webdbg: after SV_Init\n");
     NET_Init();
+    Com_Printf("webdbg: after NET_Init\n");
 
     {
         const dvar_t *ded;
@@ -2060,9 +2193,12 @@ void Com_Init_Try_Block_Function(char *commandLine)
         dedicated_val = 2;
 #endif
         if (!dedicated_val) {
+            Com_Printf("webdbg: before CL_InitOnceForAllClients\n");
             CL_InitOnceForAllClients();
             CL_SwitchToLocalClient(0);
+            Com_Printf("webdbg: before CL_Init\n");
             CL_Init();
+            Com_Printf("webdbg: after CL_Init\n");
             CL_SwitchToLocalClient(0);
             Sys_ShowConsole(com_viewlog->current.integer, 0);
         }
@@ -2073,7 +2209,11 @@ void Com_Init_Try_Block_Function(char *commandLine)
     for (i = 0; i < com_numConsoleLines; i++) {
         if (!com_consoleLines[i] || com_consoleLines[i][0] == '\0')
             continue;
-        I_strnicmp(com_consoleLines[i], "set", 3);
+        /* set/seta already applied by Com_StartupVariable — do not re-exec
+         * (decompiled code ignored I_strnicmp result and caused USAGE /
+         * write-protected / read-only spam on every boot). */
+        if (I_strnicmp(com_consoleLines[i], "set", 3) == 0)
+            continue;
         Cbuf_AddText(com_consoleLines[i]);
         Cbuf_AddText("\n");
     }
@@ -2093,10 +2233,14 @@ void Com_Init_Try_Block_Function(char *commandLine)
                 char *cls_ptr;
                 cls_ptr = (char *)imp_cls;
                 clsg->rendererStarted = 1;
+                Com_Printf("webdbg: before CL_InitRenderer\n");
                 CL_InitRenderer();
+                Com_Printf("webdbg: after CL_InitRenderer\n");
                 clsg->soundStarted = 1;
             }
+            Com_Printf("webdbg: before SND_Init\n");
             SND_Init();
+            Com_Printf("webdbg: after SND_Init\n");
             Sys_LoadingKeepAlive();
 
             dedicated_val = com_dedicated->current.integer;
@@ -2110,11 +2254,16 @@ void Com_Init_Try_Block_Function(char *commandLine)
         dedicated_val = 2;
 #endif
         if (!dedicated_val) {
+#ifdef __EMSCRIPTEN__
+            /* BIK/ROQ cinematics are not available in the browser; mark intro done. */
+            Dvar_SetBool(com_introPlayed, 1);
+#else
             if (!com_introPlayed->current.enabled && !Com_HasStartupCommandsOtherThanSet()) {
                 Cbuf_AddText("cinematic atvi\n");
                 Dvar_SetString(nextmap, "cinematic IW_logo; set nextmap cinematic cod_intro");
                 Dvar_SetBool(com_introPlayed, 1);
             }
+#endif
         }
     }
 
@@ -2123,9 +2272,61 @@ void Com_Init_Try_Block_Function(char *commandLine)
     Cbuf_Execute();
 
     if (!com_sv_running->current.enabled) {
+        Com_Printf("webdbg: before CL_StartHunkUsers\n");
         UI_SetMap("", "");
         CL_StartHunkUsers();
+        Com_Printf("webdbg: after CL_StartHunkUsers\n");
     }
+
+#ifdef __EMSCRIPTEN__
+    /*
+     * r_mode is ARCHIVE|LATCH: the archived value from config_mp.cfg only lands
+     * in latched.integer, and native applies it while recreating the renderer.
+     * The web build cannot recreate the WebGL context, so the first frame stays
+     * 640x480 until the user re-applies. Run the soft path once at boot.
+     */
+    {
+        extern const dvar_t *Dvar_FindVar(const char *name);
+        extern Bool Dvar_HasLatchedValue(const dvar_t *dvar);
+        extern void Cbuf_AddText(const char *text);
+        extern void R_ApplyMonitorRefreshLimit(void);
+        const dvar_t *rmode = Dvar_FindVar("r_mode");
+        const dvar_t *raspect = Dvar_FindVar("r_aspectRatio");
+        const dvar_t *rrefresh = Dvar_FindVar("r_displayRefresh");
+        int needApply = 0;
+
+        if (!raspect)
+            raspect = Dvar_FindVar("r_aspectratio");
+        if (!rrefresh)
+            rrefresh = Dvar_FindVar("r_displayrefresh");
+
+        R_ApplyMonitorRefreshLimit();
+
+        if (rmode) {
+            int want = Dvar_HasLatchedValue(rmode) ? rmode->latched.integer
+                                                   : rmode->current.integer;
+            if (want != 0) {
+                Com_Printf("webdbg: boot r_mode=%d (latched=%d) needs apply\n",
+                           rmode->current.integer, want);
+                needApply = 1;
+            }
+        }
+        if (raspect && Dvar_HasLatchedValue(raspect)) {
+            Com_Printf("webdbg: boot r_aspectRatio latched=%d != current=%d\n",
+                       raspect->latched.integer, raspect->current.integer);
+            needApply = 1;
+        }
+        if (rrefresh && Dvar_HasLatchedValue(rrefresh)) {
+            Com_Printf("webdbg: boot r_displayRefresh latched=%d != current=%d\n",
+                       rrefresh->latched.integer, rrefresh->current.integer);
+            needApply = 1;
+        }
+        if (needApply) {
+            Com_Printf("webdbg: queuing vid_restart for archived display settings\n");
+            Cbuf_AddText("vid_restart\n");
+        }
+    }
+#endif
 }
 
 void Com_Init(char *commandLine)

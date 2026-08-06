@@ -41,7 +41,7 @@ extern int Scr_IsInOpcodeMemory(const char *pos);
 
 void Scr_InitOpcodeLookup(void)
 {
-    if (!((struct scrVarPub_t *)imp_scrVarPub)->developer)
+    if (!scrVarPub.developer)
         return;
 
     scrParserGlob.delayedSourceIndex = -1;
@@ -52,9 +52,12 @@ void Scr_InitOpcodeLookup(void)
     scrParserGlob.sourcePosLookupMaxLen = 0x10000;
     scrParserGlob.sourcePosLookupLen = 0;
     scrParserGlob.sourcePosLookup = Z_MallocInternal(0x80000);
+    memset(scrParserGlob.sourcePosLookup, 0, 0x80000);
     scrParserGlob.currentCodePos = 0;
     scrParserGlob.currentSourcePosCount = 0;
     scrParserGlob.sourceBufferLookupMaxLen = 0x10;
+    scrParserGlob.delayedSourceIndex = -1;
+    scrParserGlob.threadStartSourceIndex = -1;
     scrParserPub.sourceBufferLookupLen = 0;
     scrParserPub.sourceBufferLookup = Z_MallocInternal(0x180);
 }
@@ -188,7 +191,18 @@ void AddThreadStartOpcodePos(unsigned int sourcePos)
 {
     SourceLookup *sourceLookup;
 
-    if (!Scr_ShouldTrackOpcodePos())
+    if (!scrVarPub.developer)
+        return;
+
+    if (scrCompilePub.developer_statement == 2)
+        return;
+
+    /* CoD2rev asserts threadStartSourceIndex >= 0; without the marker
+     * this indexes sourcePosLookup[-1] and traps under WASM. */
+    if (scrParserGlob.threadStartSourceIndex < 0)
+        return;
+
+    if (!scrParserGlob.sourcePosLookup)
         return;
 
     sourceLookup = &scrParserGlob.sourcePosLookup[scrParserGlob.threadStartSourceIndex];

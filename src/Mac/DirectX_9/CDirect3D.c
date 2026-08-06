@@ -2,6 +2,10 @@
 #include "imports.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#ifdef __EMSCRIPTEN__
+#    include <SDL2/SDL.h>
+#endif
 
 struct __attribute__((packed)) _d32_g_CurrentGenericPacket {
     unsigned char f0[12];
@@ -208,22 +212,50 @@ HRESULT CDirect3D_CreateDevice(const void *_this, UINT Adapter, int DeviceType, 
             height = pp[1];
     }
 
-    memset(deviceMem, 0, sizeof(deviceMem));
-    *(void ***)deviceMem = vtbl_CDirect3DDevice;
-    CDirect3DDevice_Init(deviceMem);
-
     {
         extern int sdl_gl_width, sdl_gl_height;
         sdl_gl_width = width;
         sdl_gl_height = height;
     }
-    ctx = MacDisplay_CreateScreenContext(24, 1, 0, 0, 0, NULL);
+
+    /* Must create the GL context BEFORE CDirect3DDevice_Init — that path calls
+     * glViewport/glDepthRange. Under PROXY_TO_PTHREAD those sync-proxy and hang
+     * forever if no WebGL context exists yet. */
+#ifdef __EMSCRIPTEN__
+    fprintf(stderr, "webdbg: CreateDevice before CreateScreenContext %dx%d\n", width, height);
+#endif
+    {
+        int aaSamples = 0;
+#ifdef __EMSCRIPTEN__
+        /* WebGL MSAA is boolean; pass r_aaSamples so antialias can enable at create. */
+        extern void *imp_r_aaSamples;
+        if (imp_r_aaSamples && *(void **)imp_r_aaSamples)
+            aaSamples = *(int *)((char *)*(void **)imp_r_aaSamples + 8);
+        if (aaSamples < 0)
+            aaSamples = 0;
+#endif
+        ctx = MacDisplay_CreateScreenContext(24, 1, aaSamples, 0, 0, NULL);
+    }
+#ifdef __EMSCRIPTEN__
+    fprintf(stderr, "webdbg: CreateDevice after CreateScreenContext ctx=%p\n", ctx);
+#endif
+    if (!ctx) {
+#ifdef __EMSCRIPTEN__
+        fprintf(stderr, "webdbg: CreateScreenContext FAILED: %s\n", SDL_GetError());
+#endif
+        return (HRESULT)0x8876086A; /* D3DERR_NOTAVAILABLE */
+    }
+
+    memset(deviceMem, 0, sizeof(deviceMem));
+    *(void ***)deviceMem = vtbl_CDirect3DDevice;
+    CDirect3DDevice_Init(deviceMem);
     *(void **)(deviceMem + 0x008) = ctx;
 
     {
         void *bbSurf = calloc(1, 0x3c);
 
-        CDirect3DSurface_CDirect3DSurface(bbSurf, 0, 0, 0, width, height, 0x16, NULL, NULL);
+        /* D3DFMT_A8R8G8B8 = 21 — matches R_DescribeFormat / frame-buffer path */
+        CDirect3DSurface_CDirect3DSurface(bbSurf, 0, 0, 0, width, height, 21, NULL, NULL);
         *(void **)(deviceMem + 0x01C) = bbSurf;
         *(void **)(deviceMem + 0x014) = bbSurf;
     }

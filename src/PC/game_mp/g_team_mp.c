@@ -1,6 +1,9 @@
 #include "common_types.h"
 #include "imports.h"
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 extern void G_GetPlayerViewOrigin(gentity_t *ent, vec3_t origin);
 extern void G_GetPlayerViewDirection(gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up);
@@ -83,6 +86,9 @@ void TeamplayInfoMessage(gentity_t *ent)
     vEnd[2] = vStart[2] + vForward[2] * 8192.0f;
 
     G_TraceCapsule(&trace, vStart, (vec_t *)trace_mins, (vec_t *)trace_mins, vEnd, client->ps.clientNum, 0x2000001);
+#ifdef __EMSCRIPTEN__
+    printf("TeamplayInfoMessage: after G_TraceCapsule entityNum=%d\n", trace.entityNum);
+#endif
 
     identEnt = trace.entityNum;
 

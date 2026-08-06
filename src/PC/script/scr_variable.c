@@ -1,6 +1,9 @@
 #include "common_types.h"
 #include "imports.h"
 #include "bytematch.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 extern scr_classStruct_t g_classMap[5];
 
@@ -53,6 +56,8 @@ COD2_ASSERT_SIZE (VariableValueInternal, 0x10);
 
 int dbg_alloc_counter = 0;
 static unsigned int s_varNetDbg = 0;
+static int s_varInitCheckDone = 0;
+static unsigned int s_varResetCount = 0;
 static const char str_dbg_alloc_fmt[] = "DBG AllocValue exhausted after %d allocations\n";
 static const char str_dbg_site_classmap1[] = "DBG exceeded at: Scr_SetClassMap site1\n";
 static const char str_dbg_site_classmap2[] = "DBG exceeded at: Scr_SetClassMap site2\n";
@@ -268,6 +273,7 @@ static inline __attribute__((always_inline)) void Var_ResetAll(void)
     unsigned int prev;
 
     prev = 0;
+    s_varResetCount = 0;
     for (id = 1; id <= SCRVL_MAX_VARIABLES; id++) {
         VG_STATUS(id) = 0;
         VG_ID(id) = (unsigned short)id;
@@ -276,6 +282,7 @@ static inline __attribute__((always_inline)) void Var_ResetAll(void)
         VG_PREV(id) = (unsigned short)prev;
         VG_NEXT_SIBLING(id) = 0;
         prev = id;
+        s_varResetCount++;
     }
     VG_STATUS(0) = 0;
     VG_ID(0) = 0;
@@ -290,7 +297,27 @@ static inline __attribute__((always_inline)) unsigned int AllocVariable(void)
     unsigned int id;
     unsigned int next;
 
+#ifdef __EMSCRIPTEN__
+    if (!s_varInitCheckDone) {
+        unsigned int cnt = 0, walk = index;
+        while (walk && cnt < 200) {
+            walk = VG_U16(VG_ID(walk));
+            cnt++;
+        }
+        printf("[AllocVariable] first call: head=%u, first200=%u, net=%u, resetCount=%u\n", index, cnt, s_varNetDbg, s_varResetCount);
+        s_varInitCheckDone = 1;
+    }
+#endif
+
     if (!index) {
+#ifdef __EMSCRIPTEN__
+        Com_Printf("AllocVariable: freelist empty (net=%u)\n", s_varNetDbg);
+        Com_Printf("AllocVariable: scrVarGlob[0..15]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                   scrVarGlob[0], scrVarGlob[1], scrVarGlob[2], scrVarGlob[3],
+                   scrVarGlob[4], scrVarGlob[5], scrVarGlob[6], scrVarGlob[7],
+                   scrVarGlob[8], scrVarGlob[9], scrVarGlob[10], scrVarGlob[11],
+                   scrVarGlob[12], scrVarGlob[13], scrVarGlob[14], scrVarGlob[15]);
+#endif
         Scr_TerminalError("exceeded maximum number of script variables");
         return 0;
     }
@@ -494,6 +521,19 @@ void Var_Init(void)
         g_classMap[i].entArrayId = 0;
         g_classMap[i].id = 0;
     }
+#ifdef __EMSCRIPTEN__
+    {
+        unsigned int count = 0;
+        unsigned int idx = VG_U16(0);
+        while (idx && count <= SCRVL_MAX_VARIABLES) {
+            unsigned int vid = VG_ID(idx);
+            idx = VG_U16(vid);
+            count++;
+        }
+        printf("[Var_Init] freelist after reset: %u entries (expected %u), resetCount=%u, head=%u\n",
+               count, (unsigned)SCRVL_MAX_VARIABLES, s_varResetCount, (unsigned)VG_U16(0));
+    }
+#endif
 }
 
 unsigned int Scr_GetNumScriptVars(void)
@@ -1153,6 +1193,9 @@ static unsigned int __attribute_regparm__(3)
         if (entry->w.status & SCRVL_VAR_ALLOCATED) {
             index = list[0].u.next;
             if (!index) {
+#ifdef __EMSCRIPTEN__
+                Com_Printf("GetNewVarIdx3: freelist empty at HASH path (net=%u resetCount=%u)\n", s_varNetDbg, s_varResetCount);
+#endif
                 Scr_TerminalError("exceeded maximum number of script variables");
                 return 0;
             }
@@ -1194,6 +1237,9 @@ static unsigned int __attribute_regparm__(3)
         if (entry->w.status & SCRVL_VAR_ALLOCATED) {
             newIndex = list[0].u.next;
             if (!newIndex) {
+#ifdef __EMSCRIPTEN__
+                Com_Printf("GetNewVarIdx3: freelist empty at DEFAULT path (net=%u resetCount=%u)\n", s_varNetDbg, s_varResetCount);
+#endif
                 Scr_TerminalError("exceeded maximum number of script variables");
                 return 0;
             }
@@ -1977,8 +2023,18 @@ static inline __attribute__((always_inline)) void Scr_FreeObjectChildren(unsigne
 
 void Scr_FreeEntityList(void)
 {
+    unsigned int guard = 0;
+
     while (scrVarPub.freeEntList) {
         unsigned int id = scrVarPub.freeEntList;
+
+        /* Corrupt freeEntList walks scramble the variable freelist → AllocObject
+         * in Scr_InitSystem hits TerminalError → Com_Error → WASM unreachable. */
+        if (id == 0 || id > SCRVL_MAX_VARIABLES || ++guard > SCRVL_MAX_VARIABLES) {
+            Com_Printf("Scr_FreeEntityList: corrupt freeEntList id=%u — cleared\n", id);
+            scrVarPub.freeEntList = 0;
+            break;
+        }
 
         scrVarPub.freeEntList = VG_SIBLING(id);
         VG_SIBLING(id) = 0;

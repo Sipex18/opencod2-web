@@ -9,16 +9,16 @@ extern bgs_t level_bgs;
 #endif
 
 extern int Scr_IsSystemActive(int);
-extern unsigned int Scr_AddEntity(gentity_t *ent);
+extern void Scr_AddEntity(gentity_t *ent);
 extern void Scr_Notify(gentity_t *ent, int stringValue, unsigned int paramcount);
 extern void BG_WeaponFireRecoil(playerState_t *ps, float *kickAVel, float *kickAVel_out);
 extern void BG_Player_DoControllers(void *obj, gentity_t *self, int *partBits, clientInfo_t *ci, int serverTime);
 extern void *Com_GetServerDObj(int entityNum);
 extern void SV_GetUsercmd(int clientNum, usercmd_t *ucmd);
 extern void ClientThink_real(gentity_t *ent, usercmd_t *ucmd);
-extern void G_SetFixedLink(gentity_t *ent, int mode);
+extern unsigned char G_SetFixedLink(gentity_t *ent, int mode);
 extern unsigned char G_SetOrigin(gentity_t *ent, const vec_t *origin);
-extern void G_SetAngle(gentity_t *ent, const vec_t *angles);
+extern unsigned char G_SetAngle(gentity_t *ent, const vec_t *angles);
 extern void SV_LinkEntity(gentity_t *ent);
 extern void SV_UnlinkEntity(gentity_t *ent);
 extern void SV_GameDropClient(int clientNum, const char *reason);
@@ -69,7 +69,7 @@ extern void BG_UpdatePlayerDObj(struct DObj_s *pDObj, entityState_t *es, clientI
 extern void BG_PlayerAnimation(const struct DObj_s *pDObj, entityState_t *es, clientInfo_t *ci);
 extern void G_SafeDObjFree(gentity_t *ent);
 extern qboolean SV_DObjExists(gentity_t *ent);
-extern unsigned char G_DObjCalcPose(gentity_t *ent);
+extern int G_DObjCalcPose(gentity_t *ent);
 extern void SV_XModelDebugBoxes(gentity_t *ent);
 extern void turret_think_client(gentity_t *self);
 extern void SV_SetConfigstring(int index, const char *val);

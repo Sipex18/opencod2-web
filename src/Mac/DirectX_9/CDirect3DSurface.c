@@ -155,6 +155,45 @@ HRESULT CDirect3DSurface_UnlockRect(const CDirect3DSurface *_this)
     return 0;
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+ * WebGL2 rejects GL_BGRA (0x80E1) as TexImage2D/TexSubImage2D format.
+ * Mac/desktop GL used BGRA for D3DFMT_A8R8G8B8; UI assets (logo_cod2 wavelet,
+ * gradient bitmap) uploaded as BGRA and stayed black incomplete textures.
+ * Convert B,G,R,A -> R,G,B,A and upload as GL_RGBA.
+ */
+static const void *CDirect3DSurface_WebGLUploadPixels(CDirect3DSurfaceImpl *surface,
+                                                      UINT32 w, UINT32 h,
+                                                      GLenum *outFormat, byte **heapFree)
+{
+    *heapFree = NULL;
+    *outFormat = surface->openGLFormat;
+
+    if (surface->openGLFormat == 0x80E1 && surface->openGLElementType == 0x1401 &&
+        surface->surfaceMemory) {
+        UINT32 n = w * h;
+        UINT32 i;
+        const byte *src = surface->surfaceMemory;
+        byte *dst = (byte *)malloc((size_t)n * 4u);
+
+        if (!dst)
+            return surface->surfaceMemory;
+
+        for (i = 0; i < n; i++) {
+            dst[i * 4u + 0] = src[i * 4u + 2];
+            dst[i * 4u + 1] = src[i * 4u + 1];
+            dst[i * 4u + 2] = src[i * 4u + 0];
+            dst[i * 4u + 3] = src[i * 4u + 3];
+        }
+        *heapFree = dst;
+        *outFormat = 0x1908; /* GL_RGBA */
+        return dst;
+    }
+
+    return surface->surfaceMemory;
+}
+#endif
+
 void CDirect3DSurface_CreateOpenGLSurfaceObject(const CDirect3DSurface *_this)
 {
     CDirect3DSurfaceImpl *surface = (CDirect3DSurfaceImpl *)_this;
@@ -177,9 +216,19 @@ void CDirect3DSurface_CreateOpenGLSurfaceObject(const CDirect3DSurface *_this)
         glCompressedTexImage2DARB(target, surface->level,
                                   surface->openGLInternalFormat, w, h, 0, dataSize, surface->surfaceMemory);
     } else {
+#ifdef __EMSCRIPTEN__
+        GLenum uploadFormat = surface->openGLFormat;
+        byte *heapFree = NULL;
+        const void *pixels = CDirect3DSurface_WebGLUploadPixels(surface, w, h, &uploadFormat, &heapFree);
+        glTexImage2D(target, surface->level,
+                     surface->openGLInternalFormat, w, h, 0,
+                     uploadFormat, surface->openGLElementType, pixels);
+        free(heapFree);
+#else
         glTexImage2D(target, surface->level,
                      surface->openGLInternalFormat, w, h, 0,
                      surface->openGLFormat, surface->openGLElementType, surface->surfaceMemory);
+#endif
     }
 }
 
@@ -207,8 +256,24 @@ void CDirect3DSurface_UpdateOpenGLSurfaceObject(const CDirect3DSurface *_this, i
         glCompressedTexSubImage2D(target, surface->level, 0, 0,
                                   w, h, surface->openGLInternalFormat, dataSize, surface->surfaceMemory);
     } else {
+#ifdef __EMSCRIPTEN__
+        GLenum uploadFormat = surface->openGLFormat;
+        byte *heapFree = NULL;
+        const void *pixels = CDirect3DSurface_WebGLUploadPixels(surface, w, h, &uploadFormat, &heapFree);
+        /* Prefer full TexImage2D after BGRA→RGBA so incomplete BGRA textures recover. */
+        if (uploadFormat != surface->openGLFormat) {
+            glTexImage2D(target, surface->level,
+                         surface->openGLInternalFormat, w, h, 0,
+                         uploadFormat, surface->openGLElementType, pixels);
+        } else {
+            glTexSubImage2D(target, surface->level, 0, 0,
+                            w, h, uploadFormat, surface->openGLElementType, pixels);
+        }
+        free(heapFree);
+#else
         glTexSubImage2D(target, surface->level, 0, 0,
                         w, h, surface->openGLFormat, surface->openGLElementType, surface->surfaceMemory);
+#endif
     }
 
     surface->isDirty = 0;

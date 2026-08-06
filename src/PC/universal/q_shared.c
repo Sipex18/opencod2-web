@@ -87,7 +87,12 @@ char *Info_ValueForKey(const char *s, const char *key);
 int I_stricmp(const char *s0, const char *s1);
 void Com_DefaultExtension(char *path, int maxSize, const char *extension);
 void I_strncat(char *dest, int size, const char *src);
-qboolean ParseConfigStringToStruct(byte *pStruct, const cspField_t *pFieldList, const int iNumFields, const char *pszBuffer, const int iMaxFieldTypes, qboolean (*parseSpecialFieldType)(), void (*parseStrcpy)());
+/*
+ * WASM call_indirect requires exact signatures. Empty `()` decls compile as
+ * 0-arg funcrefs; invoking with (pStruct,val,type)/(dest,val) traps unreachable
+ * while loading weapons/mp/defaultweapon_mp (and similar Info_* tables).
+ */
+qboolean ParseConfigStringToStruct(byte *pStruct, const cspField_t *pFieldList, const int iNumFields, const char *pszBuffer, const int iMaxFieldTypes, qboolean (*parseSpecialFieldType)(byte *pStruct, const char *pValue, int iFieldType), void (*parseStrcpy)(byte *pMember, const char *pValue));
 
 unsigned char ColorIndex(int c)
 {
@@ -890,7 +895,7 @@ void I_strncat(char *dest, int size, const char *src)
     I_strncpyz_core(dest + destLen, src, size - destLen);
 }
 
-qboolean ParseConfigStringToStruct(byte *pStruct, const cspField_t *pFieldList, const int iNumFields, const char *pszBuffer, const int iMaxFieldTypes, qboolean (*parseSpecialFieldType)(), void (*parseStrcpy)())
+qboolean ParseConfigStringToStruct(byte *pStruct, const cspField_t *pFieldList, const int iNumFields, const char *pszBuffer, const int iMaxFieldTypes, qboolean (*parseSpecialFieldType)(byte *pStruct, const char *pValue, int iFieldType), void (*parseStrcpy)(byte *pMember, const char *pValue))
 {
     int iField;
     const cspField_t *pField;

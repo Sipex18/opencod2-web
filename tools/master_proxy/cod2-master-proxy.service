@@ -1,0 +1,17 @@
+[Unit]
+Description=CoD2 web HTTP masterlist proxy
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/cod2-master-proxy
+ExecStart=/usr/bin/python3 /opt/cod2-master-proxy/server.py
+Restart=on-failure
+RestartSec=3
+Environment=PORT=20711
+Environment=COD2_MASTER_UPSTREAM=https://api.cod.pm
+Environment=COD2_MASTER_CACHE_TTL=30
+
+[Install]
+WantedBy=multi-user.target

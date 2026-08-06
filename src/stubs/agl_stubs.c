@@ -58,6 +58,14 @@ int aglUpdateContext(AGLContext ctx)
 void aglSwapBuffers(AGLContext ctx)
 {
     (void)ctx;
+#ifdef __EMSCRIPTEN__
+    /* Prefer HTML5 commit when OffscreenFramebuffer context is current. */
+    if (SDL_GL_GetCurrentContext()) {
+        extern int emscripten_webgl_commit_frame(void);
+        emscripten_webgl_commit_frame();
+        return;
+    }
+#endif
     if (!sdl_gl_window)
         return;
     SDL_PumpEvents();

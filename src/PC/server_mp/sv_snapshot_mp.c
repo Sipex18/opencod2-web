@@ -2,6 +2,9 @@
 #include "imports.h"
 #include "bytematch.h"
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 extern server_t sv;
 extern serverStatic_t svs;
 
@@ -93,8 +96,8 @@ extern void MSG_ReadDeltaClient(msg_t *msg, byte *from, byte *to, int clientNum)
 extern void MSG_ReadDeltaPlayerstate(msg_t *msg, byte *from, byte *to);
 extern void MSG_ReadDeltaArchivedEntity(msg_t *msg, byte *from, byte *to, int entNum);
 extern void SV_DropClient(client_t *client, const char *reason);
-extern void SV_Netchan_Transmit(client_t *client, int length, byte *data);
-extern void SV_Netchan_TransmitNextFragment(netchan_t *chan);
+extern Bool SV_Netchan_Transmit(client_t *client, int length, byte *data);
+extern Bool SV_Netchan_TransmitNextFragment(netchan_t *chan);
 extern void SV_WriteDownloadToClient(client_t *client, msg_t *msg);
 extern void SV_SendClientVoiceData(client_t *client);
 extern byte *SV_GentityNum(int num);
@@ -113,7 +116,7 @@ extern void AddLeanToPosition(byte *org, int viewAngleYaw, int leanf, float a, f
 extern void LargeLocal_LargeLocal(byte *ll, int size);
 extern byte *LargeLocal_GetBuf(byte *ll);
 extern void ZN10LargeLocalD1Ev(byte *ll);
-extern int Sys_IsLANAddress(int a, int b, int c);
+extern qboolean Sys_IsLANAddress(netadr_t adr);
 extern void Dvar_SetInt(const dvar_t *dvar, int value);
 extern Bool NET_OutOfBandPrint(netsrc_t sock, netadr_t adr, const char *data);
 extern void *SV_GameClientNum(int clientNum);
@@ -413,7 +416,8 @@ cleanup:
     return cachedFrame;
 }
 
-#ifndef __EMSCRIPTEN__
+/* Listen/host needs SV_SendClient*; keep native snapshot path on web too. */
+#if 1 /* was: #ifndef __EMSCRIPTEN__ */
 
 static int signedMod512(int x)
 {
@@ -931,12 +935,18 @@ void SV_SendMessageToClient(msg_t *msg, client_t *client)
     int messageSize;
     int svsTime;
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendMessageToClient: enter cursize=%d\n", msg->cursize);
+#endif
     LargeLocal_LargeLocal(compressedBuf_ll, MAX_MSGLEN);
     compressedBuf = LargeLocal_GetBuf(compressedBuf_ll);
 
     *(int *)compressedBuf = *(int *)msg->data;
 
     compressedSize = MSG_WriteBitsCompress(msg->data + 4, compressedBuf + 4, msg->cursize - 4) + 4;
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendMessageToClient: compressed=%d dropReason=%p\n", compressedSize, client->dropReason);
+#endif
 
     if (client->dropReason != NULL) {
         SV_DropClient(client, client->dropReason);
@@ -951,12 +961,18 @@ void SV_SendMessageToClient(msg_t *msg, client_t *client)
         frame->messageAcked = -1;
     }
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendMessageToClient: before Netchan_Transmit len=%d\n", compressedSize);
+#endif
     SV_Netchan_Transmit(client, compressedSize, compressedBuf);
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendMessageToClient: after Netchan_Transmit\n");
+#endif
 
     {
         netadr_t *addr = &client->netchan.remoteAddress;
         if (addr->type == 2 ||
-            Sys_IsLANAddress(((int *)addr)[0], ((int *)addr)[1], ((int *)addr)[2])) {
+            Sys_IsLANAddress(*addr)) {
 
             client->nextSnapshotTime = psvs->time - 1;
             ZN10LargeLocalD1Ev(compressedBuf_ll);
@@ -1825,8 +1841,14 @@ void SV_SendClientSnapshot(client_t *client)
     byte *msg_buf;
     msg_t msg;
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendClientSnapshot: enter state=%d\n", client->state);
+#endif
     LargeLocal_LargeLocal(msg_buf_large_local, 0x20000);
     msg_buf = LargeLocal_GetBuf(msg_buf_large_local);
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendClientSnapshot: after LargeLocal buf=%p\n", msg_buf);
+#endif
 
     if (client->state == 4 || client->state == 1) {
         SV_BuildClientSnapshotLocal(client);
@@ -1839,10 +1861,19 @@ void SV_SendClientSnapshot(client_t *client)
         SV_UpdateServerCommandsToClient(client, &msg);
         SV_WriteSnapshotToClientLocal(client, &msg);
     } else {
+#ifdef __EMSCRIPTEN__
+        printf("SV_SendClientSnapshot: before WriteDownload state=%d\n", client->state);
+#endif
         SV_WriteDownloadToClient(client, &msg);
+#ifdef __EMSCRIPTEN__
+        printf("SV_SendClientSnapshot: after WriteDownload\n");
+#endif
     }
 
     MSG_WriteByte(&msg, SV_SVC_EOF);
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendClientSnapshot: before SendMessageToClient\n");
+#endif
 
     if (msg.overflowed) {
         Com_Printf("WARNING: msg overflowed for %s, trying to recover\n", client->name);
@@ -1884,17 +1915,29 @@ void SV_SendClientMessages(void)
 
     svsTime = psvs->time;
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_SendClientMessages: enter maxClients=%d svsTime=%d\n", maxClients, svsTime);
+#endif
+
     for (i = 0; i < maxClients; i++, c++) {
 
         if (c->state == 0 || svsTime < c->nextSnapshotTime)
             continue;
 
+#ifdef __EMSCRIPTEN__
+        printf("SV_SendClientMessages: client=%d state=%d sendFrag=%d\n", i, c->state, c->netchan.unsentFragments);
+#endif
         numclients++;
 
         sendFrag = c->netchan.unsentFragments;
         if (sendFrag == 0) {
-
+#ifdef __EMSCRIPTEN__
+            printf("SV_SendClientMessages: before SV_SendClientSnapshot client=%d\n", i);
+#endif
             SV_SendClientSnapshot(c);
+#ifdef __EMSCRIPTEN__
+            printf("SV_SendClientMessages: before SV_SendClientVoiceData client=%d\n", i);
+#endif
             SV_SendClientVoiceData(c);
             continue;
         }
@@ -1984,7 +2027,7 @@ void SV_SendClientMessages(void)
     }
 }
 
-#else
+#if 0 /* was #else: web-only ArchiveSnapshot duplicate — unused while host path uses native Send* */
 
 static int signedMod512(int x)
 {
@@ -2489,4 +2532,5 @@ write_frame:
 cleanup:
     ZN10LargeLocalD1Ev(msg_buf_large_local);
 }
-#endif
+#endif /* #if 0 web ArchiveSnapshot duplicate */
+#endif /* snapshot host path */

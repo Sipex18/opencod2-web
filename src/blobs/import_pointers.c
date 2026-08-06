@@ -159,7 +159,7 @@ extern void CIN_UploadCinematic(void);
 extern void Dvar_RegisterString(void);
 extern void Dvar_SetColorByName(void);
 extern void Dvar_SetFloatByName(void);
-extern void R_AddCmdClearScreen(void);
+extern void R_AddCmdClearScreen(int whichToClear, const float *color, float depth, int stencil);
 extern void R_AddCmdDrawQuadPic(void);
 extern void R_AddCmdSetViewport(void);
 extern void R_EndDelayedDrawing(void);

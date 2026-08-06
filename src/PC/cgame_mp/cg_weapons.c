@@ -26,7 +26,7 @@ extern void CG_SetWeaponDefToDefaultWeapon(int weaponNum);
 extern void SCR_UpdateScreen(void);
 extern struct XAnim_s *XAnimCreateAnims(const char *debugName, int size, void *Alloc);
 extern void XAnimBlend(struct XAnim_s *anims, unsigned int animIndex, const char *name, unsigned int children, unsigned int num, unsigned int flags);
-extern void XAnimPrecache(const char *name, void *Alloc);
+extern XAnimParts *XAnimPrecache(const char *name, void *Alloc);
 extern void XAnimCreate(struct XAnim_s *anims, unsigned int animIndex, const char *name);
 extern void *XAnimCreateTree(void *anims, void *Alloc);
 extern void XAnimClearTreeGoalWeights(void *tree, int animIndex, int recursive);
@@ -144,11 +144,7 @@ COD2_ASSERT_FIELD(centity_t, bMuzzleFlash,   0x1e2);
 static void __attribute_regparm__(3) CG_PlayADSAnim(void *unused, void *pAnimTree, int animIndex);
 static inline __attribute__((always_inline)) qboolean CG_CanCycleWeapon(cg_t **cgOut, int *serverTimeOut);
 int CG_WeaponDObjHandle(int weaponNum);
-#ifndef __EMSCRIPTEN__
 void CG_Weapons_SetToDefault(int weaponNum, DObjModel_s *dobjModels);
-#else
-void CG_Weapons_SetToDefault(int weaponNum, weaponInfo_s (*dobjModels)[4]);
-#endif
 void CG_HoldBreathInit(void);
 void CG_SetupWeaponDef(void);
 void CG_SelectWeaponIndex(int weaponIndex);
@@ -335,7 +331,7 @@ static void CG_ResetViewWeaponOffsets(cg_t *cg)
     cg->gunZOfs = 0.0f;
 }
 
-#ifndef __EMSCRIPTEN__
+#if 1 /* was: #ifndef __EMSCRIPTEN__ — weapons for listen/host */
 void CG_Weapons_SetToDefault(int weaponNum, DObjModel_s *dobjModels)
 {
     WeaponDef *weapDef;
@@ -2039,7 +2035,7 @@ void CG_UpdateViewWeaponAnim(playerState_t *ps)
     CG_PlayViewWeaponNotetrackSounds(weapInfo);
 }
 
-#else
+#if 0 /* was #else: web CG_Weapons_SetToDefault only */
 void CG_Weapons_SetToDefault(int weaponNum, weaponInfo_s (*dobjModels)[4])
 {
     byte *weapDef;
@@ -2070,4 +2066,5 @@ void CG_Weapons_SetToDefault(int weaponNum, weaponInfo_s (*dobjModels)[4])
     sprintf(modelFile, "%s%s", "xmodel/", handModel);
     *(void **)((byte *)dobjModels + 0xc) = CL_RegisterModel(modelFile);
 }
-#endif
+#endif /* #if 0 web weapons default */
+#endif /* weapons host path */

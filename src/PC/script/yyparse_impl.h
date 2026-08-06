@@ -14,6 +14,7 @@ extern uintptr_t linked_list_end(uintptr_t val);
 extern uintptr_t prepend_node(uintptr_t val1, uintptr_t val2);
 extern uintptr_t append_node(uintptr_t val1, uintptr_t val2);
 extern void CompileError(unsigned int sourcePos, const char *msg, ...);
+extern void Com_Printf(const char *fmt, ...);
 extern unsigned int SL_ConvertToLowercase(unsigned int stringValue, unsigned int user, int type);
 extern unsigned int SL_GetString_(const char *str, unsigned int user, int type);
 extern unsigned int SL_GetStringOfLen(const char *str, unsigned int user, unsigned int len, int type);
@@ -155,16 +156,25 @@ static int yyparse_get_next_buffer(int offset)
     if (yy_n_chars == 0) {
         if (n_kept == 0) {
             yy_did_buffer_switch_on_eof = 0;
-            return 0;
+            return 0; /* EOB_ACT_END_OF_FILE */
         }
+        /* EOF with unmatched text still in buffer: finish last match.
+         * Returning CONTINUE_SCAN here loops forever on yy_match. */
         b->yy_buffer_status = 2;
+        yy_n_chars = n_kept;
+        b->yy_n_chars = yy_n_chars;
+        b->yy_ch_buf[yy_n_chars] = '\0';
+        b->yy_ch_buf[yy_n_chars + 1] = '\0';
+        yytext = b->yy_ch_buf;
+        return 2; /* EOB_ACT_LAST_MATCH */
     }
 
     yy_n_chars += n_kept;
+    b->yy_n_chars = yy_n_chars;
     b->yy_ch_buf[yy_n_chars] = '\0';
     b->yy_ch_buf[yy_n_chars + 1] = '\0';
     yytext = b->yy_ch_buf;
-    return 1;
+    return 1; /* EOB_ACT_CONTINUE_SCAN */
 }
 
 static int yyparse_yylex(char *string_buf)
@@ -173,6 +183,7 @@ static int yyparse_yylex(char *string_buf)
     char *yy_bp;
     int yy_current_state;
     char *yy_cp;
+    unsigned int webdbg_yylex_loops = 0;
 
     if (yy_init) {
         yy_init = 0;
@@ -197,6 +208,20 @@ static int yyparse_yylex(char *string_buf)
     }
 
 restart_scan:
+    webdbg_yylex_loops++;
+    if (webdbg_yylex_loops % 5000 == 0) {
+        Com_Printf("webdbg: yylex RESTART_LOOP loops=%u char='%c'(%d) off=%d\n",
+                   webdbg_yylex_loops,
+                   (yy_c_buf_p && *yy_c_buf_p >= 32 && *yy_c_buf_p < 127) ? *yy_c_buf_p : '?',
+                   yy_c_buf_p ? (int)(unsigned char)*yy_c_buf_p : 0,
+                   yy_c_buf_p ? (int)(yy_c_buf_p - yy_current_buffer->yy_ch_buf) : -1);
+    }
+    if (webdbg_yylex_loops > 20000) {
+        Com_Printf("webdbg: yylex RESTART_LOOP ABORT_STUCK char='%c'(%d)\n",
+                   (yy_c_buf_p && *yy_c_buf_p >= 32 && *yy_c_buf_p < 127) ? *yy_c_buf_p : '?',
+                   yy_c_buf_p ? (int)(unsigned char)*yy_c_buf_p : 0);
+        return 0;
+    }
     yy_bp = yy_c_buf_p;
     *yy_bp = yy_hold_char;
     yy_current_state = yy_start;
@@ -204,7 +229,15 @@ restart_scan:
 
 yy_match: {
 
+    unsigned int webdbg_outer_iters = 0;
     for (;;) {
+
+        webdbg_outer_iters++;
+        if (webdbg_outer_iters == 2000000) {
+            Com_Printf("webdbg: yylex OUTER-LOOP-STUCK cp_off=%d state=%d c='%c'(%d)\n",
+                       (int)(yy_cp - yy_current_buffer->yy_ch_buf),
+                       yy_current_state, (*yy_cp >= 32 && *yy_cp < 127) ? *yy_cp : '?', (int)(unsigned char)*yy_cp);
+        }
 
         unsigned char yy_c = YY_EC_VAL((unsigned char)*yy_cp);
         if (YY_ACCEPT_VAL(yy_current_state)) {
@@ -213,7 +246,17 @@ yy_match: {
         }
         {
             int idx = YY_BASE(yy_current_state) + yy_c;
+            unsigned int webdbg_inner_iters = 0;
             while (YY_CHK(idx) != yy_current_state) {
+                webdbg_inner_iters++;
+                if (webdbg_inner_iters == 1000) {
+                    Com_Printf("webdbg: yylex INNER-DEF-LOOP-STUCK state=%d c=%d idx=%d chk=%d def=%d\n",
+                               yy_current_state, yy_c, idx, (int)YY_CHK(idx), (int)YY_DEF(yy_current_state));
+                }
+                if (webdbg_inner_iters > 5000) {
+                    Com_Printf("webdbg: yylex INNER-DEF-LOOP-ABORT\n");
+                    return 0;
+                }
                 yy_current_state = YY_DEF(yy_current_state);
                 if (yy_current_state > 0xff) {
                     yy_c = YY_META_VAL(yy_c);
@@ -225,6 +268,10 @@ yy_match: {
         yy_cp++;
         if (YY_BASE(yy_current_state) == 0x1af)
             break;
+        if (webdbg_outer_iters > 4000000) {
+            Com_Printf("webdbg: yylex OUTER-LOOP-ABORT\n");
+            return 0;
+        }
     }
 
 yy_find_action:
@@ -578,7 +625,6 @@ yy_find_action:
         yy_hold_char = *yy_cp;
 
         if (eob_act == 2) {
-
             goto yy_find_action;
         }
 
@@ -608,10 +654,21 @@ int yyparse(void)
     int yylen;
     stype_t yyval;
 
+    unsigned int webdbg_yyparse_steps = 0;
+
     yynerrs = 0;
     yychar = -2;
 
 yysetstate:
+    webdbg_yyparse_steps++;
+    if (webdbg_yyparse_steps % 5000 == 0) {
+        Com_Printf("webdbg: yyparse steps=%u state=%d yychar=%d\n", webdbg_yyparse_steps, yystate, yychar);
+    }
+    if (webdbg_yyparse_steps > 50000) {
+        Com_Printf("webdbg: yyparse ABORT-STUCK state=%d yychar=%d\n", yystate, yychar);
+        return 1;
+    }
+
     yyssp++;
     *yyssp = (short)yystate;
 

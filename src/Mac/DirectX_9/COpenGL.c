@@ -324,6 +324,12 @@ unsigned int COpenGLVertexProgram_COpenGLVertexProgram(const COpenGLVertexProgra
 
     GLuint *progIdPtr = (GLuint *)_this;
 
+#ifdef __EMSCRIPTEN__
+    /* No ARB vertex programs on WebGL2; keep id 0 and rely on webgl2_compat draw. */
+    (void)pSrcData;
+    *progIdPtr = 0;
+    return 0;
+#else
     if (!pSrcData || pSrcData[0] != '!' || pSrcData[1] != '!') {
         *progIdPtr = 0;
         return 0;
@@ -348,6 +354,7 @@ unsigned int COpenGLVertexProgram_COpenGLVertexProgram(const COpenGLVertexProgra
     }
 
     return 0;
+#endif
 }
 
 void ZN20COpenGLVertexProgramD1Ev(void *_this)

@@ -7,7 +7,7 @@ extern struct scrCompilePub_t scrCompilePub;
 extern void Z_FreeInternal(void *ptr);
 extern void *Z_MallocInternal(int size);
 extern unsigned int FindVariable(unsigned int parentId, unsigned int value);
-extern int Scr_EvalVariable(unsigned int id);
+extern unsigned long long Scr_EvalVariable(unsigned int id);
 extern VariableUnion *GetVariableValueAddress(unsigned int id);
 extern void AddRefToValue(int type, VariableUnion u);
 extern void Scr_EvalBinaryOperator(int op, VariableValue *value1, VariableValue *value2);
@@ -21,8 +21,9 @@ extern unsigned int GetObjectA(unsigned int id);
 extern unsigned int GetArray(unsigned int id);
 extern void SetVariableValue(unsigned int id, VariableValue *value);
 extern void Com_Error(int code, const char *fmt, ...);
+extern void Com_Printf(const char *fmt, ...);
 extern void CompileError(unsigned int sourcePos, const char *fmt, ...);
-extern void CompileError2(int codePos, const char *msg);
+extern void CompileError2(const char *codePos, const char *msg, ...);
 extern void AddOpcodePos(unsigned int sourcePos, int type);
 extern void RemoveOpcodePos(void);
 extern void AddThreadStartOpcodePos(unsigned int sourcePos);
@@ -34,6 +35,7 @@ extern void SL_RemoveRefToString(unsigned int stringValue);
 extern char *TempMalloc(int len);
 extern char *TempMallocAlign(int len);
 extern char *TempMallocAlignStrict(int len);
+extern unsigned int currentPos;
 extern void *Hunk_AllocateTempMemoryHighInternal(int size);
 extern void TempMemorySetPos(char *pos);
 extern void Hunk_ClearTempMemoryHigh(void);
@@ -53,17 +55,19 @@ extern Bool IsVarFree(unsigned int id);
 extern int atoi(const char *nptr);
 extern void SetNewVariableValue(unsigned int id, VariableValue *value);
 extern unsigned char scrCompileGlob[];
+extern unsigned char scrAnimPub[];
+extern unsigned char scrParserPub[];
 extern unsigned char scrVarGlob[];
 extern void DumpCompiledObject(const char *label, unsigned int compiledObj);
-extern int Scr_GetFunction(const char **pName, int *type);
-extern int Scr_GetMethod(const char **pName, int *type);
+extern BuiltinFunction Scr_GetFunction(const char **pName, int *type);
+extern BuiltinMethod Scr_GetMethod(const char **pName, int *type);
 extern void Scr_EmitAnimation(char *pos, unsigned int animName, unsigned int sourcePos);
 static const char str_dbg_before_lt[] = "before-LinkThread";
 
 #define SCRCP (&scrCompilePub)
-#define SCRCG ((scrCompileGlob_t *)imp_scrCompileGlob)
-#define SCRAP ((scrAnimPub_t *)imp_scrAnimPub)
-#define SCRPP ((scrParserPub_t *)imp_scrParserPub)
+#define SCRCG ((scrCompileGlob_t *)(void *)scrCompileGlob)
+#define SCRAP ((scrAnimPub_t *)(void *)scrAnimPub)
+#define SCRPP ((scrParserPub_t *)(void *)scrParserPub)
 #define SCRVP (&scrVarPub)
 
 #define SCRCOMP_SCR_DEV_NO 0
@@ -83,11 +87,7 @@ static const char str_dbg_before_lt[] = "before-LinkThread";
 #define SCRCOMP_VAR_INCLUDE_CODEPOS 13
 #define SCRCOMP_MAX_VARIABLES 65534
 
-#ifndef __EMSCRIPTEN__
 static unsigned int LinkThread(unsigned int threadId, VariableValue *pos, int allowFarCall) __attribute_regparm__(3);
-#else
-static unsigned int LinkThread(unsigned int threadId, VariableUnion (*pos)[16]);
-#endif
 static unsigned int SpecifyThreadPosition(unsigned int threadId, unsigned int name, unsigned int sourcePos, int type) __attribute_regparm__(3);
 static void Scr_EvalVariableValue(unsigned int id, VariableValue *value);
 int CompareCaseInfo(const unsigned int *elem1, const unsigned int *elem2);
@@ -126,8 +126,8 @@ static void Scr_EmitLocalVarsAtEnd(scr_block_t *block);
 static void Scr_EmitLocalVarsRemove(scr_block_t *block, int count);
 static void Scr_MergeBranchChildBlocks(scr_block_t *block, scr_block_t **childBlocks, int childCount);
 static intptr_t *ScriptStatementListFirstExecNode(sval_t val);
+static intptr_t *ScriptListFirstNode(sval_t listVal);
 
-#ifndef __EMSCRIPTEN__
 static unsigned int __attribute_regparm__(3)
     LinkThread(unsigned int threadId, VariableValue *pos, int allowFarCall)
 {
@@ -223,9 +223,9 @@ int CompareCaseInfo(const unsigned int *elem1, const unsigned int *elem2)
 
 void Scr_CompileShutdown(void)
 {
-    void *node;
-    while ((node = *(void **)((char *)&scrCompileGlob + 88)) != 0) {
-        *(void **)((char *)&scrCompileGlob + 88) = *(void **)((char *)node + 8);
+    PrecacheEntry *node;
+    while ((node = SCRCG->precachescriptListHead) != 0) {
+        SCRCG->precachescriptListHead = node->next;
         Z_FreeInternal(node);
     }
 }
@@ -2147,6 +2147,8 @@ static unsigned int __attribute_regparm__(3)
     VariableCompileValue constValue;
     int param_count;
 
+    Com_Printf("webdbg: EmitMethod enter node=%p\n", (void *)node);
+
     if (node && node[0] == 0x1a) {
         intptr_t *target = (intptr_t *)(uintptr_t)node[1];
 
@@ -2164,13 +2166,17 @@ static unsigned int __attribute_regparm__(3)
                 int meth;
                 char *savedPos = 0;
 
+                Com_Printf("webdbg: EmitMethod fastpath name=%u\n", name);
+
                 if (!name) {
                     goto regular_method;
                 }
 
                 pName = SL_ConvertToString(name);
+                Com_Printf("webdbg: EmitMethod fastpath pName='%s'\n", pName ? pName : "(null)");
                 sourcePos = (unsigned int)node[2];
                 varId = FindVariable(scrCompilePub.builtinMeth, name);
+                Com_Printf("webdbg: EmitMethod fastpath varId=%u\n", varId);
                 if (varId) {
                     Scr_EvalVariableValue(varId, &value);
                     type = (value.type != SCRCOMP_VAR_CODEPOS);
@@ -2180,13 +2186,17 @@ static unsigned int __attribute_regparm__(3)
 
                     type = 0;
                     meth = Scr_GetMethod(&pName, &type);
+                    Com_Printf("webdbg: EmitMethod Scr_GetMethod meth=%p type=%d\n", (void *)(intptr_t)meth, type);
                     newId = GetNewVariable(scrCompilePub.builtinMeth, name);
+                    Com_Printf("webdbg: EmitMethod newId=%u\n", newId);
                     value.type = (type == 1) ? SCRCOMP_VAR_DEVELOPER_CODEPOS : SCRCOMP_VAR_CODEPOS;
                     value.u.intValue = meth;
                     SetVariableValue(newId, &value);
+                    Com_Printf("webdbg: EmitMethod SetVariableValue done\n");
                 }
 
                 if (!meth) {
+                    Com_Printf("webdbg: EmitMethod no builtin meth, regular_method\n");
                     goto regular_method;
                 }
 
@@ -2195,41 +2205,52 @@ static unsigned int __attribute_regparm__(3)
                     return 0;
                 }
 
+                Com_Printf("webdbg: EmitMethod before EmitCallArgs\n");
                 param_count = EmitCallArgs(params, block, &constValue);
+                Com_Printf("webdbg: EmitMethod before expr eval param_count=%d\n", param_count);
                 if (EmitOrEvalPrimitiveExpression(expr, &constValue, block)) {
                     EmitValue(&constValue);
                 }
+                Com_Printf("webdbg: EmitMethod after expr eval\n");
                 if (!SCRCG->bConstRefCount) {
                     SL_RemoveRefToString(name);
                 }
 
+                Com_Printf("webdbg: EmitMethod before EmitBuiltinMethodOpcode meth=%p\n", (void *)(intptr_t)meth);
                 EmitBuiltinMethodOpcode(param_count, sourcePos, meth);
+                Com_Printf("webdbg: EmitMethod after EmitBuiltinMethodOpcode\n");
                 AddOpcodePos(methodSourcePos.sourcePosValue, 0);
                 EmitDeveloperParamOpcodePos(params);
                 if (bStatement) {
                     EmitOpcode(0x58, -1, 0);
                 }
                 EmitFinishDeveloperCall(type, savedPos);
+                Com_Printf("webdbg: EmitMethod fastpath done\n");
                 return 0;
             }
         }
 
     regular_method:
+        Com_Printf("webdbg: EmitMethod regular_method label\n");
         if (node[0] == 0x1a) {
             EmitOpcode(0x4e, 1, 0);
         }
     }
 
+    Com_Printf("webdbg: EmitMethod before regular EmitCallArgs\n");
     param_count = EmitCallArgs(params, block, &constValue);
     if (EmitOrEvalPrimitiveExpression(expr, &constValue, block)) {
         EmitValue(&constValue);
     }
+    Com_Printf("webdbg: EmitMethod before EmitPostFunctionCall\n");
     EmitPostFunctionCall(func_name, param_count, 1, block);
+    Com_Printf("webdbg: EmitMethod after EmitPostFunctionCall\n");
     AddOpcodePos(methodSourcePos.sourcePosValue, 0);
     EmitDeveloperParamOpcodePos(params);
     if (bStatement) {
         EmitOpcode(0x58, -1, 0);
     }
+    Com_Printf("webdbg: EmitMethod regular done\n");
     return 0;
 }
 
@@ -3785,11 +3806,13 @@ static unsigned int __attribute_regparm__(3)
         sval_t *call = (sval_t *)(uintptr_t)node[1].node;
         if (!call)
             return 0;
+        Com_Printf("webdbg: EmitStatement case19 call_type=%d\n", (int)call[0].type);
         if (call[0].type == 0x17) {
             EmitCall(call[1], call[2], 1, block);
         } else if (call[0].type == 0x18) {
             EmitMethod(call[1], call[2], call[3], call[4], 1, block);
         }
+        Com_Printf("webdbg: EmitStatement case19 done\n");
         return 0;
     }
 
@@ -4071,9 +4094,11 @@ static unsigned int __attribute_regparm__(3)
     char *nextPos;
     unsigned int savedChecksum;
 
+    Com_Printf("webdbg: EmitIfStatement enter ifStatBlock=%p\n", (void *)ifStatBlock);
     if (EmitOrEvalExpression(expr, &constValue, block)) {
         EmitValue(&constValue);
     }
+    Com_Printf("webdbg: EmitIfStatement after cond expr\n");
 
     EmitOpcode(0x5e, -1, 0);
     AddOpcodePos(sourcePos.sourcePosValue, 0);
@@ -4084,9 +4109,12 @@ static unsigned int __attribute_regparm__(3)
     nextPos = TempMalloc(0);
 
     ifBlock = ifStatBlock->block;
+    Com_Printf("webdbg: EmitIfStatement ifBlock=%p\n", (void *)ifBlock);
 
     Scr_MergeChildBlocks(ifBlock, block);
+    Com_Printf("webdbg: EmitIfStatement before inner EmitStatement\n");
     EmitStatement(stmt, lastStatement, endSourcePos, ifBlock);
+    Com_Printf("webdbg: EmitIfStatement after inner EmitStatement\n");
 
     savedChecksum = SCRVP->checksum;
     if (lastStatement) {
@@ -4098,6 +4126,7 @@ static unsigned int __attribute_regparm__(3)
     SCRVP->checksum = savedChecksum + 1;
 
     *jumpOffset = (unsigned short)(TempMalloc(0) - nextPos);
+    Com_Printf("webdbg: EmitIfStatement done\n");
     return 0;
 }
 
@@ -5015,16 +5044,19 @@ static unsigned int __attribute_regparm__(3)
 {
     intptr_t *funcNode;
     unsigned int name;
-    intptr_t *paramList;
+    sval_t paramListVal;
+    sval_t stmtListVal;
     intptr_t *paramNode;
-    intptr_t *stmtList;
     intptr_t *stmtNode;
     int stackUse;
 
     funcNode = (intptr_t *)(uintptr_t)val;
     SCRCG->threadId = threadId;
 
+    Com_Printf("webdbg: EmitThreadInternal enter threadId=%u funcNode=%p\n",
+               threadId, (void *)funcNode);
     AddThreadStartOpcodePos(sourcePos);
+    Com_Printf("webdbg: EmitThreadInternal after AddThreadStartOpcodePos\n");
 
     SCRCG->cumulOffset = 0;
     SCRCG->maxOffset = 0;
@@ -5041,10 +5073,13 @@ static unsigned int __attribute_regparm__(3)
         }
         SL_TransferRefToUser(name, 2);
     }
+    Com_Printf("webdbg: EmitThreadInternal after name transfer name=%u\n", name);
 
-    paramList = (intptr_t *)funcNode[2];
-    paramNode = (intptr_t *)((intptr_t *)paramList[0])[1];
-    while (paramNode) {
+    /* Match ScriptListFirstNode / CoD2rev EmitFormalParameterListInternal walk. */
+    paramListVal.node = funcNode[2];
+    for (paramNode = ScriptListFirstNode(paramListVal);
+         paramNode;
+         paramNode = (intptr_t *)paramNode[1]) {
         intptr_t *param;
         unsigned int paramName;
         unsigned int paramSourcePos;
@@ -5052,6 +5087,9 @@ static unsigned int __attribute_regparm__(3)
         int localIndex;
 
         param = (intptr_t *)paramNode[0];
+        if (!param)
+            continue;
+
         paramName = (unsigned int)param[0];
         paramSourcePos = (unsigned int)param[1];
         sourcePosVal.sourcePosValue = paramSourcePos;
@@ -5062,19 +5100,23 @@ static unsigned int __attribute_regparm__(3)
             *TempMalloc(1) = (char)localIndex;
         }
         AddOpcodePos(paramSourcePos, 0);
-
-        paramNode = (intptr_t *)paramNode[1];
     }
 
+    Com_Printf("webdbg: EmitThreadInternal before checkclearparams\n");
     EmitOpcode(0x35, 0, 0);
     AddOpcodePos(sourcePos, 0);
+    Com_Printf("webdbg: EmitThreadInternal before statements\n");
 
-    stmtList = (intptr_t *)funcNode[3];
-    stmtNode = (intptr_t *)((intptr_t *)stmtList[0])[1];
-    while (stmtNode) {
+    stmtListVal.node = funcNode[3];
+    for (stmtNode = ScriptListFirstNode(stmtListVal);
+         stmtNode;
+         stmtNode = (intptr_t *)stmtNode[1]) {
         intptr_t *nextNode;
         int lastStatement;
         sval_t stmtVal;
+
+        if (!stmtNode[0])
+            continue;
 
         nextNode = (intptr_t *)stmtNode[1];
         lastStatement = 0;
@@ -5089,7 +5131,7 @@ static unsigned int __attribute_regparm__(3)
                 intptr_t *scanStmt;
 
                 scanStmt = (intptr_t *)scanNode[0];
-                if (scanStmt[0] != 0x2d) {
+                if (!scanStmt || scanStmt[0] != 0x2d) {
                     break;
                 }
                 scanNode = (intptr_t *)scanNode[1];
@@ -5101,14 +5143,12 @@ static unsigned int __attribute_regparm__(3)
         }
 
         stmtVal.node = stmtNode[0];
+        Com_Printf("webdbg: EmitThreadInternal EmitStatement type=%d last=%d\n",
+                   (int)((intptr_t *)(uintptr_t)stmtVal.node)[0], lastStatement);
         EmitStatement(stmtVal, lastStatement, endSourcePos, block);
-
-        if (!nextNode) {
-            break;
-        }
-        stmtNode = nextNode;
     }
 
+    Com_Printf("webdbg: EmitThreadInternal before EmitEnd\n");
     EmitOpcode(0, 0, 0);
     AddOpcodePos(endSourcePos, 1);
     AddOpcodePos(0xfffffffe, 0);
@@ -5118,6 +5158,7 @@ static unsigned int __attribute_regparm__(3)
         CompileError(sourcePos, "function exceeds operand stack size");
     }
 
+    Com_Printf("webdbg: EmitThreadInternal done stackUse=%d\n", stackUse);
     return stackUse;
 }
 
@@ -5251,9 +5292,13 @@ static void EmitFirstThreadMarker(int developerThread)
         return;
 
     SCRCG->firstThread[developerThread] = 0;
+    Com_Printf("webdbg: EmitFirstThreadMarker EmitOpcode(0) opcodePos=%p currentPos=%u programBuffer=%p\n",
+               (void *)SCRCP->opcodePos, currentPos, (void *)SCRVP->programBuffer);
     EmitOpcode(0, 0, 0);
+    Com_Printf("webdbg: EmitFirstThreadMarker after EmitOpcode opcodePos=%p\n", (void *)SCRCP->opcodePos);
     AddOpcodePos(0, 0);
     AddOpcodePos((unsigned int)-2, 0);
+    Com_Printf("webdbg: EmitFirstThreadMarker done\n");
 }
 
 static void SetThreadBeginPosition(unsigned int threadId)
@@ -5415,15 +5460,20 @@ static void EmitThreadList_new(sval_t threadListVal)
         endSourcePos = (unsigned int)node[5];
 
         SCRCG->forceNotCreate = 0;
+        Com_Printf("webdbg: EmitThreadList fn nameId=%u before InitThreadBlock\n", name);
         Scr_InitThreadBlock(node, &block);
+        Com_Printf("webdbg: EmitThreadList before CalcThreadLocalVars\n");
         Scr_CalcThreadLocalVars(node, &block);
+        Com_Printf("webdbg: EmitThreadList after CalcThreadLocalVars\n");
 
         if (SCRCG->in_developer_thread && !SCRVP->developer_script) {
             savedPos = TempMalloc(0);
             savedChecksum = SCRVP->checksum;
             SCRCP->developer_statement = SCRCOMP_SCR_DEV_IGNORE;
             Scr_ResetThreadCompileState();
+            Com_Printf("webdbg: EmitThreadList before EmitFirstThreadMarker(dev-ignore)\n");
             EmitFirstThreadMarker(1);
+            Com_Printf("webdbg: EmitThreadList before EmitThreadInternal(dev-ignore)\n");
             EmitThreadInternal(0, (uintptr_t)node, sourcePos, endSourcePos, &block);
             TempMemorySetPos(savedPos);
             SCRVP->checksum = savedChecksum;
@@ -5436,12 +5486,17 @@ static void EmitThreadList_new(sval_t threadListVal)
                                          : SCRCOMP_SCR_DEV_NO;
 
         Scr_ResetThreadCompileState();
+        Com_Printf("webdbg: EmitThreadList before EmitFirstThreadMarker\n");
         EmitFirstThreadMarker(SCRCG->in_developer_thread ? 1 : 0);
+        Com_Printf("webdbg: EmitThreadList after EmitFirstThreadMarker\n");
 
         threadId = FindObject(FindVariable(SCRCG->fileId, name));
 
+        Com_Printf("webdbg: EmitThreadList before SetThreadBeginPosition threadId=%u\n", threadId);
         SetThreadBeginPosition(threadId);
+        Com_Printf("webdbg: EmitThreadList before EmitThreadInternal\n");
         EmitThreadInternal(threadId, (uintptr_t)node, sourcePos, endSourcePos, &block);
+        Com_Printf("webdbg: EmitThreadList after EmitThreadInternal\n");
         SCRCP->developer_statement = SCRCOMP_SCR_DEV_NO;
     }
 }
@@ -5498,6 +5553,9 @@ void ScriptCompile(sval_t val, unsigned int fileId, unsigned int scriptId)
     sval_t include_list_val, thread_list_val;
     int i, j, func_count;
 
+    Com_Printf("webdbg: ScriptCompile enter top=%p fileId=%u scriptId=%u SCRCG=%p SCRCP=%p SCRVP=%p\n",
+               (void *)top, fileId, scriptId, (void *)SCRCG, (void *)SCRCP, (void *)SCRVP);
+
     SCRCG->fileId = fileId;
     SCRCG->bConstRefCount = 0;
 
@@ -5505,6 +5563,7 @@ void ScriptCompile(sval_t val, unsigned int fileId, unsigned int scriptId)
     SCRCP->developer_statement = SCRCOMP_SCR_DEV_NO;
 
     func_count = SCRCP->far_function_count;
+    Com_Printf("webdbg: ScriptCompile after init far_function_count=%d\n", func_count);
     if (func_count > 0) {
         precachescriptList = (PrecacheEntry *)Z_MallocInternal(
             sizeof(*precachescriptList) * func_count);
@@ -5515,15 +5574,19 @@ void ScriptCompile(sval_t val, unsigned int fileId, unsigned int scriptId)
     SCRCG->precachescriptList = precachescriptList;
 
     if (precachescriptList) {
-        precachescriptList->next = (int)(intptr_t)SCRCG->precachescriptListHead;
+        precachescriptList->next = SCRCG->precachescriptListHead;
         SCRCG->precachescriptListHead = precachescriptList;
     }
 
     include_list_val = top[0];
     thread_list_val = top[1];
+    Com_Printf("webdbg: ScriptCompile before EmitIncludeList\n");
     EmitIncludeList_new(include_list_val);
+    Com_Printf("webdbg: ScriptCompile before SpecifyThreadListPositions\n");
     SpecifyThreadListPositions(thread_list_val);
+    Com_Printf("webdbg: ScriptCompile before EmitThreadList\n");
     EmitThreadList_new(thread_list_val);
+    Com_Printf("webdbg: ScriptCompile after EmitThreadList programLen prep\n");
 
     SCRCP->programLen = (char *)TempMalloc(0) - SCRVP->programBuffer;
     Hunk_ClearTempMemoryHigh();
@@ -5589,7 +5652,7 @@ void ScriptCompile(sval_t val, unsigned int fileId, unsigned int scriptId)
     }
 
     if (precachescriptList) {
-        SCRCG->precachescriptListHead = (PrecacheEntry *)(intptr_t)precachescriptList->next;
+        SCRCG->precachescriptListHead = precachescriptList->next;
         Z_FreeInternal(precachescriptList);
     }
 
@@ -6003,50 +6066,3 @@ unsigned int EmitDeveloperStatementList(sval_t val, scr_block_t *block, sval_t *
     );
 }
 #    endif
-
-#else
-static unsigned int LinkThread(unsigned int threadId, VariableUnion (*pos)[16])
-{
-
-    unsigned int varId;
-    int count, i;
-    int allowFarCall = 0;
-
-    varId = FindVariable(threadId, 0);
-    if (!varId)
-        return 0;
-
-    count = Scr_EvalVariable(varId);
-    if (count <= 0)
-        return 0;
-
-    for (i = 0; i < count; i++) {
-        unsigned int valueId = FindVariable(threadId, i + 2);
-        int *value = (int *)GetVariableValueAddress(valueId);
-        int type = GetVarType(valueId);
-        int posType = ((int *)pos)[1];
-
-        if (posType == 0xc) {
-            if (type == 7) {
-                CompileError2(*value, (const char *)"normal script cannot reference a function in a /# ... #/ comment");
-                continue;
-            }
-        } else {
-            if (!posType) {
-                CompileError2(*value, (const char *)"unknown function");
-                continue;
-            }
-            if (!allowFarCall) {
-                int *target = (int *)*value;
-                if (*target == 1) {
-                    CompileError2(*value, (const char *)"unknown function");
-                    continue;
-                }
-            }
-        }
-
-        *(int *)*value = *(int *)pos;
-    }
-    return 0;
-}
-#endif

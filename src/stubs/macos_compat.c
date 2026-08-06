@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <math.h>
@@ -10,6 +11,8 @@
 #    include <SDL2/SDL.h>
 #    ifdef __EMSCRIPTEN__
 #        include <GLES3/gl3.h>
+#        include <emscripten/html5.h>
+#        include <emscripten/threading.h>
 #    elif defined(_WIN32)
 
 #        define GL_COLOR_BUFFER_BIT 0x00004000
@@ -240,6 +243,83 @@ static int sdl_quit_watch(void *ud, SDL_Event *e)
     return 0;
 }
 static SDL_GLContext sdl_gl_context = NULL;
+#    ifdef __EMSCRIPTEN__
+/* WebGL antialias is boolean; track requested r_aaSamples (>1 => MSAA on). */
+static int s_web_aa_samples = 1;
+
+int Web_GetActiveAASamples(void)
+{
+    return s_web_aa_samples;
+}
+
+static int Web_CreateProxiedWebGLContext(int aaSamples, int inUseStencil)
+{
+    EmscriptenWebGLContextAttributes attr;
+    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE handle;
+    EMSCRIPTEN_RESULT mr;
+
+    if (aaSamples < 1)
+        aaSamples = 1;
+
+    fprintf(stderr, "webdbg: emscripten_webgl_create_context PROXY_ALWAYS aa=%d…\n", aaSamples);
+    emscripten_webgl_init_context_attributes(&attr);
+    attr.majorVersion = 2;
+    attr.minorVersion = 0;
+    attr.alpha = EM_FALSE;
+    attr.depth = EM_TRUE;
+    attr.stencil = inUseStencil ? EM_TRUE : EM_FALSE;
+    attr.antialias = (aaSamples > 1) ? EM_TRUE : EM_FALSE;
+    attr.premultipliedAlpha = EM_FALSE;
+    attr.preserveDrawingBuffer = EM_FALSE;
+    attr.enableExtensionsByDefault = EM_TRUE;
+    attr.explicitSwapControl = EM_FALSE;
+    attr.renderViaOffscreenBackBuffer = EM_TRUE;
+    attr.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_ALWAYS;
+
+    handle = emscripten_webgl_create_context("#canvas", &attr);
+    if (!handle) {
+        fprintf(stderr, "webdbg: emscripten_webgl_create_context FAILED\n");
+        return 0;
+    }
+    mr = emscripten_webgl_make_context_current(handle);
+    if (mr != EMSCRIPTEN_RESULT_SUCCESS) {
+        fprintf(stderr, "webdbg: make_context_current failed (%d)\n", (int)mr);
+        emscripten_webgl_destroy_context(handle);
+        return 0;
+    }
+    sdl_gl_context = (SDL_GLContext)(uintptr_t)handle;
+    s_web_aa_samples = aaSamples;
+    fprintf(stderr, "webdbg: webgl ctx handle=%ld aa=%d ownsTLS ok\n", (long)handle, aaSamples);
+    return 1;
+}
+
+int Web_RecreateGLContextForAA(int aaSamples)
+{
+    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE old;
+    int wantAA;
+    int haveAA;
+
+    if (aaSamples < 1)
+        aaSamples = 1;
+    wantAA = aaSamples > 1;
+    haveAA = s_web_aa_samples > 1;
+    if (wantAA == haveAA) {
+        s_web_aa_samples = aaSamples;
+        return 1;
+    }
+
+    old = (EMSCRIPTEN_WEBGL_CONTEXT_HANDLE)(uintptr_t)sdl_gl_context;
+    if (old) {
+        fprintf(stderr, "webdbg: destroying WebGL ctx %ld for AA %d -> %d\n",
+                (long)old, s_web_aa_samples, aaSamples);
+        emscripten_webgl_destroy_context(old);
+        sdl_gl_context = NULL;
+    }
+    if (!Web_CreateProxiedWebGLContext(aaSamples, 1))
+        return 0;
+    return 1;
+}
+#    endif
 
 #    ifdef _WIN32
 
@@ -489,11 +569,34 @@ int Linux_PollInputEvent(LinuxInputEvent *out)
         return 0;
     }
 }
+#    elif defined(__EMSCRIPTEN__)
+/* SDL_PumpInputEvents in linux_input.c owns web input; X11 poll is unused. */
+typedef struct LinuxInputEvent {
+    int type;
+    int value;
+    int value2;
+    int x;
+    int y;
+    int dx;
+    int dy;
+} LinuxInputEvent;
+
+int Linux_PollInputEvent(LinuxInputEvent *out)
+{
+    (void)out;
+    return 0;
+}
 #    endif
 
 void SDL_GL_SwapWindowDirect(void)
 {
-#    if defined(__EMSCRIPTEN__) || defined(_WIN32)
+#    if defined(__EMSCRIPTEN__)
+    /* Offscreen-framebuffer contexts present via commit_frame, not SDL swap. */
+    if (emscripten_webgl_get_current_context())
+        emscripten_webgl_commit_frame();
+    else if (sdl_gl_window)
+        SDL_GL_SwapWindow(sdl_gl_window);
+#    elif defined(_WIN32)
     if (sdl_gl_window)
         SDL_GL_SwapWindow(sdl_gl_window);
 #    else
@@ -564,6 +667,13 @@ ContextRef MacDisplay_CreateScreenContext(int inDepthSize, int inUseStencil,
         *outHasAuxBuffer = 0;
 
 #    ifdef __EMSCRIPTEN__
+    fprintf(stderr, "webdbg: SDL_Init VIDEO…\n");
+    if (SDL_WasInit(SDL_INIT_VIDEO) == 0) {
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            fprintf(stderr, "webdbg: SDL_Init failed: %s\n", SDL_GetError());
+            return (ContextRef)0;
+        }
+    }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
@@ -625,7 +735,9 @@ ContextRef MacDisplay_CreateScreenContext(int inDepthSize, int inUseStencil,
         }
 #    endif
         if (!sdl_gl_window) {
-
+#    ifdef __EMSCRIPTEN__
+            fprintf(stderr, "webdbg: SDL_CreateWindow %dx%d…\n", sdl_gl_width, sdl_gl_height);
+#    endif
             sdl_gl_window = SDL_CreateWindow("CoD2",
                                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                              sdl_gl_width, sdl_gl_height,
@@ -643,24 +755,47 @@ ContextRef MacDisplay_CreateScreenContext(int inDepthSize, int inUseStencil,
 
         SDL_AddEventWatch(sdl_quit_watch, NULL);
 
+#    ifndef __EMSCRIPTEN__
         SDL_ShowWindow(sdl_gl_window);
         SDL_RaiseWindow(sdl_gl_window);
-#    if SDL_VERSION_ATLEAST(2, 0, 5)
+#        if SDL_VERSION_ATLEAST(2, 0, 5)
         SDL_SetWindowInputFocus(sdl_gl_window);
-#    endif
+#        endif
         SDL_WarpMouseInWindow(sdl_gl_window, sdl_gl_width / 2, sdl_gl_height / 2);
+#    endif
     }
 
-    sdl_gl_context = SDL_GL_CreateContext(sdl_gl_window);
-    if (!sdl_gl_context)
+#    ifdef __EMSCRIPTEN__
+    /*
+     * PROXY_TO_PTHREAD: the app main thread IS emscripten's "main runtime
+     * thread", so SDL's default WebGL attrs leave proxyContextToMainThread=0.
+     * That skips OffscreenFramebuffer ownership TLS — later glTexImage2D calls
+     * GetCurrentTargetThread() → null → assert(target_thread).
+     * Create the context ourselves with PROXY_ALWAYS.
+     * antialias follows inMultiSampleType / r_aaSamples (>1 => on).
+     */
+    if (!Web_CreateProxiedWebGLContext(inMultiSampleType, inUseStencil))
         return (ContextRef)0;
+#    else
+    sdl_gl_context = SDL_GL_CreateContext(sdl_gl_window);
+    if (!sdl_gl_context) {
+        fprintf(stderr, "SDL_GL_CreateContext FAILED: %s\n", SDL_GetError());
+        return (ContextRef)0;
+    }
+#    endif
 
     {
         int got_depth = -1, got_stencil = -1, got_db = -1;
         const char *glver, *glrend;
+#    ifndef __EMSCRIPTEN__
         SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &got_depth);
         SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &got_stencil);
         SDL_GL_GetAttribute(SDL_GL_DOUBLEBUFFER, &got_db);
+#    else
+        got_depth = inDepthSize ? inDepthSize : 24;
+        got_stencil = inUseStencil ? 8 : 0;
+        got_db = 1;
+#    endif
         glver = (const char *)glGetString(0x1F02 );
         glrend = (const char *)glGetString(0x1F01 );
         fprintf(stderr,
@@ -677,7 +812,11 @@ ContextRef MacDisplay_CreateScreenContext(int inDepthSize, int inUseStencil,
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#    ifdef __EMSCRIPTEN__
+    emscripten_webgl_commit_frame();
+#    else
     SDL_GL_SwapWindow(sdl_gl_window);
+#    endif
 
 #    ifndef __EMSCRIPTEN__
 

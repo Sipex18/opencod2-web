@@ -3,6 +3,9 @@
 #include "www_download.h"
 #include "cod2_feature_config.h"
 #include "PC/qcommon/net_hardening.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 #include <stdlib.h>
 
 #if COD2_IS_PATCH_13
@@ -57,7 +60,7 @@ extern void Con_Close(void);
 extern void CL_ClearState(void);
 extern void CL_SystemInfoChanged(void);
 extern qboolean FS_ConditionalRestart(int checksumFeed);
-extern qboolean Sys_IsLANAddress(int addr0, int addr1, int addr2);
+extern qboolean Sys_IsLANAddress(netadr_t adr);
 extern void CL_RequestAuthorization(void);
 extern void CL_InitDownloads(void);
 extern void CL_AddReliableCommand(const char *cmd);
@@ -181,12 +184,21 @@ void CL_ParseGamestate(msg_t *msg)
     int len;
     entityState_t nullstate;
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: enter\n");
+#endif
     Con_Close();
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: after Con_Close\n");
+#endif
 
     clc = (clientConnection_t *)*clc_ptr;
     clc->connectPacketCount = 0;
 
     CL_ClearState();
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: after CL_ClearState\n");
+#endif
 
     clc->serverCommandSequence = MSG_ReadLong(msg);
 
@@ -247,25 +259,51 @@ void CL_ParseGamestate(msg_t *msg)
     clc->clientNum = MSG_ReadLong(msg);
 
     clc->checksumFeed = MSG_ReadLong(msg);
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: clientNum=%d checksumFeed=%d\n", clc->clientNum, clc->checksumFeed);
+#endif
 
     CL_SystemInfoChanged();
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: after SystemInfoChanged\n");
+#endif
 
     FS_ConditionalRestart(clc->checksumFeed);
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: after FS_ConditionalRestart\n");
+#endif
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: net_lanauthorize=%d\n", net_lanauthorize->current.enabled);
+#endif
     if (net_lanauthorize->current.enabled == 0) {
-        if (Sys_IsLANAddress(*(int *)&clc->serverAddress, *(int *)((byte *)&clc->serverAddress + 4), *(int *)((byte *)&clc->serverAddress + 8))) {
-
+        if (Sys_IsLANAddress(clc->serverAddress)) {
+#ifdef __EMSCRIPTEN__
+            printf("CL_ParseGamestate: LAN path, before CL_InitDownloads\n");
+#endif
             CL_InitDownloads();
             Dvar_SetInt(cl_paused, 0);
+#ifdef __EMSCRIPTEN__
+            printf("CL_ParseGamestate: LAN path done\n");
+#endif
             return;
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: WAN path, before CL_RequestAuthorization\n");
+#endif
     CL_RequestAuthorization();
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: after CL_RequestAuthorization\n");
+#endif
 
     CL_InitDownloads();
 
     Dvar_SetInt(cl_paused, 0);
+#ifdef __EMSCRIPTEN__
+    printf("CL_ParseGamestate: done\n");
+#endif
 }
 
 void CL_ParseDownload(msg_t *msg)
@@ -987,6 +1025,9 @@ void CL_ParseServerMessage(msg_t *msg)
     while (!msgCompressed.overflowed) {
 
         cmd = MSG_ReadByte(&msgCompressed);
+#ifdef __EMSCRIPTEN__
+        printf("CL_ParseServerMessage: cmd=%d readcount=%d\n", cmd, msgCompressed.readcount);
+#endif
 
         if (cmd == 7) {
 
@@ -1009,12 +1050,19 @@ void CL_ParseServerMessage(msg_t *msg)
 
             break;
         case 1: {
-
+#ifdef __EMSCRIPTEN__
+            printf("CL_ParseServerMessage: cmd=1 CL_ParseGamestate\n");
+#endif
             CL_ParseGamestate(&msgCompressed);
+#ifdef __EMSCRIPTEN__
+            printf("CL_ParseServerMessage: after CL_ParseGamestate\n");
+#endif
             break;
         }
         case 4: {
-
+#ifdef __EMSCRIPTEN__
+            printf("CL_ParseServerMessage: cmd=4 serverCommand\n");
+#endif
             int seq = MSG_ReadLong(&msgCompressed);
             char *str = MSG_ReadString(&msgCompressed);
             clientConnection_t *clc = (clientConnection_t *)*clc_ptr;

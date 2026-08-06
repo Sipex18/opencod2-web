@@ -15,22 +15,13 @@
 > or scripts. To run anything you must supply data files from a copy of the game
 > that **you legally own**.
 
-## Status
+## Platforms
 
-The reconstruction is incomplete. It may crash, omit subsystems, or only
-partially implement behavior that exists in the original game.
-
-## Security
-
-Older Call of Duty titles and game engines from this era have a history of
-security-sensitive bugs, especially around networking, file parsing,
-content-loading paths, and memory safety. This project should not currently be
-treated as a hardened or production-safe engine.
-
-One long-term goal of the reconstruction is to make those risks easier to audit
-and fix: preserve compatibility where practical, but replace unsafe behavior and
-close vulnerabilities as they are found. Until then, run it only with data you
-trust and avoid exposing test servers to untrusted networks.
+| Target | Status | Notes |
+|--------|--------|-------|
+| Linux x86 (client + dedicated) | Primary | 32-bit multilib required |
+| Windows (MinGW cross-compile)  | Supported | Dedicated server; client with `-DCOD2_WIN32_CLIENT=ON` |
+| **Web (Emscripten / WebAssembly)** | **Experimental** | Runs in browser via WebGL2; server + client in single WASM binary |
 
 ## Building
 
@@ -81,6 +72,31 @@ cmake --build build-win32 --target gfxdll
 The renderer↔engine bridge is pre-generated and committed under `build/gfxdll/`;
 the build is pure compile+link. Experimental — not exhaustively tested.
 
+### Web / Emscripten (experimental)
+
+Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html).
+
+```sh
+source ~/emsdk/emsdk_env.sh
+emcmake cmake -S . -B build/web
+emmake make -C build/web -j$(nproc)
+# -> build/web/cod2.html, cod2.js, cod2.wasm
+```
+
+The web build compiles the full engine (server + client) into a single
+WebAssembly binary that runs in the browser using WebGL2.
+Game assets must be served from a web server alongside the WASM files.
+
+**Optimizations applied:** `-O2`, WASM SIMD (`-msimd128`), `emmalloc` allocator.
+Pre-compress `cod2.wasm` with `gzip -9` and serve with `gzip_static on` in Nginx
+for best load times.
+
+Deploy to a VPS:
+
+```sh
+bash tools/deploy_web_to_vps.sh user@host build/web [version-tag]
+```
+
 ## Running
 
 This reconstructs the engine, not the content. Point it at data from a copy of
@@ -91,6 +107,18 @@ the game you legally own:
 ```
 
 Without legally-obtained data the build runs but has nothing to load.
+
+## Security
+
+Older Call of Duty titles and game engines from this era have a history of
+security-sensitive bugs, especially around networking, file parsing,
+content-loading paths, and memory safety. This project should not currently be
+treated as a hardened or production-safe engine.
+
+One long-term goal of the reconstruction is to make those risks easier to audit
+and fix: preserve compatibility where practical, but replace unsafe behavior and
+close vulnerabilities as they are found. Until then, run it only with data you
+trust and avoid exposing test servers to untrusted networks.
 
 ## Notice
 

@@ -780,7 +780,9 @@ static const char *Dvar_ValueToString_impl(const dvar_t *dvar, DvarValue value)
     case DVAR_TYPE_INT:
         return va("%i", value.integer);
     case DVAR_TYPE_ENUM:
-        if (dvar->domain.enumeration.stringCount) {
+        if (dvar->domain.enumeration.stringCount &&
+            value.integer >= 0 &&
+            value.integer < dvar->domain.enumeration.stringCount) {
             return dvar->domain.enumeration.strings[value.integer];
         }
         return "";
@@ -1536,6 +1538,12 @@ static void __attribute_regparm__(3) Dvar_SetVariant(
     }
 
     if (source == DVAR_SOURCE_EXTERNAL || source == DVAR_SOURCE_SCRIPT) {
+        /* Re-applying the same +set (e.g. fs_basepath after FS_Init) must not
+         * print write-protected / read-only when the value is unchanged. */
+        if (Dvar_ValuesEqual(dvar->type, dvar->current, value)) {
+            Dvar_SetLatchedValue(dvar, dvar->current);
+            return;
+        }
         if (!Dvar_CanChangeValue(dvar, source)) {
             return;
         }

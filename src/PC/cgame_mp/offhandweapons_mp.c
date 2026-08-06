@@ -12,7 +12,7 @@ extern float CG_FadeHudMenu(void *hud, int val, int time);
 extern void UI_DrawText(const char *text, int maxChars, void *font, float x, float y, int horzAlign, int vertAlign, float scale, const float *color, int textStyle);
 extern const char *UI_SafeTranslateString(const char *str);
 extern void CG_PlayEntitySoundAlias(int entNum, int soundAlias);
-extern void CG_PlaySoundAlias(int entNum, float *origin, int soundAlias);
+extern int CG_PlaySoundAlias(int entNum, float *origin, int soundAlias);
 extern qboolean CG_DObjGetWorldTagPos(void *cent, void *dobj, unsigned short tag, float *origin);
 extern int CG_DObjGetViewModelTagPos(void *dobj, unsigned short tag, float *origin);
 extern void BG_EvaluateTrajectory(void *trajectory, int time, float *result);

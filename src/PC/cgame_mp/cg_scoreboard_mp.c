@@ -10,7 +10,7 @@ extern const dvar_t *cg_paused;
 extern struct Material *CL_RegisterMaterialNoMip(const char *name, int imageTrack);
 extern const char *Dvar_GetString(const char *dvarName);
 extern void Dvar_GetUnpackedColorByName(const char *dvarName, vec_t *color);
-extern float UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
+extern void UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
 extern void UI_DrawText(const char *text, int maxChars, void *font, float x, float y, int horzAlign, int vertAlign, float scale, float *color, int style);
 extern int UI_TextWidth(const char *text, int maxChars, void *font, float scale);
 extern int UI_TextHeight(void *font, float scale);

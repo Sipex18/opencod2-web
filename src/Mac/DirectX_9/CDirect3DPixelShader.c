@@ -299,6 +299,7 @@ void COpenGLARBFragmentProgram_COpenGLARBFragmentProgram(const COpenGLARBFragmen
     const char *codeStr;
     int codeLen;
 
+    (void)Name;
     program = (COpenGLARBFragmentProgramImpl *)_this;
     program->vtable = vtbl_CDirect3DPixelShader_ARB;
     program->refCount = 1;
@@ -307,9 +308,14 @@ void COpenGLARBFragmentProgram_COpenGLARBFragmentProgram(const COpenGLARBFragmen
     program->codeStr = NULL;
     program->programId = 0;
 
+#ifdef __EMSCRIPTEN__
+    /* No ARB FP on WebGL2 — keep a valid COM object with id 0. */
+    (void)Code;
+    return;
+#else
     codeStr = *(const char **)Code;
     if (!codeStr || !codeStr[0])
-        return 0;
+        return;
 
     codeLen = strlen(codeStr);
 
@@ -343,8 +349,7 @@ void COpenGLARBFragmentProgram_COpenGLARBFragmentProgram(const COpenGLARBFragmen
     }
 
     glBindProgramARB(0x8804, 0);
-
-    return 0;
+#endif
 }
 
 static void COpenGLARBFragmentProgram_DestroyImpl(const COpenGLARBFragmentProgram *_this)

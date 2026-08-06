@@ -5,7 +5,7 @@ extern void __cxa_allocate_exception(void);
 extern void __cxa_begin_catch(void);
 extern void __cxa_end_catch(void);
 extern void __cxa_rethrow(void);
-extern void __cxa_throw(void);
+extern void __cxa_throw(void *thrown, void *tinfo, void (*dest)(void *));
 extern void _Unwind_Resume(void);
 extern void _ZdaPv(void *ptr);
 extern void _ZdlPv(void *ptr);
@@ -76,9 +76,9 @@ void ___cxa_rethrow(void)
 {
     __cxa_rethrow();
 }
-void ___cxa_throw(void)
+void ___cxa_throw(void *thrown, void *tinfo, void (*dest)(void *))
 {
-    __cxa_throw();
+    __cxa_throw(thrown, tinfo, dest);
 }
 void __Unwind_Resume(void)
 {

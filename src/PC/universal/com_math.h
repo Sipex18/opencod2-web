@@ -602,7 +602,7 @@ struct refexport_t {
     void (*DObjReplaceMaterial)(struct DObj_s *obj, int lod, int surfaceIndex, MaterialHandle material);
     const char *(*ParseSunLight)(void *params, const char *text);
     MaterialHandle (*Material_Duplicate)(MaterialHandle mtlCopy, const char *name);
-    int (*DuplicateFont)(FontHandle fontCopy, const char *name);
+    void (*DuplicateFont)(FontHandle fontCopy, const char *name);
     bool XModelAllowReadSurface;
     void (*SyncRenderThread)(void);
     void (*AbortRenderCommands)(void);

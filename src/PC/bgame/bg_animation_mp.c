@@ -1777,19 +1777,31 @@ void BG_LoadAnim(void)
     int i;
     int j;
 
+    Com_Printf("webdbg: BG_LoadAnim enter bgs=%p anim_user=%d\n",
+               (void *)bgs, bgs ? bgs->anim_user : -1);
+
     LargeLocal_LargeLocal(&playerAnims_large_local, 0x9000);
     playerAnims = (loadAnim_t *)LargeLocal_GetBuf(&playerAnims_large_local);
+    Com_Printf("webdbg: BG_LoadAnim after LargeLocal playerAnims=%p\n", (void *)playerAnims);
 
+    Com_Printf("webdbg: BG_LoadAnim before Scr_FindAnim root\n");
     Scr_FindAnim("multiplayer", "root", &bgs->generic_human.root, bgs->anim_user);
     Scr_FindAnim("multiplayer", "torso", &bgs->generic_human.torso, bgs->anim_user);
     Scr_FindAnim("multiplayer", "legs", &bgs->generic_human.legs, bgs->anim_user);
     Scr_FindAnim("multiplayer", "turning", &bgs->generic_human.turning, bgs->anim_user);
+    Com_Printf("webdbg: BG_LoadAnim after Scr_FindAnim\n");
 
+    Com_Printf("webdbg: BG_LoadAnim before BG_AnimParseAnimScript\n");
     BG_AnimParseAnimScript(&bgs->animScriptData, playerAnims, &iNumPlayerAnims);
+    Com_Printf("webdbg: BG_LoadAnim after BG_AnimParseAnimScript num=%d\n", iNumPlayerAnims);
 
+    Com_Printf("webdbg: BG_LoadAnim before Scr_PrecacheAnimTrees\n");
     Scr_PrecacheAnimTrees(bgs->AllocXAnim, bgs->anim_user);
+    Com_Printf("webdbg: BG_LoadAnim after Scr_PrecacheAnimTrees\n");
 
+    Com_Printf("webdbg: BG_LoadAnim before Scr_FindAnimTree\n");
     anims = Scr_FindAnimTree("multiplayer").anims;
+    Com_Printf("webdbg: BG_LoadAnim Scr_FindAnimTree anims=%p\n", (void *)anims);
     if (!anims) {
         Com_Error(1, "\x15"
                      "Could not find animation tree '%s'",

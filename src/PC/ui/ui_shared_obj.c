@@ -48,7 +48,7 @@ extern void FS_FreeFile(void *buffer);
 extern void Com_SetCSV(int csv);
 extern const char *Com_ParseOnLine(const char **data_p);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
-extern void CL_Material_Duplicate(int material, const char *name);
+extern MaterialHandle CL_Material_Duplicate(MaterialHandle material, const char *name);
 void Window_SetRect(menuDef_t *menu, rectDef_t *rect);
 void Menu_UpdatePosition(menuDef_t *menu);
 void Item_InitControls(const char (*item)[4]);

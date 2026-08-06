@@ -608,8 +608,16 @@ unsigned char player_view_pitch_up[112];
 unsigned char cm[384];
 unsigned char bg_weaponDefs[608];
 unsigned char scrVmPub[17184];
+#if defined(__EMSCRIPTEN__)
+/* Mac blob: 33 * 72-byte jmp_buf ≈ 2400. Project/Emscripten jmp_buf is
+ * typedef int[39] (156 bytes) → need 33*156=5148. Undersized buffer corrupts
+ * scrVarPub and traps as wasm unreachable on script longjmp. */
+int g_script_error_level;
+unsigned char g_script_error[33 * 156];
+#else
 unsigned char g_script_error_level[32];
 unsigned char g_script_error[2400];
+#endif
 unsigned char scrVarPub[262240];
 unsigned char scrVarGlob[1048608];
 unsigned char scrCompilePub[65592];

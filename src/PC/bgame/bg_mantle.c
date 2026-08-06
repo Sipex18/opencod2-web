@@ -69,7 +69,7 @@ extern const dvar_t *Dvar_RegisterFloat(const char *name, float value, float min
 extern void *Hunk_AllocAlignInternal(int size, int align);
 extern void *XAnimCreateAnims(const char *name, int count, void *allocFunc);
 extern void XAnimBlend(void *anims, unsigned int animIndex, const char *name, unsigned int children, unsigned int num, unsigned int flags);
-extern void XAnimPrecache(const char *name, void *allocFunc);
+extern XAnimParts *XAnimPrecache(const char *name, void *allocFunc);
 extern void XAnimCreate(void *anims, int index, const char *name);
 extern void XAnimGetAbsDelta(void *anims, int animIndex, float *rot, float *delta, float frac);
 extern int XAnimGetLengthMsec(void *anims, int animIndex);
@@ -79,7 +79,7 @@ extern float AngleDelta(float a, float b);
 extern float AngleNormalize360Accurate(float a);
 extern void VectorAngleMultiply(float *trans, float yaw);
 extern void BG_AddPredictableEventToPlayerstate(int event, int param, playerState_t *ps);
-extern void BG_AnimScriptAnimation(playerState_t *ps, int anim, int moveType, int force);
+extern int BG_AnimScriptAnimation(playerState_t *ps, int anim, int moveType, int force);
 extern void BG_AnimScriptEvent(playerState_t *ps, int anim, int p3, int p4);
 extern void PM_trace(pmove_t *pm, void *trace, float *start, float *mins, float *maxs, float *end, int entityNum, int contentMask);
 extern const char *va(const char *fmt, ...);

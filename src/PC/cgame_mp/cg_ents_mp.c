@@ -11,7 +11,7 @@ extern void *BG_GetWeaponDef(int weapIndex);
 extern void *XAnimCreateTree(void *anims, void *Alloc);
 extern struct XAnim_s *XAnimCreateAnims(const char *debugName, int size, void *Alloc);
 extern void XAnimBlend(struct XAnim_s *anims, unsigned int animIndex, const char *name, unsigned int children, unsigned int num, unsigned int flags);
-extern void XAnimPrecache(const char *name, void *Alloc);
+extern XAnimParts *XAnimPrecache(const char *name, void *Alloc);
 extern void XAnimCreate(struct XAnim_s *anims, unsigned int animIndex, const char *name);
 extern void *Com_GetClientDObj(int entityNum, int localClientNum);
 extern void Com_ClientDObjCreate(DObjModel_s *dobjModels, int numModels, struct XAnimTree_s *tree, int handle);
@@ -22,9 +22,9 @@ extern void CG_RegisterItemVisuals(int itemNum);
 extern void Com_Error(int code, const char *fmt, ...);
 extern float AngleSubtract(float a1, float a2);
 extern float LerpAngle(float from, float to, float frac);
-extern void DObjSetControlTagAngles(void *obj, int *partBits, unsigned int tagName, float *angles);
+extern qboolean DObjSetControlTagAngles(void *obj, int *partBits, unsigned int tagName, float *angles);
 extern void *DObjGetTree(void *obj);
-extern void XAnimSetCompleteGoalWeightKnobAll(void *tree, int animIndex, float goalWeight, float goalTime, float rate, int notifyType, int notifyClient);
+extern int XAnimSetCompleteGoalWeightKnobAll(void *tree, unsigned int animIndex, unsigned int rootIndex, float goalWeight, float goalTime, float rate, unsigned int notifyName, int bRestart);
 extern void BG_Player_DoControllers(const struct DObj_s *pDObj, const entityState_t *es, int *partBits, clientInfo_t *ci, int frametime);
 extern int DObjGetClientNotifyList(XAnimNotify **notifyList);
 extern int stricmp(const char *s1, const char *s2);
@@ -185,7 +185,7 @@ static void CG_mg42_DoControllers(const centity_t *cent, int *partBits)
         float goalWeight = 1.0f;
         float goalTime = 0.1f;
         float rate = 1.0f;
-        XAnimSetCompleteGoalWeightKnobAll(tree, animIndex, goalWeight, goalTime, rate, 0, 0);
+        XAnimSetCompleteGoalWeightKnobAll(tree, animIndex, 0, goalWeight, goalTime, rate, 0, 0);
     }
 }
 

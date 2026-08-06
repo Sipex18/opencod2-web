@@ -1196,7 +1196,7 @@ static void __attribute_regparm__(2) CG_CalcCrosshairPosition(float *x, float *y
     *y = vert / (forward * (float)tan((double)cg->refdef.fov_y * 0.008726646259971648)) * -240.0f;
 }
 
-#ifndef __EMSCRIPTEN__
+#if 1 /* was: #ifndef __EMSCRIPTEN__ — CG_Draw2D / HUD for host */
 static float CG_DrawFPS(float y)
 {
     int i;
@@ -1853,9 +1853,10 @@ unsigned int CG_Draw2D(void)
     return 0;
 }
 
-#else
+#if 0 /* was #else */
 static float CG_DrawFPS(float y)
 {
     return 0.0f;
 }
 #endif
+#endif /* cg_draw host path */

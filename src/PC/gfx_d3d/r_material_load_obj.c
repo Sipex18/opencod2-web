@@ -160,7 +160,11 @@ static Bool MATERIAL_REGPARM3_ABI Material_ValidatePassArguments_impl(const Mate
             if (!found) {
                 Com_Printf("material '%s' using technique '%s' from techniqueSet '%s' doesn't have texture '%s'\n",
                            material->info.name, techniqueName, techniqueSetName, argName);
+#ifdef __EMSCRIPTEN__
+                continue;
+#else
                 return 0;
+#endif
             }
         }
     }
@@ -725,7 +729,7 @@ extern int printf(const char *fmt, ...);
 static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const char **text, const byte *mtlShader,
                                                                        short unsigned int *techFlags, short unsigned int *argCount, MaterialShaderArgument **args)
 {
-    void *constants;
+    void *constants = NULL;
     int hr;
     const byte *constantTable;
     unsigned int constantCount;
@@ -745,16 +749,129 @@ static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const cha
                           R_ErrorDescription(hr), hr);
         return 0;
     }
+    if (!constants) {
+        Com_ScriptWarning("Couldn't get the constant table: NULL\n");
+        return 0;
+    }
 
 #ifdef GFX_REAL_D3D9
     constantTable = (const byte *)((void *(D3DVTCC *)(void *))((*(void ***)constants)[3]))(constants);
 #else
-    constantTable = (const byte *)((int (*)(void *))((*(int **)constants)[3]))(constants);
+    {
+        void **ctVtbl = *(void ***)constants;
+        typedef void *(*GetBufPtrFn)(void *);
+        constantTable = (const byte *)((GetBufPtrFn)ctVtbl[3])(constants);
+    }
 #endif
+    if (!constantTable) {
+        Com_ScriptWarning("Couldn't get the constant table buffer: NULL\n");
+        {
+            void **ctVtbl = *(void ***)constants;
+            typedef ULONG (*ReleaseFn)(void *);
+            ((ReleaseFn)ctVtbl[2])(constants);
+        }
+        return 0;
+    }
     constantCount = *(const unsigned int *)(constantTable + 0xC);
     *argCount = (unsigned short)constantCount;
 
     if (constantCount == 0) {
+        /*
+         * Soft D3DXGetShaderConstantTable returns an empty CT on web. UI techniques
+         * still declare sampler binds (e.g. colorMapSampler = material.colorMap).
+         * Skipping those left logo/gradient/white drawing with no texture (black).
+         */
+#ifdef __EMSCRIPTEN__
+        MaterialShaderArgument tmpArgs[16];
+        int nArgs = 0;
+
+        *args = NULL;
+        *argCount = 0;
+
+        if (!Com_MatchToken(text, "{", 1))
+            goto fail;
+
+        for (;;) {
+            const char *token = Com_Parse(text);
+            MaterialShaderArgument *arg;
+
+            if (token[0] == '\0' || token[0] == '}')
+                break;
+
+            if (!Com_MatchToken(text, "=", 1))
+                goto fail;
+
+            if (nArgs >= (int)(sizeof(tmpArgs) / sizeof(tmpArgs[0]))) {
+                Com_SkipRestOfLine(text);
+                continue;
+            }
+
+            arg = &tmpArgs[nArgs];
+            memset(arg, 0, sizeof(*arg));
+            arg->dest = (unsigned short)nArgs;
+
+            {
+                /* Peek RHS kind: sampler/material texture, or constant/float/material const. */
+                const char *rhs = Com_Parse(text);
+                Bool ok = 0;
+                byte routing[16];
+                float literal[4];
+
+                memset(routing, 0, sizeof(routing));
+                routing[5] = 4; /* default float4 component count without real CT */
+
+                if (memcmp(rhs, "sampler", 8) == 0 || memcmp(rhs, "material", 9) == 0) {
+                    Com_UngetToken();
+                    ok = Material_ParseSamplerSource_impl(text, arg);
+                } else if (memcmp(rhs, "constant", 9) == 0) {
+                    arg->type = 1;
+                    ok = Material_ParseCodeConstantSource_r_impl(text, routing, 0,
+                                                                (const CodeConstantSource *)s_codeConsts,
+                                                                (byte *)arg);
+                } else if (memcmp(rhs, "float1", 7) == 0 || memcmp(rhs, "float2", 7) == 0 ||
+                           memcmp(rhs, "float3", 7) == 0 || memcmp(rhs, "float4", 7) == 0) {
+                    literal[0] = literal[1] = literal[2] = 0.0f;
+                    literal[3] = 1.0f;
+                    if (memcmp(rhs, "float1", 7) == 0)
+                        Material_ParseVector_impl(text, 1, literal);
+                    else if (memcmp(rhs, "float2", 7) == 0)
+                        Material_ParseVector_impl(text, 2, literal);
+                    else if (memcmp(rhs, "float3", 7) == 0)
+                        Material_ParseVector_impl(text, 3, literal);
+                    else
+                        Material_ParseVector_impl(text, 4, literal);
+                    arg->type = 0;
+                    arg->u.literalConst = (const float16 *)Material_RegisterLiteral(literal);
+                    ok = (arg->u.literalConst != NULL);
+                } else {
+                    Com_ScriptWarning("expected sampler/material/constant/float, found '%s' instead\n", rhs);
+                    ok = 0;
+                }
+
+                if (!ok) {
+                    Com_SkipRestOfLine(text);
+                    continue;
+                }
+            }
+            if (!Com_MatchToken(text, ";", 1))
+                goto fail;
+
+            if (arg->type == 3) {
+                if (arg->u.codeSampler == 0xE)
+                    *techFlags |= 1;
+                else if (arg->u.codeSampler == 0xF)
+                    *techFlags |= 2;
+            }
+            nArgs++;
+        }
+
+        if (nArgs > 0) {
+            *argCount = (unsigned short)nArgs;
+            *args = (MaterialShaderArgument *)Material_Alloc(nArgs * (int)sizeof(MaterialShaderArgument));
+            memcpy(*args, tmpArgs, (size_t)nArgs * sizeof(MaterialShaderArgument));
+        }
+        goto succeed;
+#else
         *args = NULL;
 
         if (!Com_MatchToken(text, "{", 1))
@@ -768,6 +885,7 @@ static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const cha
             }
         }
         goto succeed;
+#endif
     }
 
     allocatedArgs = (MaterialShaderArgument *)Material_Alloc(constantCount * 8);
@@ -1070,7 +1188,11 @@ succeed:
 fail:
     success = 0;
 cleanup:
-    ((void (*)(void *))((*(int **)constants)[2]))(constants);
+    if (constants) {
+        void **ctVtbl = *(void ***)constants;
+        typedef ULONG (*ReleaseFn)(void *);
+        ((ReleaseFn)ctVtbl[2])(constants);
+    }
     return success;
 }
 
@@ -1486,6 +1608,7 @@ static MaterialShader *MATERIAL_REGPARM2_ABI COD2_FORCE_ALIGN_ARG_POINTER Materi
     const void *defines[8];
     int shaderSize, nameLen, allocSize;
     byte *shaderDataPtr;
+    void *shaderReadBuf = NULL;
 
     fversion = Com_ParseFloat(text);
     version = (int)floorf(fversion * 10.0f + 0.5f);
@@ -1544,12 +1667,25 @@ static MaterialShader *MATERIAL_REGPARM2_ABI COD2_FORCE_ALIGN_ARG_POINTER Materi
     }
 
     if (!entry) {
+#ifdef __EMSCRIPTEN__
+        void *readBuf = NULL;
+        int readSize = FS_ReadFile(path, &readBuf);
+
+        if (readSize > 0 && readBuf) {
+            fileData = (byte *)readBuf;
+            fileSize = readSize;
+            shaderReadBuf = readBuf;
+            goto compile_shader_from_bytes;
+        }
+#endif
         Com_ScriptWarning("Shader '%s' wasn't preloaded\n", path);
         return NULL;
     }
 
     fileData = *(byte **)(entry + 4);
     fileSize = *(int *)(entry + 8);
+
+compile_shader_from_bytes:
 
     {
         char sourceName[256];
@@ -1617,7 +1753,9 @@ static MaterialShader *MATERIAL_REGPARM2_ABI COD2_FORCE_ALIGN_ARG_POINTER Materi
                                    entryPoint, target, compileFlags, &shaderBlob, &messages, NULL);
         }
 #else
-        hr = D3DXCompileShader(sourceName, fileSize, defines, includeObj,
+        /* Pass real HLSL bytes so the ARB stub picker can see tex2D/colorMapSampler.
+         * (Older path passed sourceName only — always fell through to passthrough.) */
+        hr = D3DXCompileShader((const char *)fileData, fileSize, defines, includeObj,
                                entryPoint, target, 0, &shaderBlob, &messages, NULL);
 #endif
 
@@ -1674,10 +1812,23 @@ static MaterialShader *MATERIAL_REGPARM2_ABI COD2_FORCE_ALIGN_ARG_POINTER Materi
 
                 {
                     void *device = dx.device;
+#ifdef __EMSCRIPTEN__
+                    /* call_indirect HRESULT returns are fragile on wasm; create soft
+                     * VS/PS handles via direct calls (same pattern as Clear/SetViewport). */
+                    extern HRESULT CDirect3DDevice_CreateVertexShader(const void *dev, const DWORD *fn, void **out);
+                    extern HRESULT CDirect3DDevice_CreatePixelShader(const void *dev, const DWORD *fn, void **out);
+                    if (shaderType == 0)
+                        hr = CDirect3DDevice_CreateVertexShader(device, (const DWORD *)(mtl + 0x10), (void **)(mtl + 0xC));
+                    else
+                        hr = CDirect3DDevice_CreatePixelShader(device, (const DWORD *)(mtl + 0x10), (void **)(mtl + 0xC));
+                    if (hr < 0)
+                        hr = 0;
+#else
                     void **devVtable = *(void ***)device;
                     typedef HRESULT(D3DVTCC * CreateShaderFn)(void *, const void *, void **);
                     int vtableOffset = (shaderType == 0) ? (0x16C / 4) : (0x1A8 / 4);
                     hr = ((CreateShaderFn)devVtable[vtableOffset])(device, mtl + 0x10, (void **)(mtl + 0xC));
+#endif
                 }
             }
 
@@ -1692,7 +1843,12 @@ static MaterialShader *MATERIAL_REGPARM2_ABI COD2_FORCE_ALIGN_ARG_POINTER Materi
         }
 
     cleanup_sourceName:
-
+#ifdef __EMSCRIPTEN__
+        if (shaderReadBuf) {
+            FS_FreeFile(shaderReadBuf);
+            shaderReadBuf = NULL;
+        }
+#endif
         (void)0;
     }
 
@@ -1758,6 +1914,13 @@ static Bool MATERIAL_REGPARM2_ABI Material_FinishLoadingInstance_impl(MaterialOb
                     *(int *)(tex + 8) = 0;
                 } else {
                     void *img = Image_Register((const char *)((int)mtl + *(int *)(tex + 8)), sem, imageTrack);
+#ifdef __EMSCRIPTEN__
+                    if (!img && sem == 2) {
+                        extern void *imp_rgp;
+                        r_global_permanent_t *rgpPtr = (r_global_permanent_t *)imp_rgp;
+                        img = rgpPtr ? (void *)rgpPtr->whiteImage : NULL;
+                    }
+#endif
                     *(int *)(tex + 8) = (int)img;
                     if (!img)
                         return 0;
@@ -2460,7 +2623,9 @@ static Bool Material_IsUiLikeNameForLoad(const char *name)
            strncmp(name, "ui_", 3) == 0 ||
            strncmp(name, "menu/", 5) == 0 ||
            strncmp(name, "levelshots/", 11) == 0 ||
-           stricmp(name, "$levelbriefing") == 0;
+           strncmp(name, "loadscreen_", 11) == 0 ||
+           stricmp(name, "$levelbriefing") == 0 ||
+           stricmp(name, "fadebox") == 0;
 }
 
 static Bool Material_HasImageExtensionForLoad(const char *name)

@@ -110,6 +110,14 @@ void Sys_ArchiveInfo(int checksum)
 
 void Sys_DirectXFatalError(void)
 {
+#ifdef __EMSCRIPTEN__
+    {
+        static int n;
+        extern void Com_Printf(const char *, ...);
+        Com_Printf("Sys_DirectXFatalError #%d (web: not exiting)\n", ++n);
+        return;
+    }
+#endif
 
     {
         extern int g_gfxV60DllActive;
@@ -161,9 +169,22 @@ void Sys_Error(const char *error, ...)
     Sys_SetErrorText(text);
     Sys_ShowConsole(1, 1);
 
+#ifdef __EMSCRIPTEN__
+    /* Avoid infinite Com_Quit_f / exit() — that yields black canvas + unreachable. */
+    fprintf(stderr, "Sys_Error: %s\n", text);
+    emscripten_cancel_main_loop();
+    EM_ASM({
+        var msg = UTF8ToString($0);
+        if (typeof Module !== 'undefined' && typeof Module.onCod2Fatal === 'function') {
+            Module.onCod2Fatal(msg);
+        }
+    }, text);
+    return;
+#else
     for (;;) {
         Com_Quit_f();
     }
+#endif
 }
 
 void Sys_NormalExit(void)
@@ -240,7 +261,13 @@ void Sys_Init(void)
     Com_Printf("Video card is \"%s\"\n", sys_info.gpuDescription);
     Com_Printf("Streaming SIMD Extensions (SSE) %ssupported\n", sys_info.SSE ? "" : "not ");
     Com_Printf("\n");
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: before IN_Init\n");
+#endif
     IN_Init();
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: after IN_Init\n");
+#endif
 }
 
 void Sys_LoadingKeepAlive(void)
@@ -358,7 +385,17 @@ void Sys_Quit(void)
     }
 
     MacPreferences_Synchronize();
+#ifdef __EMSCRIPTEN__
+    fprintf(stderr, "Sys_Quit\n");
+    emscripten_cancel_main_loop();
+    EM_ASM({
+        if (typeof Module !== 'undefined' && typeof Module.onCod2Quit === 'function') {
+            Module.onCod2Quit();
+        }
+    });
+#else
     exit(0);
+#endif
 }
 
 sysEvent_t Sys_GetEvent(void)

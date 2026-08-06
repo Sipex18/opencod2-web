@@ -238,7 +238,7 @@ qboolean FS_CompareIwds(char *needediwds, int len, qboolean dlstring);
 
 void Huff_offsetReceive(node_t *node, int *ch, byte *fin, int *offset);
 void huffman_send(node_t *node, node_t *child, byte *fout);
-void Huff_addRef(huff_t *huff, int ch, msg_t *mbuf, int offset);
+void Huff_addRef(huff_t *huff, int ch);
 void Huff_offsetTransmit(huff_t *huff, int ch, byte *fout, int *offset);
 void Huff_Init(huffman_t *huff);
 

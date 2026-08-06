@@ -3,7 +3,15 @@
 #include "bytematch.h"
 #include "cod2_feature_config.h"
 #include "pb_public.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 #include "www_download.h"
+#ifdef __EMSCRIPTEN__
+#    include <emscripten/emscripten.h>
+#    include "web/web_vid_scale.h"
+#    include "web/web_master.h"
+#endif
 
 extern const dvar_t *Dvar_RegisterBool(const char *dvarName, unsigned char value, unsigned short flags);
 extern int I_strnicmp(const char *s0, const char *s1, size_t n);
@@ -58,7 +66,7 @@ extern void FS_FCloseFile(fileHandle_t f);
 extern void MSG_WriteReliableCommandToBuffer(const char *cmd, char *buf, int bufSize);
 extern int FS_Write(const void *buffer, int len, int f);
 extern void CL_ShutdownCGame(void);
-extern void CL_ShutdownUI(void);
+extern qboolean CL_ShutdownUI(void);
 extern void Dvar_SetInt(const dvar_t *dvar, int value);
 extern void Dvar_SetBool(const dvar_t *dvar, int value);
 extern void Dvar_SetString(const dvar_t *dvar, const char *value);
@@ -142,11 +150,11 @@ extern int FS_FileExists(const char *path);
 extern int FS_FOpenFileWrite(const char *path);
 extern int FS_FOpenFileRead(const char *path, int *file, int uniqueFILE);
 extern int FS_Read(void *buffer, int len, int f);
-extern void FS_ConditionalRestart(int checksumFeed);
+extern qboolean FS_ConditionalRestart(int checksumFeed);
 extern void FS_Restart(int checksumFeed);
 extern const char *FS_ReferencedIwdPureChecksums(void);
 extern int FS_CompareIwds(char *buf, int bufLen, int flag);
-extern void FS_ShiftStr(const char *name, int shift);
+extern char *FS_ShiftStr(const char *name, int shift);
 extern void MSG_Init(void *msg, void *data, int length);
 extern void MSG_WriteLong(void *msg, int value);
 extern void MSG_WriteShort(void *msg, int value);
@@ -182,7 +190,7 @@ extern void *Z_MallocInternal(int size);
 extern void *Z_VirtualAllocInternal(int size);
 extern void Z_VirtualFreeInternal(void *ptr);
 extern void CG_CalculateFPS(void);
-extern void Voice_GetLocalVoiceData(void *dest);
+extern int Voice_GetLocalVoiceData(void *dest);
 extern void Voice_Playback(void);
 extern void SEH_UpdateLanguageInfo(void);
 extern const char *SEH_LocalizeTextMessage(const char *ref, const char *defaultText, int flags);
@@ -492,7 +500,7 @@ extern int Cmd_Argc(void);
 extern char *Cmd_Argv(int arg);
 extern void I_strncpyz(char *dest, const char *src, int destsize);
 extern void I_strncat(char *dest, int maxlen, const char *src);
-extern int putenv(const char *string);
+extern int putenv(char *string);
 extern char *getenv(const char *name);
 void CL_Setenv_f(void)
 {
@@ -1845,18 +1853,24 @@ void CL_LocalServers_f(void)
         cls.localServers[i].dirty = dirty;
     }
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * Browser WASM has no UDP broadcast. Fill localServers from the same HTTP
+     * master proxy (capped at 128) so default Join Game (ui_netSource=LAN) lists
+     * servers. Real LAN scan remains native-only.
+     */
+    CL_WebMaster_Request(0, "1.3");
+    return;
+#endif
+
     Com_Memset(&to, 0, sizeof(to));
 
     for (pass = 0; pass < 2; ++pass) {
         for (port = 0x7120; port < 0x7124; ++port) {
             to.port = (unsigned short)(((port & 0xff) << 8) | ((port >> 8) & 0xff));
             to.type = NA_BROADCAST;
-            CL_Netchan_SendOOBPacket(0xf, (const void *)"\xff"
-                                                        "fd\xff"
-                                                        "fd\xff"
-                                                        "fd\xff"
-                                                        "fdgetinfo xxx",
-                                     to);
+            /* Quake/CoD OOB: 0xffffffff + "getinfo xxx" = 15 bytes. */
+            CL_Netchan_SendOOBPacket(0xf, (const void *)"\xff\xff\xff\xffgetinfo xxx", to);
         }
     }
 }
@@ -2239,6 +2253,10 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
     int savedServerMessageSequence;
     int savedReliableAcknowledge;
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_PacketEvent: enter cursize=%d data0=0x%x caState=%d\n", msg->cursize, *(int *)msg->data, *(int *)&clientConnections[0]);
+#endif
+
     if (msg->cursize > 3 && *(int *)msg->data == -1)
         return CL_ConnectionlessPacket(from, msg, time);
 
@@ -2257,8 +2275,14 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
 
     conn->lastPacketTime = cls.realtime;
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_PacketEvent: before Netchan_Process\n");
+#endif
     if (!Netchan_Process(&conn->netchan, msg))
         return 0;
+#ifdef __EMSCRIPTEN__
+    printf("CL_PacketEvent: after Netchan_Process\n");
+#endif
 
     headerBytes = msg->readcount;
     savedServerMessageSequence = conn->serverMessageSequence;
@@ -2271,8 +2295,14 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
         return 0;
     }
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_PacketEvent: before CL_ParseServerMessage\n");
+#endif
     CL_Netchan_Decode(msg->data + msg->readcount, msg->cursize - msg->readcount);
     CL_ParseServerMessage(msg);
+#ifdef __EMSCRIPTEN__
+    printf("CL_PacketEvent: after CL_ParseServerMessage\n");
+#endif
 
     if (msg->overflowed) {
         Com_DPrintf((const char *)"ignoring illegible message");
@@ -2376,7 +2406,25 @@ void CL_Frame(int msec)
         return;
 
     Voice_GetLocalVoiceData((void *)&clients[0]);
+#ifdef __EMSCRIPTEN__
+    {
+        static int voice_dbg;
+        if (voice_dbg < 2) {
+            Com_Printf("webdbg: CL_Frame after Voice_GetLocalVoiceData\n");
+            voice_dbg++;
+        }
+    }
+#endif
     Voice_Playback();
+#ifdef __EMSCRIPTEN__
+    {
+        static int voice_dbg2;
+        if (voice_dbg2 < 2) {
+            Com_Printf("webdbg: CL_Frame after Voice_Playback\n");
+            voice_dbg2++;
+        }
+    }
+#endif
     CL_UpdateColor();
 
     cl_p = *(clientActive_t **)imp_cl;
@@ -2464,6 +2512,380 @@ Ltail:
 
 void CL_Vid_Restart_f(void)
 {
+#ifdef __EMSCRIPTEN__
+    /*
+     * Full vid_restart tears down and recreates the renderer. On WebGL that
+     * destroys the only context and typically aborts the module (user sees
+     * "quit" and cannot return without a hard refresh). Soft-apply r_mode
+     * into the live session instead.
+     */
+    {
+        static const int modeW[] = {640, 800, 1024, 1280, 1280, 1600, 1920};
+        static const int modeH[] = {480, 600, 768, 720, 1024, 900, 1080};
+        extern const dvar_t *Dvar_FindVar(const char *dvarName);
+        extern struct DxState dxState;
+        extern r_backEndGlobals_t backEnd;
+        extern int sdl_gl_width;
+        extern int sdl_gl_height;
+        extern vidConfig_t vidConfig;
+        extern void RB_UpdateViewportConstants(void);
+        extern HRESULT CDirect3DDevice_SetViewport(const void *dev, const D3DVIEWPORT9 *vp);
+        extern DxGlobals dx;
+        const dvar_t *modeDvar = Dvar_FindVar("r_mode");
+        const dvar_t *uiMode = Dvar_FindVar("ui_r_mode");
+        const dvar_t *prefDvar = Dvar_FindVar("r_rendererPreference");
+        const dvar_t *inUseDvar = Dvar_FindVar("r_rendererInUse");
+        const dvar_t *aspectDvar = Dvar_FindVar("r_aspectRatio");
+        if (!aspectDvar)
+            aspectDvar = Dvar_FindVar("r_aspectratio");
+        const dvar_t *uiAspect = Dvar_FindVar("ui_r_aspectratio");
+        const dvar_t *refreshDvar = Dvar_FindVar("r_displayRefresh");
+        if (!refreshDvar)
+            refreshDvar = Dvar_FindVar("r_displayrefresh");
+        const dvar_t *uiRefresh = Dvar_FindVar("ui_r_displayrefresh");
+        extern Bool Dvar_HasLatchedValue(const dvar_t *dvar);
+        extern const char *Dvar_DisplayableValue(const dvar_t *dvar);
+        int mode = 0;
+        int aspect = 0;
+        int refreshIdx = 0;
+        int w = 640, h = 480;
+        D3DVIEWPORT9 vp;
+
+        /*
+         * options_graphics_set.cfg latches r_mode via setfromdvar from ui_r_mode
+         * (a STRING dvar). Never read ui_r_mode->current.integer — that reinterprets
+         * the string pointer bits as an enum index and feeds garbage into r_mode.
+         */
+        if (modeDvar) {
+            mode = Dvar_HasLatchedValue(modeDvar) ? modeDvar->latched.integer
+                                                  : modeDvar->current.integer;
+        } else if (uiMode) {
+            static const char *s_modeLabels[] = {
+                "640x480", "800x600", "1024x768", "1280x720",
+                "1280x1024", "1600x900", "1920x1080", "Auto"
+            };
+            const char *uiStr = Dvar_DisplayableValue(uiMode);
+            mode = 0;
+            if (uiStr && uiStr[0]) {
+                int mi, pureDigit = 1;
+                for (mi = 0; uiStr[mi]; ++mi) {
+                    if (uiStr[mi] < '0' || uiStr[mi] > '9') { pureDigit = 0; break; }
+                }
+                if (pureDigit) {
+                    int idx = atoi(uiStr);
+                    if (idx >= 0 && idx <= 7) mode = idx;
+                } else {
+                    for (mi = 0; mi < 8; ++mi) {
+                        if (!I_stricmp(uiStr, s_modeLabels[mi])) { mode = mi; break; }
+                    }
+                }
+            }
+        }
+
+        if (aspectDvar) {
+            aspect = Dvar_HasLatchedValue(aspectDvar) ? aspectDvar->latched.integer
+                                                      : aspectDvar->current.integer;
+        } else if (uiAspect) {
+            static const char *s_aspectLabels[] = {
+                "auto", "standard", "wide 16:10", "wide 16:9"
+            };
+            const char *uiStr = Dvar_DisplayableValue(uiAspect);
+            aspect = 0;
+            if (uiStr && uiStr[0]) {
+                int ai, pureDigit = 1;
+                for (ai = 0; uiStr[ai]; ++ai) {
+                    if (uiStr[ai] < '0' || uiStr[ai] > '9') { pureDigit = 0; break; }
+                }
+                if (pureDigit) {
+                    int idx = atoi(uiStr);
+                    if (idx >= 0 && idx <= 3) aspect = idx;
+                } else {
+                    for (ai = 0; ai < 4; ++ai) {
+                        if (!I_stricmp(uiStr, s_aspectLabels[ai])) { aspect = ai; break; }
+                    }
+                }
+            }
+        }
+
+        if (refreshDvar) {
+            refreshIdx = Dvar_HasLatchedValue(refreshDvar) ? refreshDvar->latched.integer
+                                                           : refreshDvar->current.integer;
+        } else if (uiRefresh) {
+            const char *uiStr = Dvar_DisplayableValue(uiRefresh);
+            if (uiStr && uiStr[0]) {
+                int ri, pureDigit = 1;
+                for (ri = 0; uiStr[ri]; ++ri) {
+                    if (uiStr[ri] < '0' || uiStr[ri] > '9') { pureDigit = 0; break; }
+                }
+                if (pureDigit)
+                    refreshIdx = atoi(uiStr);
+            }
+        }
+
+        /* Native vid_restart re-inits renderer and copies preference -> inUse.
+         * Soft path must sync the dvar without recreating the WebGL context. */
+        if (prefDvar && inUseDvar && prefDvar->current.integer != inUseDvar->current.integer) {
+            Dvar_SetInt((dvar_t *)inUseDvar, prefDvar->current.integer);
+            Com_Printf("vid_restart: synced r_rendererInUse=%d from r_rendererPreference on web\n",
+                       prefDvar->current.integer);
+        }
+
+        if (mode < 0)
+            mode = 0;
+        if (mode > 7)
+            mode = 7;
+
+        if (mode == 7) {
+            extern void Web_GetWindowPixelSize(int *outW, int *outH);
+            Web_GetWindowPixelSize(&w, &h);
+        } else {
+            w = modeW[mode];
+            h = modeH[mode];
+        }
+
+        if (aspect < 0)
+            aspect = 0;
+        if (aspect > 3)
+            aspect = 3;
+
+        int refreshRate = 60;
+        if (refreshDvar && refreshDvar->domain.enumeration.stringCount > 0) {
+            /*
+             * After a domain shrink (Hz detection capped the enum), the
+             * latched index may refer to a slot in the old, larger domain.
+             * Recover intent by mapping through the full rate table, then
+             * searching the current domain by Hz label rather than blindly
+             * clamping the numeric index.
+             */
+            static const char *allRefreshLabels[] = {
+                "60", "75", "120", "144", "165", "240"
+            };
+            int allRefreshCount = (int)(sizeof(allRefreshLabels) / sizeof(allRefreshLabels[0]));
+            const char *wantLabel = NULL;
+            int foundIdx = -1;
+            int i;
+
+            if (refreshIdx >= 0 &&
+                refreshIdx < refreshDvar->domain.enumeration.stringCount) {
+                wantLabel = refreshDvar->domain.enumeration.strings[refreshIdx];
+            } else if (refreshIdx >= 0 && refreshIdx < allRefreshCount) {
+                wantLabel = allRefreshLabels[refreshIdx];
+            }
+
+            if (wantLabel) {
+                for (i = 0; i < refreshDvar->domain.enumeration.stringCount; ++i) {
+                    if (refreshDvar->domain.enumeration.strings[i] &&
+                        !strcmp(wantLabel, refreshDvar->domain.enumeration.strings[i])) {
+                        foundIdx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (foundIdx >= 0) {
+                refreshIdx = foundIdx;
+            } else {
+                refreshIdx = refreshDvar->domain.enumeration.stringCount - 1;
+            }
+            refreshRate = atoi(refreshDvar->domain.enumeration.strings[refreshIdx]);
+        }
+        if (refreshRate < 60)
+            refreshRate = 60;
+
+        /* Commit latched r_mode, r_aspectRatio and r_displayRefresh into current now that soft path will apply them. */
+        if (modeDvar && modeDvar->current.integer != mode)
+            Dvar_SetInt((dvar_t *)modeDvar, mode);
+
+        if (aspectDvar && aspectDvar->current.integer != aspect)
+            Dvar_SetInt((dvar_t *)aspectDvar, aspect);
+
+        if (refreshDvar && refreshDvar->current.integer != refreshIdx)
+            Dvar_SetInt((dvar_t *)refreshDvar, refreshIdx);
+
+        /*
+         * WebGL antialias is a context attribute. If r_aaSamples crosses the
+         * MSAA on/off boundary, destroy+recreate PROXY_ALWAYS context, then
+         * reload GPU resources via the lost-device path (Reset is a no-op on Mac/GL).
+         */
+        {
+            const dvar_t *aaDvar = Dvar_FindVar("r_aaSamples");
+            int aaWant = 1;
+            int aaHave = Web_GetActiveAASamples();
+            extern Bool R_RecoverLostDevice(void);
+            extern DxGlobals dx;
+
+            if (aaDvar) {
+                aaWant = Dvar_HasLatchedValue(aaDvar) ? aaDvar->latched.integer
+                                                      : aaDvar->current.integer;
+                if (aaWant < 1)
+                    aaWant = 1;
+                if (aaDvar->current.integer != aaWant)
+                    Dvar_SetInt((dvar_t *)aaDvar, aaWant);
+            }
+            if ((aaWant > 1) != (aaHave > 1)) {
+                Com_Printf("vid_restart: recreating WebGL context for AA %d -> %d\n", aaHave, aaWant);
+                if (Web_RecreateGLContextForAA(aaWant)) {
+                    dx.deviceLost = 1;
+                    if (!R_RecoverLostDevice())
+                        Com_Printf("vid_restart: AA resource recovery failed\n");
+                } else {
+                    Com_Printf("vid_restart: WebGL AA recreate failed; keeping prior context\n");
+                }
+            }
+        }
+
+        {
+            int wantW = w;
+            int wantH = h;
+            int gotW = w;
+            int gotH = h;
+
+            if (!Web_TryResizeCanvas(wantW, wantH)) {
+                Com_Printf("vid_restart: canvas resize to %dx%d incomplete on web\n", wantW, wantH);
+            }
+            /*
+             * Apply the real drawing-buffer size. Web_TryResizeCanvas resizes the
+             * DOM canvas + OFFSCREEN_FRAMEBUFFER on the UI thread so 1024x768 is
+             * a real sharp buffer (not a CSS stretch of 640).
+             */
+            Web_GetDrawableSize(&gotW, &gotH);
+            if (gotW < 1)
+                gotW = 640;
+            if (gotH < 1)
+                gotH = 480;
+            if (gotW != wantW || gotH != wantH) {
+                Com_Printf("vid_restart: drawable %dx%d (wanted %dx%d); applying drawable size\n",
+                           gotW, gotH, wantW, wantH);
+            }
+            w = gotW;
+            h = gotH;
+        }
+
+        float aspectWin = (float)w / (float)h;
+        if (aspect == 1)
+            aspectWin = 4.0f / 3.0f;
+        else if (aspect == 2)
+            aspectWin = 16.0f / 10.0f;
+        else if (aspect == 3)
+            aspectWin = 16.0f / 9.0f;
+
+        float aspectPix = ((float)h * aspectWin) / (float)w;
+
+        Com_Printf("vid_restart: soft-apply mode %d -> %dx%d (aspect %d -> win %.3f, pix %.3f) on web\n",
+                   mode, w, h, aspect, aspectWin, aspectPix);
+
+        sdl_gl_width = w;
+        sdl_gl_height = h;
+#ifdef __EMSCRIPTEN__
+        /* Keep SDL's window size in sync so mouse coords match the new FB. */
+        {
+            extern struct SDL_Window *sdl_gl_window;
+            extern void SDL_SetWindowSize(struct SDL_Window *window, int width, int height);
+            if (sdl_gl_window)
+                SDL_SetWindowSize(sdl_gl_window, w, h);
+        }
+#endif
+
+        cls.vidConfig.width = w;
+        cls.vidConfig.height = h;
+        cls.vidConfig.displayFrequency = refreshRate;
+        cls.vidConfig.aspectRatioWindow = aspectWin;
+        cls.vidConfig.aspectRatioPixel = aspectPix;
+
+        vidConfig.width = w;
+        vidConfig.height = h;
+        vidConfig.displayFrequency = refreshRate;
+        vidConfig.aspectRatioWindow = aspectWin;
+        vidConfig.aspectRatioPixel = aspectPix;
+
+        backEnd.width = w;
+        backEnd.height = h;
+        backEnd.sceneViewport.x = 0;
+        backEnd.sceneViewport.y = 0;
+        backEnd.sceneViewport.width = w;
+        backEnd.sceneViewport.height = h;
+
+        SetScreenScaling(1.0f, 1.0f, 0, 0, w, h);
+
+#ifdef __EMSCRIPTEN__
+        /* Keep UI placement bias in sync after soft resolution change. */
+        {
+            extern uiInfo_t *uiInfo;
+            extern void CL_GetScreenDimensions(int *width, int *height, float *aspect);
+            int sw, sh;
+            float sa;
+            CL_GetScreenDimensions(&sw, &sh, &sa);
+            if (uiInfo) {
+                uiInfo->uiDC.screenWidth = sw;
+                uiInfo->uiDC.screenHeight = sh;
+                uiInfo->uiDC.screenAspect = sa;
+                if (sw * 480 > sh * 640)
+                    uiInfo->uiDC.bias = ((float)sw + (float)sh * -1.3333333730697632f) * 0.5f;
+                else
+                    uiInfo->uiDC.bias = 0.0f;
+            }
+        }
+
+        /*
+         * CL_Snd_Restart_f (this function's caller) always calls SND_Shutdown()
+         * -> SND_Init() around this vid_restart. SND_Shutdown() unconditionally
+         * calls Com_UnloadSoundAliases(SASYS_CGAME) then Com_UnloadSoundAliases
+         * (SASYS_UI) (src/PC/snd.c), and Com_UnloadSoundAliases() wipes the
+         * *shared* g_sa.pHash name->alias hash table (src/PC/universal/
+         * com_sndalias.c), not just its own system's entries. On real Windows
+         * CoD2 this is harmless because this same function's non-emscripten
+         * branch below always runs CL_ShutdownHunkUsers()+CL_StartHunkUsers()
+         * around it, and CL_StartHunkUsers() calls CL_InitUI() whenever
+         * cls.uiStarted is false (src/PC/client_mp/cl_main_mp.c), which calls
+         * UI_Init() -> UI_LoadSoundAliases() (src/PC/client_mp/cl_ui_mp.c) and
+         * repopulates that hash table for the menu. The web soft-apply path
+         * deliberately skips that whole hunk-restart cascade (it would tear
+         * down/recreate the WebGL context), so cls.uiStarted stays true and
+         * UI_LoadSoundAliases() never reruns — menu sound aliases (mouse-over/
+         * select, etc.) silently stop resolving after any snd_restart
+         * (Options > Sound apply) until a full page reload re-runs CL_InitUI().
+         * Re-run just the alias reload here to match the net effect of the
+         * real restart cascade without touching renderer/UI layout state.
+         */
+        {
+            extern void UI_LoadSoundAliases(void);
+            UI_LoadSoundAliases();
+        }
+#endif
+
+        dxState.renderTargetWidth = w;
+        dxState.renderTargetHeight = h;
+        dxState.viewport.X = 0;
+        dxState.viewport.Y = 0;
+        dxState.viewport.Width = (DWORD)w;
+        dxState.viewport.Height = (DWORD)h;
+        dxState.viewportIsNull = 0;
+        backEnd.viewportIsDirty = 1;
+
+        vp.X = 0;
+        vp.Y = 0;
+        vp.Width = (DWORD)w;
+        vp.Height = (DWORD)h;
+        vp.MinZ = 0.0f;
+        vp.MaxZ = 1.0f;
+        if (dx.device)
+            CDirect3DDevice_SetViewport(dx.device, &vp);
+
+        RB_UpdateViewportConstants();
+
+        {
+            int fieldWidth = w - 0x20;
+            field_t *cf;
+            *(int *)imp_g_console_field_width = fieldWidth;
+            cf = (field_t *)imp_g_consoleField;
+            if (cf) {
+                cf->widthInPixels = fieldWidth;
+                cf->fixedSize = 1;
+            }
+        }
+    }
+    return;
+#else
     const dvar_t *svRunning = *(const dvar_t **)imp_com_sv_running;
     clientConnection_t *conn = (clientConnection_t *)clc;
     clientActive_t *active = (clientActive_t *)cl;
@@ -2522,6 +2944,7 @@ void CL_Vid_Restart_f(void)
         }
         Z_FreeInternal(clientStateBuf);
     }
+#endif
 }
 
 void CL_Snd_Restart_f(void)
@@ -3074,13 +3497,25 @@ void CL_InitDownloads(void)
     const dvar_t *svRunning;
     char missingFiles[1024];
 
+#ifdef __EMSCRIPTEN__
+    printf("CL_InitDownloads: enter\n");
+#endif
     FS_ShiftStr((const char *)"ni]Zm^l", 7);
 
     svRunning = *(const dvar_t **)imp_com_sv_running;
+#ifdef __EMSCRIPTEN__
+    printf("CL_InitDownloads: svRunning=%d allowDL=%d\n", svRunning->current.enabled, cl_allowDownload->current.enabled);
+#endif
     if (svRunning->current.enabled || !cl_allowDownload->current.enabled) {
         if (FS_CompareIwds(missingFiles, sizeof(missingFiles), 0))
             Com_Printf((const char *)"\nWARNING: You are missing some files referenced by the server:\n%sYou might not be able to join the game\nGo to the settings menu to turn on autodownload, or get the file elsewhere\n\n", missingFiles);
+#ifdef __EMSCRIPTEN__
+        printf("CL_InitDownloads: before CL_DownloadsComplete\n");
+#endif
         CL_DownloadsComplete();
+#ifdef __EMSCRIPTEN__
+        printf("CL_InitDownloads: after CL_DownloadsComplete\n");
+#endif
         return;
     }
 

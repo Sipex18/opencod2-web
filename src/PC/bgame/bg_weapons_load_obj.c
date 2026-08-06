@@ -19,7 +19,7 @@ extern qboolean G_ParseWeaponAccurayGraphs(WeaponDef *weapDef);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
 extern void Com_Printf(const char *fmt, ...);
 extern qboolean Info_Validate(const char *s);
-extern int ParseConfigStringToStruct(byte *pStruct, cspField_t *fields, int numFields, const char *buffer, int maxFieldTypes, qboolean (*parseSpecificFieldType)(byte *, const char *, int), long int (*setConfigString)(byte *, const char *));
+extern int ParseConfigStringToStruct(byte *pStruct, cspField_t *fields, int numFields, const char *buffer, int maxFieldTypes, qboolean (*parseSpecificFieldType)(byte *, const char *, int), void (*setConfigString)(byte *, const char *));
 extern char *I_strlwr(char *s);
 
 static WeaponDef bg_defaultWeaponDefs;
@@ -383,7 +383,7 @@ WeaponDef *BG_LoadWeaponDefInternal(const char *folder, const char *name)
 
     if (!ParseConfigStringToStruct((byte *)weapDef, weaponDefFields, 366, szBuffer, 16,
                                    BG_ParseWeaponDefSpecificFieldType,
-                                   (long int (*)(byte *, const char *))SetConfigString2)) {
+                                   SetConfigString2)) {
         weapDef = 0;
         return weapDef;
     }

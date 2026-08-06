@@ -222,7 +222,7 @@ extern void *RB_GetActiveWorldMatrix(void);
 extern void MatrixIdentity44(void *matrix);
 extern void MatrixMultiply44(const void *a, const void *b, void *out);
 extern Bool RB_GetViewport(void *viewport);
-extern void MacOpenGLUtils_ConvertD3DProjectionMatrixToOpenGL(void *proj, float width, float height);
+extern int MacOpenGLUtils_ConvertD3DProjectionMatrixToOpenGL(void *proj, float width, float height);
 extern void RB_SetViewMatrix(const void *matrix);
 extern void RB_SetProjectionMatrix(const void *matrix);
 extern void MatrixForViewer(void *out, const void *origin, const void *axis);
@@ -494,7 +494,8 @@ void RB_SetGammaRamp(const GfxGammaRamp *gammaTable)
     dx = (byte *)imp_dx;
     dev = *(void **)(dx + 8);
     vt = *(void ***)dev;
-    ((void(D3DVTCC *)(void *, int, int, void *))vt[0x54 / 4])(dev, ((DxGlobals *)dx)->targetWindowIndex, 0, d3dGammaRamp);
+    /* SetGammaRamp returns ULONG on Mac D3D wrapper — not void (WASM sig). */
+    ((unsigned long(D3DVTCC *)(void *, int, int, void *))vt[0x54 / 4])(dev, ((DxGlobals *)dx)->targetWindowIndex, 0, d3dGammaRamp);
 }
 
 static void RB_TouchAllImagesCmd(GfxRenderCommandExecState *execState)
@@ -917,6 +918,16 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
     void *device;
     void **vtable;
 
+#ifdef __EMSCRIPTEN__
+    {
+        static int clr_dbg;
+        if (clr_dbg < 3) {
+            printf("webdbg: RB_ClearScreen enter which=%d #%d\n", whichToClear, clr_dbg);
+            clr_dbg++;
+        }
+    }
+#endif
+
     if (whichToClear & 2)
         clearFlags |= 2;
     if (whichToClear & 4)
@@ -929,6 +940,15 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
     viewport[2] = dxs->renderTargetWidth;
     viewport[3] = dxs->renderTargetHeight;
     RB_SetViewport(viewport);
+#ifdef __EMSCRIPTEN__
+    {
+        static int clr_vp_dbg;
+        if (clr_vp_dbg < 3) {
+            printf("webdbg: RB_ClearScreen after SetViewport #%d\n", clr_vp_dbg);
+            clr_vp_dbg++;
+        }
+    }
+#endif
     backEnd.viewportIsDirty = 1;
 
     r = (byte)(int)floorf(color[0] * 255.0f + 0.5f);
@@ -962,9 +982,34 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
             }
         }
 #endif
+#ifdef __EMSCRIPTEN__
+        {
+            static int clr_d3d_dbg;
+            if (clr_d3d_dbg < 3) {
+                printf("webdbg: RB_ClearScreen before D3D Clear flags=%u #%d\n", (unsigned)clearFlags, clr_d3d_dbg);
+                clr_d3d_dbg++;
+            }
+        }
+        /* Direct call avoids call_indirect float/HRESULT signature traps on WASM. */
+        {
+            extern HRESULT CDirect3DDevice_Clear(const void *dev, DWORD count, const void *rects,
+                                                 DWORD flags, DWORD color, float z, DWORD stencil);
+            CDirect3DDevice_Clear(device, 0, NULL, clearFlags, d3dColor, depth, (DWORD)(byte)stencil);
+        }
+#else
         ((HRESULT(D3DVTCC *)(void *, DWORD, void *, DWORD, DWORD, float, DWORD))(vtable[0xAC / 4]))(
             device, 0, NULL, clearFlags, d3dColor, depth, (DWORD)(byte)stencil);
+#endif
     } while (*(volatile int *)&alwaysfails);
+#ifdef __EMSCRIPTEN__
+    {
+        static int clr_done_dbg;
+        if (clr_done_dbg < 3) {
+            printf("webdbg: RB_ClearScreen done #%d\n", clr_done_dbg);
+            clr_done_dbg++;
+        }
+    }
+#endif
 }
 
 static void RB_ClearScreenCmd(GfxRenderCommandExecState *execState)
@@ -2922,7 +2967,7 @@ void RB_ExecuteRenderCommands(const void *data)
     if (!((DxGlobals *)dx)->deviceLost) {
         void *device = *(void **)(dx + 8);
         void **vtable = *(void ***)device;
-        HRESULT hr = ((HRESULT(__attribute__((stdcall)) *)(void *))(vtable[0x0c / 4]))(device);
+        HRESULT hr = ((HRESULT(D3DVTCC *)(void *))(vtable[0x0c / 4]))(device);
         if ((unsigned int)(hr + 0x7789f798u) <= 1)
             ((DxGlobals *)dx)->deviceLost = 1;
     }
@@ -3012,7 +3057,7 @@ void RB_ExecuteRenderCommands(const void *data)
     do {
         void *device = *(void **)(dx + 8);
         void **vtable = *(void ***)device;
-        ((HRESULT(__attribute__((stdcall)) *)(void *))(vtable[0xa4 / 4]))(device);
+        ((HRESULT(D3DVTCC *)(void *))(vtable[0xa4 / 4]))(device);
     } while (*(volatile int *)&alwaysfails);
 
     backEnd.frameCount += 1;
@@ -3031,8 +3076,26 @@ void RB_ExecuteRenderCommands(const void *data)
         execState.stackPos = 0;
 
         cmd = *(unsigned short *)cmdBuf;
+#ifdef __EMSCRIPTEN__
+        {
+            static int exec_cmd_dbg;
+            if (exec_cmd_dbg < 3) {
+                printf("webdbg: RB_Execute firstCmd=%u #%d\n", (unsigned)cmd, exec_cmd_dbg);
+                exec_cmd_dbg++;
+            }
+        }
+#endif
 
         while (cmd != 0) {
+#ifdef __EMSCRIPTEN__
+            {
+                static int exec_each_dbg;
+                if (exec_each_dbg < 40) {
+                    printf("webdbg: RB_Execute cmd=%u #%d\n", (unsigned)cmd, exec_each_dbg);
+                    exec_each_dbg++;
+                }
+            }
+#endif
             if (execTraceCount < 260) {
                 int off = (int)((const byte *)execState.cmd - cmdBuf);
                 if (off >= 900 && off <= 2420) {
@@ -3042,9 +3105,24 @@ void RB_ExecuteRenderCommands(const void *data)
                     ++execTraceCount;
                 }
             }
+            if (cmd >= 34 || !RB_RenderCommandTable[cmd]) {
+#ifdef __EMSCRIPTEN__
+                printf("webdbg: RB_Execute BAD cmd=%u (null or OOB)\n", (unsigned)cmd);
+#endif
+                break;
+            }
             RB_RenderCommandTable[cmd](&execState);
             cmd = *(unsigned short *)execState.cmd;
         }
+#ifdef __EMSCRIPTEN__
+        {
+            static int exec_done_dbg;
+            if (exec_done_dbg < 3) {
+                printf("webdbg: RB_Execute cmd loop done #%d\n", exec_done_dbg);
+                exec_done_dbg++;
+            }
+        }
+#endif
     }
 
 post_render:
@@ -3072,8 +3150,16 @@ post_render:
         do {
             dx = (char *)imp_dx;
             void *device = *(void **)(dx + 8);
+#ifdef __EMSCRIPTEN__
+            {
+                extern HRESULT CDirect3DDevice_Clear(const void *dev, DWORD count, const void *rects,
+                                                     DWORD flags, DWORD color, float z, DWORD stencil);
+                CDirect3DDevice_Clear(device, 0, NULL, 1, 0x00000000u, 0.0f, 0);
+            }
+#else
             void **vtable = *(void ***)device;
             ((HRESULT(D3DVTCC *)(void *, DWORD, void *, DWORD, DWORD, float, DWORD))(vtable[0xac / 4]))(device, 0, NULL, 1, 0x00000000u, 0.0f, 0);
+#endif
         } while (*(volatile int *)&alwaysfails);
 
     {
@@ -3086,7 +3172,7 @@ post_render:
     do {
         void *device = *(void **)(dx + 8);
         void **vtable = *(void ***)device;
-        ((HRESULT(__attribute__((stdcall)) *)(void *))(vtable[0xa8 / 4]))(device);
+        ((HRESULT(D3DVTCC *)(void *))(vtable[0xa8 / 4]))(device);
     } while (*(volatile int *)&alwaysfails);
     ((DxGlobals *)dx)->inScene = 0;
 

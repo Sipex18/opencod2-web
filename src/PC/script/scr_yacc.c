@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+extern void Com_Printf(const char *fmt, ...);
 extern int yychar;
 extern stype_t yylval;
 extern int yynerrs;
@@ -130,7 +131,9 @@ void ScriptParse(sval_t *parseData, int user)
 
     yy_current_buffer = &buffer_state;
     yy_start = 3;
+    Com_Printf("webdbg: ScriptParse before yyparse\n");
     yyparse();
+    Com_Printf("webdbg: ScriptParse after yyparse node=%p\n", (void *)(uintptr_t)yaccResult.node);
     *parseData = yaccResult;
 }
 

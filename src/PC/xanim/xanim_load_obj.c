@@ -1,5 +1,6 @@
 #include "common_types.h"
 #include "imports.h"
+#include <string.h>
 extern float floorf(float x);
 extern float sqrtf(float x);
 
@@ -12,30 +13,34 @@ extern unsigned int SL_GetStringOfLen(const char *str, unsigned int user, unsign
 
 XAnimParts *XAnimLoadFile(const char *name, Alloc_t Alloc);
 
+/* CoD2rev XAnim_ReadShort/Int: memcpy — xanim streams are not 2/4-aligned after flags byte. */
 static short int ConsumeShort(const char **pos)
 {
-    short int val = *(short int *)(*pos);
-    *pos += 2;
+    short int val;
+    memcpy(&val, *pos, sizeof(val));
+    *pos += sizeof(val);
     return val;
 }
 
 static unsigned short int ConsumeUShort(const char **pos)
 {
-    unsigned short int val = *(unsigned short int *)(*pos);
-    *pos += 2;
+    unsigned short int val;
+    memcpy(&val, *pos, sizeof(val));
+    *pos += sizeof(val);
     return val;
 }
 
 static int ConsumeInt(const char **pos)
 {
-    int val = *(int *)(*pos);
-    *pos += 4;
+    int val;
+    memcpy(&val, *pos, sizeof(val));
+    *pos += sizeof(val);
     return val;
 }
 
 static unsigned char ConsumeByte(const char **pos)
 {
-    unsigned char val = *(unsigned char *)(*pos);
+    unsigned char val = *(const unsigned char *)(*pos);
     *pos += 1;
     return val;
 }
@@ -100,6 +105,9 @@ XAnimParts *XAnimLoadFile(const char *name, Alloc_t Alloc)
     Bool bDelta;
     short int sQ2;
     int i;
+    int fileLen;
+
+    Com_Printf("webdbg: XAnimLoadFile enter '%s'\n", name ? name : "(null)");
 
     if (Com_sprintf(filename, 64, "xanim/%s", name) < 0) {
 
@@ -107,24 +115,25 @@ XAnimParts *XAnimLoadFile(const char *name, Alloc_t Alloc)
         return (XAnimParts *)0;
     }
 
-    {
-        int fileLen = FS_ReadFile(filename, &buf);
-        if (fileLen < 0) {
+    Com_Printf("webdbg: XAnimLoadFile FS_ReadFile '%s'\n", filename);
+    fileLen = FS_ReadFile(filename, &buf);
+    Com_Printf("webdbg: XAnimLoadFile FS_ReadFile done len=%d buf=%p\n", fileLen, buf);
+    if (fileLen < 0) {
 
-            Com_Printf("^1ERROR: xanim '%s' not found\n", name);
-            return (XAnimParts *)0;
-        }
-        if (fileLen == 0) {
+        Com_Printf("^1ERROR: xanim '%s' not found\n", name);
+        return (XAnimParts *)0;
+    }
+    if (fileLen == 0) {
 
-            Com_Printf("^1ERROR: xanim '%s' has 0 length\n", name);
-            FS_FreeFile(buf);
-            return (XAnimParts *)0;
-        }
+        Com_Printf("^1ERROR: xanim '%s' has 0 length\n", name);
+        FS_FreeFile(buf);
+        return (XAnimParts *)0;
     }
 
     pos = (const char *)buf;
 
     version = ConsumeShort(&pos);
+    Com_Printf("webdbg: XAnimLoadFile version=%d bones_hdr next\n", (int)version);
 
     if (version != 14) {
 
@@ -136,12 +145,15 @@ XAnimParts *XAnimLoadFile(const char *name, Alloc_t Alloc)
     numNoteTracks = (unsigned short int)ConsumeUShort(&pos);
     numBoneCount = ConsumeUShort(&pos);
     sQ2 = (short int)numBoneCount;
+    Com_Printf("webdbg: XAnimLoadFile frames=%d boneCount=%d Alloc=%p\n",
+               numNoteTracks, (int)numBoneCount, (void *)(uintptr_t)Alloc);
 
     if (numBoneCount != 0) {
         boneNames = (unsigned short int *)Alloc(numBoneCount * 2);
     } else {
         boneNames = (unsigned short int *)0;
     }
+    Com_Printf("webdbg: XAnimLoadFile after boneNames alloc\n");
 
     {
         unsigned char flags = ConsumeByte(&pos);

@@ -2,14 +2,14 @@
 #include "imports.h"
 #include "bytematch.h"
 
-extern void G_FreeEntity(gentity_t *ent);
+extern unsigned char G_FreeEntity(gentity_t *ent);
 extern unsigned char G_SetOrigin(gentity_t *ent, const vec_t *origin);
 extern qboolean G_SpawnString(const char *key, const char *defaultString, const char **out);
 extern qboolean G_SpawnFloat(const char *key, const char *defaultString, float *out);
 extern qboolean G_SpawnInt(const char *key, const char *defaultString, int *out);
 extern void Com_Error(int code, const char *fmt, ...);
 extern DObj_s *Com_GetServerDObj(int entNum);
-extern void DObjSetControlTagAngles(DObj_s *obj, int *partBits, unsigned short tag, vec_t *angles);
+extern qboolean DObjSetControlTagAngles(DObj_s *obj, int *partBits, unsigned int tag, vec_t *angles);
 extern void SV_UnlinkEntity(gentity_t *ent);
 extern void SV_LinkEntity(gentity_t *ent);
 extern void SetClientViewAngle(gentity_t *ent, vec_t *angles);
@@ -22,7 +22,7 @@ extern float AngleNormalize180(float angle);
 extern void YawVectors(const vec_t yaw, vec_t *forward, vec_t *right);
 extern float Vec3Normalize(vec_t *v);
 extern float Q_acos(float x);
-extern unsigned char G_GeneralLink(gentity_t *ent);
+extern void G_GeneralLink(gentity_t *ent);
 extern DObjAnimMat_s *G_DObjGetLocalTagMatrix(gentity_t *ent, unsigned int tagName);
 extern void AnglesToAxis(const vec_t *angles, vec_t *axis);
 extern void MatrixTransformVector(const vec_t *in1, const vec_t *in2, vec_t *out);
@@ -36,7 +36,7 @@ extern const char *va(const char *fmt, ...);
 extern qboolean IsItemRegistered(unsigned int item);
 extern SoundAlias G_SoundAliasIndex(const char *name);
 extern void G_DObjUpdate(gentity_t *ent);
-extern void G_SetAngle(gentity_t *ent, const vec_t *angles);
+extern unsigned char G_SetAngle(gentity_t *ent, const vec_t *angles);
 extern struct level_locals_t level;
 extern struct bgs_t level_bgs;
 
@@ -187,7 +187,9 @@ void turret_think_client(gentity_t *self);
 
 void SP_info_null(gentity_t *self)
 {
+    Com_Printf("webdbg: SP_info_null enter\n");
     G_FreeEntity(self);
+    Com_Printf("webdbg: SP_info_null done\n");
 }
 
 void SP_info_notnull(gentity_t *self)
@@ -197,17 +199,23 @@ void SP_info_notnull(gentity_t *self)
 
 void SP_light(gentity_t *self)
 {
+    Com_Printf("webdbg: SP_light enter\n");
     G_FreeEntity(self);
+    Com_Printf("webdbg: SP_light done\n");
 }
 
 void SP_misc_model(gentity_t *ent)
 {
+    Com_Printf("webdbg: SP_misc_model enter ent=%p\n", (void *)ent);
     G_FreeEntity(ent);
+    Com_Printf("webdbg: SP_misc_model done\n");
 }
 
 void SP_corona(gentity_t *ent)
 {
+    Com_Printf("webdbg: SP_corona enter\n");
     G_FreeEntity(ent);
+    Com_Printf("webdbg: SP_corona done\n");
 }
 
 void G_InitTurrets(void)
@@ -500,12 +508,27 @@ void turret_think_init(gentity_t *self)
 
     const scr_const_t *scr;
 
+#ifdef __EMSCRIPTEN__
+    puts("SYNC-DBG: turret_think_init enter");
+#endif
     info = self->pTurretInfo;
     self->handler = GMISC_ENT_HANDLER_TURRET;
     self->nextthink = level.time + 50;
 
     scr = SCR_CONST();
+#ifdef __EMSCRIPTEN__
+    {
+        extern int printf(const char *, ...);
+        printf("SYNC-DBG: turret_think_init before G_DObjGetLocalTagMatrix tag_aim=%u\n", scr->tag_aim);
+    }
+#endif
     aimMtx = G_DObjGetLocalTagMatrix(self, scr->tag_aim);
+#ifdef __EMSCRIPTEN__
+    {
+        extern int printf(const char *, ...);
+        printf("SYNC-DBG: turret_think_init aimMtx=%p\n", (void *)aimMtx);
+    }
+#endif
     if (!aimMtx) {
         return;
     }
@@ -651,6 +674,8 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     WeaponDef *weapDef;
     int i;
 
+    Com_Printf("webdbg: G_SpawnTurret enter weapon='%s'\n", weaponinfoname ? weaponinfoname : "(null)");
+
     info = 0;
     for (i = 0; i < 32; ++i) {
         info = &turretInfo[i];
@@ -667,12 +692,16 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     self->pTurretInfo = info;
     info->inuse = 1;
 
+    Com_Printf("webdbg: G_SpawnTurret before G_GetWeaponIndexForName\n");
     self->s.weapon = G_GetWeaponIndexForName(weaponinfoname);
+    Com_Printf("webdbg: G_SpawnTurret after G_GetWeaponIndexForName weapon=%d\n", self->s.weapon);
     if (!self->s.weapon) {
         Com_Error(1, "bad weaponinfo '%s' specified for turret", weaponinfoname);
     }
 
+    Com_Printf("webdbg: G_SpawnTurret before BG_GetWeaponDef\n");
     weapDef = BG_GetWeaponDef(self->s.weapon);
+    Com_Printf("webdbg: G_SpawnTurret after BG_GetWeaponDef weapClass=%d\n", weapDef ? (int)weapDef->weapClass : -1);
     if (weapDef->weapClass != WEAPCLASS_TURRET) {
         Scr_Error(va("G_SpawnTurret: weapon '%s' isn't a turret. This usually indicates that the weapon failed to load.", weaponinfoname));
     }
@@ -686,6 +715,7 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     info->prevStance = GMISC_TURRET_STANCE_INVALID;
     info->fireSndDelay = 0;
 
+    Com_Printf("webdbg: G_SpawnTurret before sound aliases\n");
     if (weapDef->szFireLoopSound && *weapDef->szFireLoopSound) {
         info->fireSnd = G_SoundAliasIndex(weapDef->szFireLoopSound);
     }
@@ -698,6 +728,7 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     if (weapDef->szFireStopSoundPlayer && *weapDef->szFireStopSoundPlayer) {
         info->stopSndPlayer = G_SoundAliasIndex(weapDef->szFireStopSoundPlayer);
     }
+    Com_Printf("webdbg: G_SpawnTurret after sound aliases\n");
 
     if (!level.spawnVar.spawnVarsValid || !G_SpawnFloat("rightarc", "", &info->arcmin[1])) {
         info->arcmin[1] = weapDef->rightArc;
@@ -757,7 +788,9 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     self->s.eType = GMISC_ET_TURRET;
     self->flags |= 0x1000u;
 
+    Com_Printf("webdbg: G_SpawnTurret before G_DObjUpdate\n");
     G_DObjUpdate(self);
+    Com_Printf("webdbg: G_SpawnTurret after G_DObjUpdate\n");
 
     self->r.mins[0] = -32.0f;
     self->r.mins[1] = -32.0f;
@@ -766,8 +799,11 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     self->r.maxs[1] = 32.0f;
     self->r.maxs[2] = 56.0f;
 
+    Com_Printf("webdbg: G_SpawnTurret before G_SetOrigin\n");
     G_SetOrigin(self, self->r.currentOrigin);
+    Com_Printf("webdbg: G_SpawnTurret before G_SetAngle\n");
     G_SetAngle(self, self->r.currentAngles);
+    Com_Printf("webdbg: G_SpawnTurret after G_SetAngle\n");
 
     self->s.angles2[0] = 0.0f;
     self->s.angles2[1] = 0.0f;
@@ -779,18 +815,23 @@ void G_SpawnTurret(gentity_t *self, const char *weaponinfoname)
     self->s.apos.trType = TR_LINEAR_STOP;
     self->takedamage = 0;
 
+    Com_Printf("webdbg: G_SpawnTurret before SV_LinkEntity\n");
     SV_LinkEntity(self);
+    Com_Printf("webdbg: G_SpawnTurret done\n");
 }
 
 void SP_turret(gentity_t *self)
 {
     const char *weaponinfoname;
 
+    Com_Printf("webdbg: SP_turret enter\n");
     if (!G_SpawnString("weaponinfo", "", &weaponinfoname)) {
 
         Com_Error(1, "\025no weaponinfo specified for turret");
     }
+    Com_Printf("webdbg: SP_turret weaponinfo='%s'\n", weaponinfoname ? weaponinfoname : "(null)");
     G_SpawnTurret(self, weaponinfoname);
+    Com_Printf("webdbg: SP_turret done\n");
 }
 
 static void turret_clientaim(gentity_t *self, gentity_t *other)

@@ -76,7 +76,13 @@ void LAN_ResetPings(int source)
 
     switch (source) {
     case 0:
+#ifdef __EMSCRIPTEN__
+        count = cls.numlocalservers;
+        if (count <= 0)
+            return;
+#else
         count = 128;
+#endif
         servers = cls.localServers;
         break;
     case 1:

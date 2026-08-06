@@ -12,7 +12,7 @@ static unsigned int g_end;
 extern void SL_RemoveRefToString(unsigned int stringValue);
 extern void SL_AddRefToString(unsigned int stringValue);
 extern const char *SL_ConvertToString(unsigned int stringValue);
-extern unsigned int Scr_AddConstString(unsigned int value);
+extern void Scr_AddConstString(unsigned int value);
 extern void Scr_NotifyNum(int entnum, int classnum, unsigned int stringValue, unsigned int paramcount);
 static XAnimNotify g_notifyList[128];
 static int g_notifyListSize;
@@ -487,23 +487,33 @@ XAnimTree *XAnimCreateTree(XAnim *anims, Alloc_t Alloc)
 
 XAnimParts *XAnimPrecache(const char *name, Alloc_t Alloc)
 {
-    XAnimParts *parts = (XAnimParts *)Hunk_FindDataForFile(5, name);
+    XAnimParts *parts;
     XAnimParts *defaultParts;
     unsigned short notifyInfoIndex;
     int i;
 
+    Com_Printf("webdbg: XAnimPrecache enter name='%s' Alloc=%p\n",
+               name ? name : "(null)", (void *)(uintptr_t)Alloc);
+
+    parts = (XAnimParts *)Hunk_FindDataForFile(5, name);
     if (parts) {
+        Com_Printf("webdbg: XAnimPrecache cache-hit '%s'\n", name);
         return parts;
     }
 
+    Com_Printf("webdbg: XAnimPrecache before LoadFile '%s'\n", name);
     parts = XAnimLoadFile(name, Alloc);
+    Com_Printf("webdbg: XAnimPrecache after LoadFile '%s' parts=%p\n", name, (void *)parts);
+
     if (!parts) {
         Com_Printf("^3WARNING: Couldn't find xanim '%s', using default xanim '%s' instead\n", name, "void");
 
         defaultParts = (XAnimParts *)Hunk_FindDataForFile(5, "void");
         if (!defaultParts) {
+            Com_Printf("webdbg: XAnimPrecache loading default 'void'\n");
             defaultParts = XAnimLoadFile("void", Alloc);
             if (!defaultParts) {
+                Com_Printf("webdbg: XAnimPrecache FATAL missing void for '%s'\n", name);
                 Com_Error(1, "\x15"
                              "Cannot find xanim '%s'.",
                           "void");
@@ -529,7 +539,9 @@ XAnimParts *XAnimPrecache(const char *name, Alloc_t Alloc)
         parts->isDefault = 1;
     }
 
+    Com_Printf("webdbg: XAnimPrecache before SetData '%s'\n", name);
     parts->name = Hunk_SetDataForFile(5, name, parts, Alloc);
+    Com_Printf("webdbg: XAnimPrecache done '%s'\n", name);
     return parts;
 }
 

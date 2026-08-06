@@ -53,16 +53,16 @@ extern int UI_PlayLocalSoundAliasByName(const char *name);
 extern void UI_RunMenuScript(const char **args);
 extern qboolean UI_ClientIsInGame(void);
 extern void UI_Pause(qboolean pause);
-extern float UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
+extern void UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
 extern void UI_DrawRect(float x, float y, float w, float h, int horzAlign, int vertAlign, float size, const vec_t *color);
-extern float UI_FillRect(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color);
+extern void UI_FillRect(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color);
 extern void UI_DrawSides(float x, float y, float w, float h, int horzAlign, int vertAlign, float size, const vec_t *color);
 extern void UI_DrawTopBottom(float x, float y, float w, float h, int horzAlign, int vertAlign, float size, const vec_t *color);
 extern void UI_DrawLoadBar(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
 extern int UI_TextWidth(const char *text, int maxChars, FontHandle font, float scale);
 extern int UI_TextHeight(FontHandle font, float scale);
 extern const char *UI_SafeTranslateString(const char *key);
-extern int UI_OwnerDrawWidth(int ownerDraw, float scale);
+extern int UI_OwnerDrawWidth(int ownerDraw, FontHandle font, float scale);
 extern qboolean UI_OwnerDrawVisible(int flags);
 extern void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAlign, float text_x, float text_y, int ownerDraw, int ownerDrawFlags, int align, float special, FontHandle font, float scale, vec_t *color, MaterialHandle shader, int textStyle);
 extern qboolean UI_OwnerDrawHandleKey(int ownerDraw, int flags, int *special, int key);
@@ -190,6 +190,7 @@ int Menu_Count(displayContextDef_t *dc);
 void UI_AddMenuList(displayContextDef_t *dc, MenuList *menuList);
 void Item_MouseLeave(displayContextDef_t *dc, itemDef_t *item);
 float Item_Slider_ThumbPosition(itemDef_t *item);
+static qboolean Item_HasLabel(itemDef_t *item);
 qboolean Menu_CheckOnKey(displayContextDef_t *dc, menuDef_t *menu, int key);
 qboolean Menus_AnyFullScreenVisible(displayContextDef_t *dc);
 menuDef_t *Menu_GetFocused(displayContextDef_t *dc);
@@ -273,6 +274,21 @@ void LerpColor(vec_t *a, vec_t *b, vec_t *c, float t)
         else if (v > 1.0f)
             *(int *)cp = 0x3f800000;
     }
+}
+
+/*
+ * Focus shimmer phase. This UI descends from Q3's ui_shared.c, which lerps
+ * between focusColor and 0.8*focusColor using 0.5 + 0.5*sin(realTime /
+ * PULSE_DIVISOR) with PULSE_DIVISOR 75. The decompiled body used the integer
+ * expression UI_FocusPulse(curTime): a ~138 ms period sampled at 60 Hz,
+ * with the phase truncated to 22 ms steps, so the highlight aliased into a hard
+ * flicker rather than a slow pulse. Use a float phase and the lineage divisor.
+ */
+#define UI_PULSE_DIVISOR 75.0f
+
+static float UI_FocusPulse(int curTime)
+{
+    return sinf((float)curTime / UI_PULSE_DIVISOR);
 }
 
 qboolean String_Parse(const char **p, char *out, int len)
@@ -913,8 +929,16 @@ float Item_Slider_ThumbPosition(itemDef_t *item)
     if (!editDef)
         return 0.0f;
 
-    if ((*(int *)&((itemDef_t *)it)->text))
+    /*
+     * Must match Item_Slider_Paint / Item_PaintLabelGetValueX. The old
+     * "if (item->text)" test treated the options_*.menu placeholder " " as a
+     * real label, so the thumb sat ~width(" ")+8 to the right of the bar
+     * (the small options-column skew on Voice/Sound/Look).
+     */
+    if (Item_HasLabel(item))
         baseX = (((itemDef_s*)(it))->textRect[0].x) + (((itemDef_s*)(it))->textRect[0].w) + 8.0f;
+    else if ((*(int *)&((itemDef_t *)it)->text))
+        baseX = (((itemDef_s*)(it))->textRect[0].x);
     else
         baseX = (((rectDef_t*)(it))->x);
 
@@ -1085,8 +1109,11 @@ static void Scroll_Slider_SetThumbPos_impl(byte *dc, byte *item)
     if (!editDef)
         return;
 
-    if ((*(int *)&((itemDef_t *)item)->text))
+    /* Same label rule as Item_Slider_ThumbPosition / Item_PaintLabelGetValueX. */
+    if (Item_HasLabel((itemDef_t *)item))
         rightEdge = (((itemDef_s*)(item))->textRect[0].x) + (((itemDef_s*)(item))->textRect[0].w) + 8.0f;
+    else if ((*(int *)&((itemDef_t *)item)->text))
+        rightEdge = (((itemDef_s*)(item))->textRect[0].x);
     else
         rightEdge = (((rectDef_t*)(item))->x);
 
@@ -1221,7 +1248,7 @@ compute:;
     if (itemType == 8) {
         int alignment = (((itemDef_s*)(it))->textalignment);
         if (alignment == 1 || alignment == 2)
-            originalWidth += UI_OwnerDrawWidth(((itemDef_t *)it)->window.ownerDraw, scale);
+            originalWidth += UI_OwnerDrawWidth(((itemDef_t *)it)->window.ownerDraw, font, scale);
     } else if (itemType <= 0x12 && ((1 << itemType) & 0x70210)) {
         if ((((itemDef_s*)(it))->textalignment) == 1 && (*(void **)&((itemDef_t *)it)->dvar)) {
             originalWidth += UI_TextWidth(Dvar_GetVariantString(item->dvar), 0, font, scale);
@@ -2266,7 +2293,35 @@ void Menus_Open(displayContextDef_t *dc, menuDef_t *menu)
     int idx = (((displayContextDef_s*)(d))->openMenuCount);
     *(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) + idx * 4) = menu;
     (((displayContextDef_s*)(d))->openMenuCount) = idx + 1;
+    /*
+     * Clear leftover fade-out flags from a prior close/OOB hide so the next
+     * sequential Options submenu paints. Only restore items that were mid
+     * fade-out (0x30) — forcing all low-alpha items visible (menufix4) made
+     * intentional alpha-0 / Script_Hide black rects cover the whole menu.
+     */
+    Window_RemoveDynamicFlags((void *)menu, 0x30);
+    ((menuDef_t *)m)->window.nextTime = 0;
     Window_AddDynamicFlags((void *)menu, 6);
+    {
+        int ic = (((menuDef_t *)m)->itemCount);
+        for (j = 0; j < ic; j++) {
+            byte *it = *(byte **)((*(byte **)&((menuDef_t *)m)->items) + j * 4);
+            int itFlags;
+            if (!it)
+                continue;
+            itFlags = ((itemDef_t *)it)->window.dynamicFlags[0];
+            if (!(itFlags & 0x30))
+                continue;
+            /* Was mid fade-out: restore visibility + alpha for the next open. */
+            Window_RemoveDynamicFlags((void *)it, 0x30);
+            Window_AddDynamicFlags((void *)it, 4);
+            if (((itemDef_t *)it)->window.backColor[3] <= 0.0f)
+                ((itemDef_t *)it)->window.backColor[3] = 1.0f;
+            if (((itemDef_t *)it)->window.foreColor[3] <= 0.0f)
+                ((itemDef_t *)it)->window.foreColor[3] = 1.0f;
+            ((itemDef_t *)it)->window.nextTime = 0;
+        }
+    }
     if ((*(void **)&((menuDef_t *)m)->onOpen)) {
         *(void **)&(*(unsigned char *)&((itemDef_t *)tempItem)->parent) = menu;
         Item_RunScript(dc, (itemDef_t *)tempItem, ((menuDef_t *)m)->onOpen);
@@ -2512,7 +2567,7 @@ void Item_TextColor(displayContextDef_t *dc, itemDef_t *item, vec4_t *newColor)
         for (i = 0; i < 4; i++)
             lowLight[i] = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4) * 0.8f;
 
-        float t = sinf((float)(curTime / 22));
+        float t = UI_FocusPulse(curTime);
         t = t * 0.5f + 0.5f;
 
         for (i = 0; i < 4; i++) {
@@ -2538,7 +2593,7 @@ void Item_TextColor(displayContextDef_t *dc, itemDef_t *item, vec4_t *newColor)
             for (i = 0; i < 4; i++)
                 lowLight[i] = ((itemDef_t *)it)->window.foreColor[i] * 0.8f;
 
-            float t = sinf((float)(curTime / 22));
+            float t = UI_FocusPulse(curTime);
             t = t * 0.5f + 0.5f;
 
             for (i = 0; i < 4; i++) {
@@ -2693,6 +2748,56 @@ void Item_Text_Paint(displayContextDef_t *dc, itemDef_t *item)
                 ((itemDef_t *)it)->textscale, color, (((itemDef_s*)(it))->textStyle));
 }
 
+/*
+ * A "label: value" row in the shipped menus comes in two shapes. Either the
+ * value item carries the label itself (settings_sw.menu: "type ITEM_TYPE_YESNO /
+ * text @MENU_KILLCAM", joinserver.menu's gametypefield; 46 such items across
+ * ui/ and ui_mp/), or the label is a separate itemDef and the value item's own
+ * text is the placeholder " " while textalignx points straight at the value
+ * column (every options_*.menu row, createserver.menu; 121 such items).
+ *
+ * Only the first shape wants the value pushed past the label. Treating " " as a
+ * label added width(" ") + 8 to the YESNO/BIND/SLIDER/EDITFIELD rows, so they
+ * sat ~11 units right of the ITEM_TYPE_MULTI rows sharing the same authored
+ * column -- the skew visible between "Video Mode" and "Sync Every Frame" in
+ * options_graphics.menu.
+ */
+static qboolean Item_HasLabel(itemDef_t *item)
+{
+    const char *text = item->text;
+
+    if (!text)
+        return 0;
+    if (text[0] == '@') {
+        text = UI_SafeTranslateString(text + 1);
+        if (!text)
+            return 0;
+    }
+    while (*text == ' ' || *text == '\t')
+        ++text;
+
+    return *text != '\0';
+}
+
+/*
+ * Paints the item's label if it has one, and returns the x the value belongs
+ * at: past the label, or the item's authored text anchor when there is none.
+ */
+static float Item_PaintLabelGetValueX(displayContextDef_t *dc, itemDef_t *item, const char *value)
+{
+    int width;
+    int height;
+
+    if (Item_HasLabel(item)) {
+        Item_Text_Paint(dc, item);
+        return item->textRect[0].x + item->textRect[0].w + 8.0f;
+    }
+
+    Item_SetTextExtents(item, &width, &height, value ? value : "");
+
+    return item->textRect[0].x;
+}
+
 static void Item_List_Paint(displayContextDef_t *dc, itemDef_t *item, const char *text)
 {
     byte *it = (byte *)item;
@@ -2700,6 +2805,7 @@ static void Item_List_Paint(displayContextDef_t *dc, itemDef_t *item, const char
     int width;
     int height;
     int staticFlags;
+    float valueX;
     FontHandle font;
 
     if (!text)
@@ -2712,6 +2818,7 @@ static void Item_List_Paint(displayContextDef_t *dc, itemDef_t *item, const char
         return;
 
     Item_TextColor(dc, item, (vec4_t *)color);
+    valueX = Item_PaintLabelGetValueX(dc, item, text);
     Item_SetTextExtents(item, &width, &height, text);
 
     staticFlags = ((itemDef_t *)it)->window.staticFlags;
@@ -2726,7 +2833,7 @@ static void Item_List_Paint(displayContextDef_t *dc, itemDef_t *item, const char
 
     font = UI_GetFontHandle(((itemDef_t *)it)->fontEnum, ((itemDef_t *)it)->textscale);
     UI_DrawText(text, 0x7fffffff, font,
-                (((itemDef_s*)(it))->textRect[0].x), (((itemDef_s*)(it))->textRect[0].y),
+                valueX, (((itemDef_s*)(it))->textRect[0].y),
                 (((rectDef_t*)(it))->horzAlign), (((rectDef_t*)(it))->vertAlign),
                 ((itemDef_t *)it)->textscale, color, (((itemDef_s*)(it))->textStyle));
 }
@@ -2770,8 +2877,6 @@ void Item_TextField_Paint(displayContextDef_t *dc, itemDef_t *item)
         return;
     }
 
-    Item_Text_Paint(dc, item);
-
     buff[0] = '\0';
     if (item->dvar) {
         value = Dvar_GetVariantString(item->dvar);
@@ -2780,6 +2885,7 @@ void Item_TextField_Paint(displayContextDef_t *dc, itemDef_t *item)
         }
     }
 
+    x = Item_PaintLabelGetValueX(dc, item, buff);
     Item_SetTextExtents(item, &width, &height, buff);
     Item_TextColor(dc, item, &newColor);
 
@@ -2800,11 +2906,6 @@ void Item_TextField_Paint(displayContextDef_t *dc, itemDef_t *item)
         maxChars = 0x7fffffff;
     } else if (maxChars > (int)sizeof(buff) - 1 - paintOffset) {
         maxChars = (int)sizeof(buff) - 1 - paintOffset;
-    }
-
-    x = item->textRect[0].x + item->textRect[0].w;
-    if (item->text && item->text[0]) {
-        x += 8.0f;
     }
 
     text = buff + paintOffset;
@@ -2891,7 +2992,7 @@ void Item_YesNo_Paint(displayContextDef_t *dc, itemDef_t *item)
             lowLight[i] = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4) * 0.8f;
 
         int curTime = dc->realTime;
-        float t = sinf((float)(curTime / 22));
+        float t = UI_FocusPulse(curTime);
         t = t * 0.5f + 0.5f;
 
         for (i = 0; i < 4; i++) {
@@ -2918,15 +3019,8 @@ void Item_YesNo_Paint(displayContextDef_t *dc, itemDef_t *item)
     FontHandle font = UI_GetFontHandle(((itemDef_t *)it)->fontEnum, ((itemDef_t *)it)->textscale);
     float textX, textY;
 
-    if ((*(int *)&((itemDef_t *)it)->text)) {
-
-        Item_Text_Paint(dc, item);
-        textX = (((itemDef_s*)(it))->textRect[0].x) + (((itemDef_s*)(it))->textRect[0].w) + 8.0f;
-        textY = (((rectDef_t*)(textRect))->y);
-    } else {
-        textX = (((itemDef_s*)(it))->textRect[0].x);
-        textY = (((rectDef_t*)(textRect))->y);
-    }
+    textX = Item_PaintLabelGetValueX(dc, item, yesNoStr);
+    textY = (((rectDef_t*)(textRect))->y);
 
     UI_DrawText(yesNoStr, 0x7fffffff, font, textX, textY,
                 (((rectDef_t*)(it))->horzAlign), (((rectDef_t*)(it))->vertAlign),
@@ -2956,7 +3050,7 @@ void Item_Slider_Paint(displayContextDef_t *dc, itemDef_t *item)
             lowLight[i] = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4) * 0.8f;
 
         int curTime = dc->realTime;
-        float t = sinf((float)(curTime / 22));
+        float t = UI_FocusPulse(curTime);
         t = t * 0.5f + 0.5f;
 
         for (i = 0; i < 4; i++) {
@@ -2975,14 +3069,7 @@ void Item_Slider_Paint(displayContextDef_t *dc, itemDef_t *item)
     }
 
     y = (((rectDef_t*)(it))->y);
-
-    if ((*(int *)&((itemDef_t *)it)->text)) {
-
-        Item_Text_Paint(dc, item);
-        x = (((itemDef_s*)(it))->textRect[0].x) + (((itemDef_s*)(it))->textRect[0].w) + 8.0f;
-    } else {
-        x = (((rectDef_t*)(it))->x);
-    }
+    x = Item_PaintLabelGetValueX(dc, item, "");
 
     byte *uiInfo = (byte *)imp_sharedUiInfo;
     UI_DrawHandlePic(
@@ -3012,9 +3099,8 @@ void Item_Bind_Paint(displayContextDef_t *dc, itemDef_t *item)
     int i;
 
     editFieldDef_t *editPtr = Item_GetEditFieldDef(item);
-    if (!editPtr || !editPtr->maxPaintChars)
-        return;
-    maxChars = editPtr->maxPaintChars;
+    /* Bind rows still paint when typeData/maxPaintChars is missing (web menu parse). */
+    maxChars = (editPtr && editPtr->maxPaintChars) ? editPtr->maxPaintChars : 32;
 
     bindName = item->dvar;
     if (!bindName || !bindName[0])
@@ -3039,7 +3125,7 @@ void Item_Bind_Paint(displayContextDef_t *dc, itemDef_t *item)
             lowLight[i] = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4) * 0.8f;
 
         int curTime = dc->realTime;
-        float t = sinf((float)(curTime / 22));
+        float t = UI_FocusPulse(curTime);
         t = t * 0.5f + 0.5f;
 
         for (i = 0; i < 4; i++) {
@@ -3059,13 +3145,7 @@ void Item_Bind_Paint(displayContextDef_t *dc, itemDef_t *item)
 draw:;
 
     byte *textRect = (byte *)((itemDef_t *)it)->textRect;
-    if ((*(int *)&((itemDef_t *)it)->text)) {
-        Item_Text_Paint(dc, item);
-
-        textX = (((itemDef_s*)(it))->textRect[0].x) + (((itemDef_s*)(it))->textRect[0].w) + 8.0f;
-    } else {
-        textX = (((itemDef_s*)(it))->textRect[0].x);
-    }
+    textX = Item_PaintLabelGetValueX(dc, item, drawText);
     textY = (((rectDef_t*)(textRect))->y);
     font = UI_GetFontHandle(((itemDef_t *)it)->fontEnum, ((itemDef_t *)it)->textscale);
     UI_DrawText(drawText, maxChars, font, textX, textY,
@@ -3119,7 +3199,7 @@ void Item_OwnerDraw_Paint(displayContextDef_t *dc, itemDef_t *item)
         float lowLight[4];
         for (i = 0; i < 4; i++)
             lowLight[i] = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4) * 0.8f;
-        float t = sinf((float)(curTime / 22));
+        float t = UI_FocusPulse(curTime);
         t = t * 0.5f + 0.5f;
         for (i = 0; i < 4; i++) {
             float hi = *(float *)(((char *)parent + offsetof(menuDef_t, focusColor[0])) + i * 4);
@@ -3138,7 +3218,7 @@ void Item_OwnerDraw_Paint(displayContextDef_t *dc, itemDef_t *item)
             float lowLight[4];
             for (i = 0; i < 4; i++)
                 lowLight[i] = ((itemDef_t *)it)->window.foreColor[i] * 0.8f;
-            float t = sinf((float)(curTime / 22));
+            float t = UI_FocusPulse(curTime);
             t = t * 0.5f + 0.5f;
             for (i = 0; i < 4; i++) {
                 float hi = ((itemDef_t *)it)->window.foreColor[i];
@@ -3167,18 +3247,9 @@ void Item_OwnerDraw_Paint(displayContextDef_t *dc, itemDef_t *item)
     int material = (*(int *)&((itemDef_t *)it)->window.background);
     FontHandle font = UI_GetFontHandle(((itemDef_t *)it)->fontEnum, scale);
 
-    if ((*(int *)&((itemDef_t *)it)->text) && ((const char *)(*(int *)&((itemDef_t *)it)->text))[0]) {
+    if ((*(int *)&((itemDef_t *)it)->text)) {
 
-        Item_Text_Paint(dc, item);
-        byte *textRect = (byte *)((itemDef_t *)it)->textRect;
-        float ownerX = (((itemDef_s*)(it))->textRect[0].x) + (((rectDef_t*)(textRect))->w) + 8.0f;
-        UI_OwnerDraw(ownerX, (((rectDef_t*)(it))->y), (((rectDef_t*)(it))->w), (((rectDef_t*)(it))->h),
-                     (((rectDef_t*)(it))->horzAlign), (((rectDef_t*)(it))->vertAlign), 0.0f, (((itemDef_s*)(it))->textaligny),
-                     ownerDraw, ownerDrawFlags, align, special, font, scale, color, (MaterialHandle)(intptr_t)material, style);
-    } else if ((*(int *)&((itemDef_t *)it)->text)) {
-
-        byte *textRect = (byte *)((itemDef_t *)it)->textRect;
-        float ownerX = (((itemDef_s*)(it))->textRect[0].x) + (((rectDef_t*)(textRect))->w);
+        float ownerX = Item_PaintLabelGetValueX(dc, item, "");
         UI_OwnerDraw(ownerX, (((rectDef_t*)(it))->y), (((rectDef_t*)(it))->w), (((rectDef_t*)(it))->h),
                      (((rectDef_t*)(it))->horzAlign), (((rectDef_t*)(it))->vertAlign), 0.0f, (((itemDef_s*)(it))->textaligny),
                      ownerDraw, ownerDrawFlags, align, special, font, scale, color, (MaterialHandle)(intptr_t)material, style);
@@ -3331,8 +3402,9 @@ qboolean Item_SetFocus(displayContextDef_t *dc, itemDef_t *item, float x, float 
             float prx = (((rectDef_t*)(parent))->x), pry = (((rectDef_t*)(parent))->y);
             float prw = (((rectDef_t*)(parent))->w), prh = ((menuDef_t *)parent)->window.rect[0].h;
             float pcx = x, pcy = y;
-            CalcScreenX(&pcy, 4);
-            CalcScreenY(&pcx, 4);
+            /* Cursor X/Y were swapped (decompile bug) — broke focus across menus → black panels. */
+            CalcScreenX(&pcx, 4);
+            CalcScreenY(&pcy, 4);
             CalcScreenPlacement(&prx, &pry, &prw, &prh, (((rectDef_t*)(parent))->horzAlign), (((rectDef_t*)(parent))->vertAlign));
             if (pcx < prx || pcx > prx + prw || pcy < pry || pcy > pry + prh)
                 goto check_dvar;
@@ -3526,13 +3598,28 @@ void Script_SetFocus(displayContextDef_t *dc, itemDef_t *item, const char **args
     }
 }
 
+/*
+ * Q3/CoD2 window LB flags. Two call sites in this file pin the values down:
+ * Display_HandleKey tests "overLB & 0x400" to start Scroll_ListBox_ThumbFunc
+ * (so 0x400 is the THUMB), and Item_ListBox_HandleKey maps 0x800 -> page up and
+ * 0x1000 -> page down (so those are the track halves). The decompiled body
+ * below originally returned 0x800 for the thumb and 0x400 for both track
+ * halves, which made a thumb click page up and a track click grab the thumb.
+ */
+#define WINDOW_LB_LEFTARROW  0x100
+#define WINDOW_LB_RIGHTARROW 0x200
+#define WINDOW_LB_THUMB      0x400
+#define WINDOW_LB_PGUP       0x800
+#define WINDOW_LB_PGDN       0x1000
+
 int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
 {
     byte *it = (byte *)item;
     int horzAlign = (((rectDef_t*)(it))->horzAlign);
     int vertAlign = (((rectDef_t*)(it))->vertAlign);
 
-    UI_FeederCount((*(int *)&((itemDef_t *)it)->special));
+    /* Pass float feeder id — int bitcast breaks WASM ABI (count always 0). */
+    UI_FeederCount(((itemDef_t *)it)->special);
     if (!Item_GetListBoxDef(item))
         return 0;
 
@@ -3574,7 +3661,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x800;
+            return WINDOW_LB_THUMB;
 
         rx = scrollX;
         ry = itemY + 16.0f + 1.0f;
@@ -3586,7 +3673,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x400;
+            return WINDOW_LB_PGUP;
 
         float thumbEnd = (float)thumbPos + 16.0f + 1.0f;
         rx = scrollX;
@@ -3599,7 +3686,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x400;
+            return WINDOW_LB_PGDN;
     } else {
 
         float scrollX = (((rectDef_t*)(it))->x) + (((rectDef_t*)(it))->w) - 16.0f;
@@ -3637,7 +3724,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x800;
+            return WINDOW_LB_THUMB;
 
         rx = scrollX;
         ry = itemY + 16.0f + 1.0f;
@@ -3649,7 +3736,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x400;
+            return WINDOW_LB_PGUP;
 
         float thumbEnd = (float)thumbPos + 16.0f + 1.0f;
         rx = scrollX;
@@ -3662,7 +3749,7 @@ int Item_ListBox_OverLB(itemDef_t *item, float x, float y)
         CalcScreenY(&cy, 4);
         CalcScreenPlacement(&rx, &ry, &rw, &rh, horzAlign, vertAlign);
         if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh)
-            return 0x400;
+            return WINDOW_LB_PGDN;
     }
 
     return 0;
@@ -3680,7 +3767,7 @@ qboolean Item_ListBox_HandleKey(displayContextDef_t *dc, itemDef_t *item, int ke
     if (!listPtr)
         return 0;
 
-    count = UI_FeederCount((*(int *)&((itemDef_t *)it)->special));
+    count = UI_FeederCount(((itemDef_t *)it)->special);
 
     {
         float compareX, compareY;
@@ -3851,7 +3938,7 @@ qboolean Item_ListBox_HandleKey(displayContextDef_t *dc, itemDef_t *item, int ke
 
             {
                 int oldCursorPos = (((listBoxDef_s*)(listPtr))->cursorPos[0]);
-                if (oldCursorPos < UI_FeederCount((*(int *)&((itemDef_t *)it)->special)))
+                if (oldCursorPos < UI_FeederCount(((itemDef_t *)it)->special))
                     Item_SetCursorPos(item, (((listBoxDef_s*)(listPtr))->cursorPos[0]));
             }
             goto do_feeder_selection;
@@ -4165,6 +4252,53 @@ static int Item_HandleKey_RectContainsPoint(byte *it, float cx, float cy)
     return 0;
 }
 
+/*
+ * ui_r_* string dvars are filled via setfromdvar from the engine enum, which
+ * copies the display label ("Auto", "1024x768"). atoi("Auto") is 0, so a naive
+ * index parse shows / advances from 640x480. Only treat pure digit strings as
+ * indices; otherwise match the enum label.
+ */
+static int Item_EnumIndexFromUiString(const char *enumString, const dvar_t *enumDvar)
+{
+    int enumCount;
+    const char **strings;
+    int i;
+    int pureNumeric;
+    int idx;
+
+    if (!enumDvar || enumDvar->type != 6)
+        return 0;
+
+    enumCount = enumDvar->domain.enumeration.stringCount;
+    strings = enumDvar->domain.enumeration.strings;
+    if (enumCount <= 0 || !strings)
+        return 0;
+
+    if (!enumString || !enumString[0])
+        return 0;
+
+    pureNumeric = 1;
+    for (i = 0; enumString[i]; ++i) {
+        if (enumString[i] < '0' || enumString[i] > '9') {
+            pureNumeric = 0;
+            break;
+        }
+    }
+
+    if (pureNumeric) {
+        idx = atoi(enumString);
+        if (idx >= 0 && idx < enumCount)
+            return idx;
+    }
+
+    for (i = 0; i < enumCount; ++i) {
+        if (strings[i] && I_stricmp(enumString, strings[i]) == 0)
+            return i;
+    }
+
+    return 0;
+}
+
 qboolean Item_HandleKey(displayContextDef_t *dc, itemDef_t *item, int key, qboolean down)
 {
     byte *it = (byte *)item;
@@ -4355,33 +4489,11 @@ qboolean Item_HandleKey(displayContextDef_t *dc, itemDef_t *item, int key, qbool
 
         struct dvar_s *enumDvar = Dvar_FindVar((*(const char **)&((itemDef_t *)it)->typeData.listBox));
         int current = 0;
-        if (enumDvar->type == 6) {
-
-            const char *enumString = Dvar_GetVariantString(item->dvar);
-            current = atoi(enumString);
-            if (current < 0 || current >= enumDvar->domain.enumeration.stringCount) {
-
-                int numStrings = enumDvar->domain.enumeration.stringCount;
-                current = 0;
-                if (numStrings > 0) {
-                    const char **strings = enumDvar->domain.enumeration.strings;
-                    int i;
-                    for (i = 0; i < numStrings; i++) {
-                        if (I_stricmp(enumString, strings[i]) == 0) {
-                            current = i;
-                            break;
-                        }
-                    }
-                }
-            }
+        int totalCount = 0;
+        if (enumDvar && enumDvar->type == 6) {
+            current = Item_EnumIndexFromUiString(Dvar_GetVariantString(item->dvar), enumDvar);
+            totalCount = enumDvar->domain.enumeration.stringCount;
         }
-
-        struct dvar_s *dv = Dvar_FindVar((*(const char **)&((itemDef_t *)it)->typeData.listBox));
-        int totalCount;
-        if (dv->type == 6)
-            totalCount = *(int *)((byte *)dv + 0x14);
-        else
-            totalCount = 0;
 
         int newIndex;
         if (!totalCount) {
@@ -4849,20 +4961,25 @@ void Menu_HandleKey(displayContextDef_t *dc, menuDef_t *menu, int key, qboolean 
         }
     }
 
+    /*
+     * iocod: mouse click ends edit + Display_MouseMove then falls through so the
+     * same click can activate the newly focused control. goto done swallowed it.
+     */
     if (g_editingField) {
         if (down) {
             if (!Item_TextField_HandleKey(dc, g_editItem, key)) {
                 g_editingField = 0;
                 g_editItem = NULL;
+                if (key < 0xc8 || key > 0xca)
+                    goto done;
+            } else if (key >= 0xc8 && key <= 0xca) {
+                g_editingField = 0;
+                g_editItem = NULL;
+                Display_MouseMove(dc, NULL, ((displayContextDef_t *)d)->cursorx, (((displayContextDef_s*)(d))->cursory));
+                /* fall through — do not goto done */
             } else {
-
-                if (key >= 0xc8 && key <= 0xca) {
-                    g_editingField = 0;
-                    g_editItem = NULL;
-                    Display_MouseMove(dc, NULL, ((displayContextDef_t *)d)->cursorx, (((displayContextDef_s*)(d))->cursory));
-                }
+                goto done;
             }
-            goto done;
         }
     }
 
@@ -4903,6 +5020,25 @@ void Menu_HandleKey(displayContextDef_t *dc, menuDef_t *menu, int key, qboolean 
     if (key == 0xcd || key == 0xce) {
         if (focusedItem && ((itemDef_s *)focusedItem)->type == 6) {
             goto dispatch_item;
+        }
+        /*
+         * Stock behaviour drops the wheel unless the focused item is the list,
+         * which relies on hover always winning focus. Overlapping header/column
+         * items in joinserver.menu can hold focus while the cursor sits inside
+         * the list, so fall back to whichever listbox is under the cursor.
+         */
+        for (i = itemCount - 1; i >= 0; i--) {
+            byte *it = *(byte **)((*(byte **)&((menuDef_t *)m)->items) + i * 4);
+            if (((itemDef_s *)it)->type != 6)
+                continue;
+            if (!(((itemDef_t *)it)->window.dynamicFlags[0] & 4))
+                continue;
+            if (!Item_HandleKey_RectContainsPoint(it,
+                                                  (float)((displayContextDef_t *)d)->cursorx,
+                                                  (float)(((displayContextDef_s*)(d))->cursory)))
+                continue;
+            Item_ListBox_HandleKey(dc, (itemDef_t *)it, key, down, 1);
+            return;
         }
         return;
     }
@@ -4959,7 +5095,7 @@ void Menu_HandleKey(displayContextDef_t *dc, menuDef_t *menu, int key, qboolean 
         return;
     }
 
-    if (key >= 0xc8 && key <= 0xc9) {
+    if (key == 0xc8) {
         if (!focusedItem)
             return;
 
@@ -5321,7 +5457,7 @@ void Item_Paint(displayContextDef_t *dc, itemDef_t *item)
 
                 const char *value = Dvar_GetVariantString(item->dvar);
                 int j;
-                text = "";
+                text = value && value[0] ? value : "";
                 for (j = 0; j < multiDef->count; j++) {
                     if (I_stricmp(value, multiDef->dvarStr[j]) == 0) {
                         text = multiDef->dvarList[j];
@@ -5333,7 +5469,7 @@ void Item_Paint(displayContextDef_t *dc, itemDef_t *item)
                 const char *value = Dvar_GetVariantString(item->dvar);
                 float fval = (float)atof(value);
                 int j;
-                text = "";
+                text = value && value[0] ? value : "";
                 for (j = 0; j < multiDef->count; j++) {
                     if (fval == multiDef->dvarValue[j]) {
                         text = multiDef->dvarList[j];
@@ -5358,24 +5494,9 @@ void Item_Paint(displayContextDef_t *dc, itemDef_t *item)
 
                     text = "";
                 } else {
-
-                    const char *enumString = Dvar_GetVariantString(item->dvar);
-                    int idx = atoi(enumString);
-                    int enumCount = dvar->domain.enumeration.stringCount;
+                    int idx = Item_EnumIndexFromUiString(Dvar_GetVariantString(item->dvar), dvar);
                     const char **strings = (const char **)dvar->domain.enumeration.strings;
-                    if (idx >= 0 && idx < enumCount) {
-                        text = strings[idx];
-                    } else {
-
-                        int j;
-                        text = strings[0];
-                        for (j = 0; j < enumCount; j++) {
-                            if (I_stricmp(enumString, strings[j]) == 0) {
-                                text = strings[j];
-                                break;
-                            }
-                        }
-                    }
+                    text = strings[idx];
                 }
             }
             Item_List_Paint(dc, item, text);
@@ -5513,6 +5634,26 @@ void Menu_PaintAll(displayContextDef_t *dc)
     int menuCount = ((displayContextDef_t *)d)->menuCount;
     int openCount = (((displayContextDef_s*)(d))->openMenuCount);
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * Stack membership implies the menu should paint.  OOB/script paths that
+     * only cleared WINDOW_VISIBLE (0x4) without removing the menu from the
+     * stack left open entries invisible → full black until ESC.
+     *
+     * Restore WINDOW_VISIBLE only when the menu is NOT mid–fade-out (0x10):
+     * Window_Paint clears flag 4 at the end of a fade-out cycle, and forcing
+     * it back would create a "sticky menu" that never finishes fading.
+     * Menus_Close always removes from the stack, so properly closed menus are
+     * never reached here.
+     */
+    for (i = 0; i < openCount; i++) {
+        void *om = *(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) + i * 4);
+        if (om && !(((menuDef_t *)om)->window.dynamicFlags[0] & 4)
+              && !(((menuDef_t *)om)->window.dynamicFlags[0] & 0x10))
+            Window_AddDynamicFlags(om, 4);
+    }
+#endif
+
     for (i = 0; i < menuCount; i++) {
         void *menu = *(void **)(((char *)d + offsetof(displayContextDef_t, Menus[0])) + i * 4);
 
@@ -5559,22 +5700,17 @@ void Menus_HandleOOBClick(displayContextDef_t *dc, menuDef_t *menu, int key, qbo
     byte *d = (byte *)dc;
     byte *m = (byte *)menu;
     int i, j, k;
+    int oobDismiss;
 
     if (!menu)
         return;
 
-    if (down) {
-        if (*(byte *)(m + 0xe7) & 2) {
-
-            if (((*(byte *)&((menuDef_t *)m)->window.dynamicFlags[0]) & 4) && (*(void **)&((menuDef_t *)m)->onClose)) {
-                byte tempItem[0x2a0];
-                *(void **)&(*(unsigned char *)&((itemDef_t *)tempItem)->parent) = menu;
-                Item_RunScript(dc, (itemDef_t *)tempItem, ((menuDef_t *)m)->onClose);
-            }
-            Window_RemoveDynamicFlags((void *)menu, 6);
-        }
-
-    }
+    /*
+     * CoD2 source: on WINDOW_OOB_CLICK only hide/close after searching. Closing
+     * first (menufix5) then failing the hit-test left an empty stack → full
+     * black until ESC. Defer dismiss until no target is found under the cursor.
+     */
+    oobDismiss = (down && (*(byte *)(m + 0xe7) & 2)) ? 1 : 0;
 
     int openCount = (((displayContextDef_s*)(d))->openMenuCount);
     float cx = (float)((displayContextDef_t *)d)->cursorx;
@@ -5646,11 +5782,18 @@ void Menus_HandleOOBClick(displayContextDef_t *dc, menuDef_t *menu, int key, qbo
         }
     }
 
+    /* True OOB dismiss only when nothing interactive is under the cursor. */
+    if (oobDismiss)
+        Menus_Close(dc, menu);
     goto count_visible;
 
 found:;
 
     openCount = (((displayContextDef_s*)(d))->openMenuCount);
+    /*
+     * CoD2: transfer focus only — do not Menus_Close the previous stacked menu.
+     * Closing the parent Options menu on the 2nd click caused full black until ESC.
+     */
     for (i = openCount - 1; i >= 0; i--)
         Window_RemoveDynamicFlags(*(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) + i * 4), 2);
 
@@ -5661,16 +5804,18 @@ found:;
 
 count_visible:;
 
-    int menuCount = ((displayContextDef_t *)d)->menuCount;
-    int visCount = 0;
-    for (i = 0; i < menuCount; i++) {
-        byte *cm = *(byte **)(((char *)d + offsetof(displayContextDef_t, Menus[0])) + i * 4);
-        if ((*(int *)(cm + 0xe8) & 0x4004) != 0)
-            visCount++;
-    }
+    {
+        int menuCount = ((displayContextDef_t *)d)->menuCount;
+        int visCount = 0;
+        for (i = 0; i < menuCount; i++) {
+            byte *cm = *(byte **)(((char *)d + offsetof(displayContextDef_t, Menus[0])) + i * 4);
+            if ((*(int *)(cm + 0xe8) & 0x4004) != 0)
+                visCount++;
+        }
 
-    if (visCount > 0) {
-        UI_Pause(0);
+        /* CoD2: UI_Pause(0) only when nothing visible. */
+        if (visCount == 0)
+            UI_Pause(0);
 
         openCount = (((displayContextDef_s*)(d))->openMenuCount);
         for (i = openCount - 1; i >= 0; i--) {
@@ -5701,8 +5846,6 @@ count_visible:;
                     CIN_StopCinematic(-((itemDef_t *)item)->window.ownerDraw);
             }
         }
-    } else {
-        UI_Pause(0);
     }
 }
 

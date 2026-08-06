@@ -379,17 +379,16 @@ int GetControlReference()
 {
     return 0;
 }
-int SND_SetChannelInfo()
-{
-    return 0;
-}
+/* SND_SetChannelInfo: implemented for real in src/web/web_snd_driver.c
+ * (see the comment above that definition for why this stub was removed). */
 int SND_SetEnvironmentEffects_f()
 {
     return 0;
 }
+extern int CM_NumInlineModels(void);
 int SV_GetBrushModelCount()
 {
-    return 0;
+    return CM_NumInlineModels();
 }
 
 int AUGraphGetCPULoad(void *graph, float *outLoad)
@@ -580,12 +579,17 @@ char g_phys_world[64] __attribute__((aligned(4))) = { 0 };
 
 char g_ri[64] __attribute__((aligned(4))) = { 0 };
 
-void GScr_LoadAnimScripts(void) {}
+extern void Com_Printf(const char *fmt, ...);
+
+void GScr_LoadAnimScripts(void)
+{
+    Com_Printf("GScr_LoadAnimScripts: stub — animscripts not loaded\n");
+}
 void GScr_PostResetTimeout(void) {}
 char g_sNextDmgTableId[64] __attribute__((aligned(4))) = { 0 };
 void G_SpawnTriggerHurt(int numBrushModels)
 {
-    (void)numBrushModels;
+    Com_Printf("G_SpawnTriggerHurt(%d): stub — auto trigger_hurt brushes skipped\n", numBrushModels);
 }
 char g_sv_running_ptr[64] __attribute__((aligned(4))) = { 0 };
 
@@ -674,8 +678,13 @@ char R_SmcStats_f[64] __attribute__((aligned(4))) = { 0 };
 int RunAppModalLoopForWindow() { return 0; }
 char RunStandardAlert[64] __attribute__((aligned(4))) = { 0 };
 
+/*
+ * AnimScript begin/end are NOT aliases of Scr_Begin/EndLoadScripts.
+ * Wiring them that way re-enters script loading after GScr_LoadScripts and
+ * Scr_BeginLoadScripts overwrites programBuffer — next Scr_InitSystem/LoadLevel
+ * hits WASM unreachable. Keep no-ops until a real animscript GSC loader lands.
+ */
 void Scr_BeginLoadAnimScripts(void) {}
-
 void Scr_EndLoadAnimScripts(void) {}
 
 char scrPlace[64] __attribute__((aligned(4))) = { 0 };
@@ -756,7 +765,20 @@ int D3DXGetShaderConstantTable(const void *function, void **constantTable)
     }
 #endif
     (void)function;
-/* wasm duplicate omitted: if */
+    if (constantTable) {
+        /* Empty constant table object — Materials parse `{ }` with zero consts.
+         * Must not leave *constantTable uninitialized (was "wasm duplicate omitted"). */
+        void **ct = (void **)calloc(1, 16);
+        if (!ct) {
+            *constantTable = NULL;
+            return (int)0x8007000E;
+        }
+        ct[0] = vtbl_CD3DXConstantTable;
+        ct[1] = (void *)1;
+        ct[2] = calloc(1, 32);
+        ct[3] = (void *)32;
+        *constantTable = ct;
+    }
     return 0;
 }
 

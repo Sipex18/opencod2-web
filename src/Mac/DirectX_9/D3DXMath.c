@@ -1,5 +1,6 @@
 #include "common_types.h"
 #include "imports.h"
+#include <stdio.h>
 
 bool COpenGLMatrix_Inverse(const COpenGLMatrix *_this, COpenGLMatrix *mResult);
 
@@ -135,8 +136,10 @@ int D3DXVec4Transform(float (*pOut)[10][16], const D3DXVECTOR4 *pV, const D3DXMA
 
 const char *DXGetErrorDescription9A(HRESULT hr)
 {
-    (void)hr;
-    return NULL;
+    /* Never return NULL — callers use it with printf %s (musl strnlen OOB). */
+    static char buf[64];
+    snprintf(buf, sizeof(buf), "HRESULT 0x%08X", (unsigned)hr);
+    return buf;
 }
 
 D3DXMATRIX *D3DXMatrixInverse(D3DXMATRIX *pOut, FLOAT *pDeterminant, const D3DXMATRIX *pM)

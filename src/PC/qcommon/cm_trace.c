@@ -19,7 +19,11 @@ clipHandle_t CM_TempBoxModel(const vec_t *mins, const vec_t *maxs, int contents)
 static int CM_TraceThroughTree(const vec_t *p2, trace_t *trace);
 int CM_ContentsOfModel(clipHandle_t handle);
 float CM_RadiusOfModel(clipHandle_t handle);
+#if defined(__EMSCRIPTEN__)
+static int CM_Trace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask);
+#else
 static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask);
+#endif
 int CM_BoxTrace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask);
 int CM_BoxSightTrace(int oldHitNum, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask);
 int CM_TransformedBoxTrace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask, const vec_t *origin, const vec_t *angles);
@@ -44,7 +48,7 @@ extern clipMap_t cm;
 extern void CM_CalcTraceEntents(TraceExtents *extents);
 extern int CM_BoxLeafnums(const vec_t *mins, const vec_t *maxs, int *list, int listsize, int *lastLeaf);
 extern short int CM_MeshTestInLeaf(const traceWork_t *tw, cLeaf_t *leaf, trace_t *trace);
-extern short int CM_TraceThroughAabbTree(const traceWork_t *tw, CollisionAabbTree *aabbTree, trace_t *trace);
+extern void CM_TraceThroughAabbTree(const traceWork_t *tw, CollisionAabbTree *aabbTree, trace_t *trace);
 extern void AnglesToAxis(vec3_t angles, float *axis);
 extern void MatrixTransformVector(const vec_t *in, const vec_t *matrix, vec_t *out);
 extern void MatrixTransposeTransformVector(const vec_t *in, const vec_t *matrix, vec_t *out);
@@ -382,14 +386,22 @@ static void CM_TraceLeaf(const traceWork_t *tw, cLeaf_t *leaf, trace_t *trace)
         CM_TraceLeafTerrain(tw, leaf, trace);
 }
 
+#if defined(__EMSCRIPTEN__)
+static int CM_Trace(trace_t *results, const vec_t *start, const vec_t *end,
+                    const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask)
+#else
 static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *start, const vec_t *end,
                                                          const vec_t *mins, const vec_t *maxs,
                                                          clipHandle_t model, int brushmask)
+#endif
 {
+    extern void Com_Printf(const char *fmt, ...);
     traceWork_t tw;
     cmodel_t *cmodel;
 
+    Com_Printf("CM_Trace: init\n");
     CM_InitTraceWork(&tw, start, end, mins, maxs, brushmask);
+    Com_Printf("CM_Trace: after InitTraceWork\n");
 
     if (model == CM_TEMP_BOX_MODEL) {
         CM_TraceThroughBrush(&tw, CM_BoxBrush(), results);
@@ -409,7 +421,9 @@ static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *star
         int leafCount;
         int i;
 
+        Com_Printf("CM_Trace: before BoxLeafnums\n");
         leafCount = CM_BoxLeafnums(tw.bounds[0], tw.bounds[1], leafs, 1024, &lastLeaf);
+        Com_Printf("CM_Trace: leafCount=%d — tracing leaves\n", leafCount);
         for (i = 0; i < leafCount; i++) {
             int leafIndex = leafs[i];
             if (leafIndex >= 0 && leafIndex < cm.numLeafs)
@@ -417,6 +431,7 @@ static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *star
             if (results->allsolid || results->fraction == 0.0f)
                 break;
         }
+        Com_Printf("CM_Trace: leaves done\n");
     }
 
     return 0;
@@ -466,8 +481,21 @@ clipHandle_t CM_TempBoxModel(const vec_t *mins, const vec_t *maxs, int contents)
 int CM_BoxTrace(trace_t *results, const vec_t *start, const vec_t *end,
                 const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask)
 {
+    extern void Com_Printf(const char *fmt, ...);
+
+    Com_Printf("CM_BoxTrace: enter model=%u mask=0x%x nodes=%p numLeafs=%d\n",
+               (unsigned)model, brushmask, (void *)cm.nodes, cm.numLeafs);
     CM_ClearTraceResult(results);
-    return CM_Trace(results, start, end, mins, maxs, model, brushmask);
+    if (!cm.nodes || !cm.leafs) {
+        Com_Printf("CM_BoxTrace: no clip nodes/leafs — skip\n");
+        return 0;
+    }
+    Com_Printf("CM_BoxTrace: before CM_Trace\n");
+    {
+        int rc = CM_Trace(results, start, end, mins, maxs, model, brushmask);
+        Com_Printf("CM_BoxTrace: done frac=%.3f\n", results->fraction);
+        return rc;
+    }
 }
 
 int CM_BoxSightTrace(int oldHitNum, const vec_t *start, const vec_t *end,

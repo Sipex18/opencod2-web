@@ -15,6 +15,22 @@ int fs_packFiles = 0x0;
 
 #ifdef __EMSCRIPTEN__
 #    include <ctype.h>
+#    include <stdio.h>
+#    include <stdlib.h>
+#    include <sys/stat.h>
+#    include "web/builtin_engine_assets.h"
+
+#    define FS_WEB_MEMFILE_SLOTS 16
+#    define FS_WEB_MEMFILE_TAG   ((pack_t *)1)
+
+typedef struct {
+    qboolean inUse;
+    const byte *data;
+    int size;
+    int offset;
+} webMemFile_t;
+
+static webMemFile_t fs_webMemFiles[FS_WEB_MEMFILE_SLOTS];
 #endif
 
 extern char fs_gamedir[256];
@@ -504,6 +520,16 @@ void FS_FCloseFile(fileHandle_t h)
 
     if (entry->streamed)
         Sys_EndStreamedFile(h);
+
+#ifdef __EMSCRIPTEN__
+    if (entry->zipFile == FS_WEB_MEMFILE_TAG) {
+        if (entry->zipFilePos >= 0 && entry->zipFilePos < FS_WEB_MEMFILE_SLOTS) {
+            fs_webMemFiles[entry->zipFilePos].inUse = 0;
+        }
+        Com_Memset(entry, 0, sizeof(fileHandleData_t));
+        return;
+    }
+#endif
 
     if (entry->zipFile) {
 
@@ -2592,6 +2618,7 @@ typedef struct webIwdFile_s {
 
 typedef struct webIwd_s {
     char path[256];
+    unzFile zipHandle;
     qboolean localized;
     int language;
     webIwdFile_t *files;
@@ -2600,7 +2627,102 @@ typedef struct webIwd_s {
 
 static webIwd_t *fs_webIwds;
 static qboolean fs_webStarted;
+
+static int FS_WebAllocMemFile(const byte *data, int size)
+{
+    int i;
+
+    for (i = 0; i < FS_WEB_MEMFILE_SLOTS; i++) {
+        if (!fs_webMemFiles[i].inUse) {
+            fs_webMemFiles[i].inUse = 1;
+            fs_webMemFiles[i].data = data;
+            fs_webMemFiles[i].size = size;
+            fs_webMemFiles[i].offset = 0;
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static qboolean FS_WebOpenBuiltinFile(const char *filename, fileHandle_t *file, int streamThread)
+{
+    const WebBuiltinAsset *asset;
+    fileHandle_t h;
+    fileHandleData_t *entry;
+    int slot;
+
+    asset = FS_WebFindBuiltinAsset(filename);
+    if (!asset) {
+        return 0;
+    }
+
+    slot = FS_WebAllocMemFile(asset->data, asset->size);
+    if (slot < 0) {
+        Com_Printf("FS_Web: no mem slot for builtin '%s'\n", filename);
+        return 0;
+    }
+
+    h = FS_HandleForFile(streamThread);
+    if (h <= 0) {
+        fs_webMemFiles[slot].inUse = 0;
+        return 0;
+    }
+
+    entry = &fsh[h];
+    Com_Memset(entry, 0, sizeof(*entry));
+    entry->zipFile = FS_WEB_MEMFILE_TAG;
+    entry->zipFilePos = slot;
+    entry->fileSize = asset->size;
+    entry->streamed = streamThread;
+    I_strncpyz(entry->name, filename, sizeof(entry->name));
+
+    if (file) {
+        *file = h;
+    }
+
+    Com_Printf("FS_Web: builtin fallback '%s'\n", filename);
+    return 1;
+}
 static qboolean fs_webLanguageSearchPathAdded[14];
+
+/*
+ * Native FS_BuildOSPath lives in #ifndef __EMSCRIPTEN__. Other TUs still call
+ * it after IWD index (profiles, stringed, etc.) — provide the same join here.
+ */
+void FS_BuildOSPath(const char *base, const char *game, const char *qpath, char *ospath)
+{
+    const char *useGame;
+    const char *useBase;
+    const char *useQpath;
+    int lenBase;
+    int lenGame;
+    int lenQpath;
+
+    useBase = (base && base[0]) ? base : "";
+    useGame = (game && game[0]) ? game : fs_gamedir;
+    if (!useGame || !useGame[0]) {
+        useGame = "main";
+    }
+    useQpath = qpath ? qpath : "";
+
+    lenBase = (int)strlen(useBase);
+    lenGame = (int)strlen(useGame);
+    lenQpath = (int)strlen(useQpath);
+
+    if (lenBase + lenGame + lenQpath + 3 > 255) {
+        Com_Error(0, "FS_BuildOSPath: os path length exceeded\n");
+        ospath[0] = '\0';
+        return;
+    }
+
+    if (lenBase > 0) {
+        Com_sprintf(ospath, 256, "%s/%s/%s", useBase, useGame, useQpath);
+    } else {
+        Com_sprintf(ospath, 256, "%s/%s", useGame, useQpath);
+    }
+    FS_ConvertPath(ospath);
+}
 
 static int FS_WebStringCompare(const char *a, const char *b)
 {
@@ -2725,6 +2847,8 @@ static void FS_WebDetectLocalizedIwd(webIwd_t *iwd, const char *path)
     }
 }
 
+static const char *FS_WebDvarString(const dvar_t *dvar, const char *fallback);
+
 static void FS_WebAddLanguageSearchPath(int language)
 {
     searchpath_t *search;
@@ -2746,22 +2870,181 @@ static void FS_WebAddLanguageSearchPath(int language)
     fs_webLanguageSearchPathAdded[language] = 1;
 }
 
+static void FS_WebIndexCachePath(char *out, int outSize, const char *iwdPath)
+{
+    Com_sprintf(out, outSize, "%s.webidx", iwdPath);
+}
+
+static long FS_WebFileSize(const char *path)
+{
+    struct stat st;
+
+    if (!path || !path[0]) {
+        return -1;
+    }
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+    return (long)st.st_size;
+}
+
+static qboolean FS_WebTryLoadIwdIndex(webIwd_t *iwd, const char *iwdPath, long iwdSize)
+{
+    char cachePath[512];
+    FILE *fp;
+    char line[512];
+    long cachedSize;
+    int count;
+    int loaded;
+    int i;
+
+    FS_WebIndexCachePath(cachePath, sizeof(cachePath), iwdPath);
+    fp = fopen(cachePath, "rb");
+    if (!fp) {
+        return 0;
+    }
+
+    if (!fgets(line, sizeof(line), fp) || strncmp(line, "C2WI1", 5) != 0) {
+        fclose(fp);
+        return 0;
+    }
+    if (!fgets(line, sizeof(line), fp) || sscanf(line, "%ld", &cachedSize) != 1 || cachedSize != iwdSize) {
+        fclose(fp);
+        return 0;
+    }
+    if (!fgets(line, sizeof(line), fp) || sscanf(line, "%d", &count) != 1 || count < 0 || count > 500000) {
+        fclose(fp);
+        return 0;
+    }
+
+    loaded = 0;
+    for (i = 0; i < count; i++) {
+        char name[256];
+        long unsigned int pos;
+        int size;
+        char *tab1;
+        char *tab2;
+        webIwdFile_t *file;
+
+        if (!fgets(line, sizeof(line), fp)) {
+            break;
+        }
+        /* strip CR/LF */
+        {
+            int n = (int)strlen(line);
+            while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+                line[--n] = '\0';
+            }
+        }
+        tab1 = strchr(line, '\t');
+        if (!tab1) {
+            break;
+        }
+        *tab1 = '\0';
+        tab2 = strchr(tab1 + 1, '\t');
+        if (!tab2) {
+            break;
+        }
+        *tab2 = '\0';
+        I_strncpyz(name, line, sizeof(name));
+        pos = (long unsigned int)strtoul(tab1 + 1, NULL, 10);
+        size = (int)strtol(tab2 + 1, NULL, 10);
+        if (!name[0] || size < 0) {
+            break;
+        }
+
+        file = (webIwdFile_t *)Z_MallocInternal(sizeof(*file));
+        Com_Memset(file, 0, sizeof(*file));
+        I_strncpyz(file->name, name, sizeof(file->name));
+        file->pos = pos;
+        file->size = size;
+        file->iwd = iwd;
+        file->next = iwd->files;
+        iwd->files = file;
+        loaded++;
+    }
+
+    fclose(fp);
+    if (loaded != count) {
+        /* partial/corrupt — caller will rebuild */
+        while (iwd->files) {
+            webIwdFile_t *n = iwd->files->next;
+            Z_FreeInternal(iwd->files);
+            iwd->files = n;
+        }
+        return 0;
+    }
+
+    Com_Printf("FS_Web: cached index %s (%d files)\n", iwdPath, loaded);
+    return 1;
+}
+
+static void FS_WebSaveIwdIndex(webIwd_t *iwd, long iwdSize, int fileCount)
+{
+    char cachePath[512];
+    FILE *fp;
+    webIwdFile_t *file;
+    webIwdFile_t **order;
+    int i;
+
+    if (fileCount <= 0) {
+        return;
+    }
+
+    FS_WebIndexCachePath(cachePath, sizeof(cachePath), iwd->path);
+    fp = fopen(cachePath, "wb");
+    if (!fp) {
+        Com_Printf("FS_Web: could not write index cache %s\n", cachePath);
+        return;
+    }
+
+    /* Linked list is reverse walk order; reverse so cache matches CD order. */
+    order = (webIwdFile_t **)Z_MallocInternal(sizeof(*order) * fileCount);
+    i = fileCount;
+    for (file = iwd->files; file && i > 0; file = file->next) {
+        order[--i] = file;
+    }
+
+    fprintf(fp, "C2WI1\n%ld\n%d\n", iwdSize, fileCount);
+    for (i = 0; i < fileCount; i++) {
+        fprintf(fp, "%s\t%lu\t%d\n", order[i]->name, order[i]->pos, order[i]->size);
+    }
+    fclose(fp);
+    Z_FreeInternal(order);
+}
+
 static void FS_WebAddIwd(const char *path)
 {
     unzFile uf;
     webIwd_t *iwd;
     int err;
+    int fileCount;
+    long iwdSize;
 
-    uf = unzOpen(path);
-    if (!uf) {
-        return;
-    }
-
+    iwdSize = FS_WebFileSize(path);
     iwd = (webIwd_t *)Z_MallocInternal(sizeof(*iwd));
     Com_Memset(iwd, 0, sizeof(*iwd));
     I_strncpyz(iwd->path, path, sizeof(iwd->path));
     FS_WebDetectLocalizedIwd(iwd, path);
 
+    if (iwdSize > 0 && FS_WebTryLoadIwdIndex(iwd, path, iwdSize)) {
+        iwd->next = fs_webIwds;
+        fs_webIwds = iwd;
+        if (iwd->localized) {
+            FS_WebAddLanguageSearchPath(iwd->language);
+        }
+        return;
+    }
+
+    Com_Printf("FS_Web: indexing %s\n", path);
+    uf = unzOpen(path);
+    if (!uf) {
+        Com_Printf("FS_Web: unzOpen failed for %s\n", path);
+        Z_FreeInternal(iwd);
+        return;
+    }
+
+    fileCount = 0;
     err = unzGoToFirstFile(uf);
     while (err == 0) {
         unz_file_info info;
@@ -2784,6 +3067,7 @@ static void FS_WebAddIwd(const char *path)
                 file->iwd = iwd;
                 file->next = iwd->files;
                 iwd->files = file;
+                fileCount++;
             }
         }
 
@@ -2794,6 +3078,11 @@ static void FS_WebAddIwd(const char *path)
 
     iwd->next = fs_webIwds;
     fs_webIwds = iwd;
+    Com_Printf("FS_Web: indexed %s (%d files)\n", path, fileCount);
+
+    if (iwdSize > 0) {
+        FS_WebSaveIwdIndex(iwd, iwdSize, fileCount);
+    }
 
     if (iwd->localized) {
         FS_WebAddLanguageSearchPath(iwd->language);
@@ -2832,6 +3121,11 @@ static void FS_WebShutdownIwds(void)
         webIwd_t *nextIwd = iwd->next;
         webIwdFile_t *file = iwd->files;
 
+        if (iwd->zipHandle) {
+            unzClose(iwd->zipHandle);
+            iwd->zipHandle = NULL;
+        }
+
         while (file) {
             webIwdFile_t *nextFile = file->next;
             Z_FreeInternal(file);
@@ -2852,6 +3146,9 @@ static void FS_WebShutdownIwds(void)
 static void FS_WebIndexIwds(void)
 {
     const char *game;
+    const char *base;
+    const char *home;
+    char path[512];
 
     FS_WebShutdownIwds();
 
@@ -2862,13 +3159,52 @@ static void FS_WebIndexIwds(void)
         game = "main";
     }
 
+    /* Relative cwd scans (legacy / preload layouts). */
     FS_WebScanIwdDirectory(".");
     FS_WebScanIwdDirectory("main");
     if (strcmp(game, "main")) {
         FS_WebScanIwdDirectory(game);
     }
 
+    /*
+     * Web shell mounts assets under fs_basepath (e.g. /opfs/cod2 or /cod2).
+     * Without these scans, remote/OPFS installs never index iw_*.iwd and boot
+     * fails with "Couldn't load default_mp.cfg".
+     */
+    base = FS_WebDvarString(fs_basepath, "");
+    home = FS_WebDvarString(fs_homepath, "");
+    Com_Printf("FS_Web: indexing IWDs (base='%s' home='%s' game='%s')\n", base, home, game);
+    if (base[0]) {
+        Com_sprintf(path, sizeof(path), "%s/main", base);
+        FS_ConvertPath(path);
+        FS_WebScanIwdDirectory(path);
+        if (strcmp(game, "main")) {
+            Com_sprintf(path, sizeof(path), "%s/%s", base, game);
+            FS_ConvertPath(path);
+            FS_WebScanIwdDirectory(path);
+        }
+    }
+    if (home[0] && I_stricmp(home, base)) {
+        Com_sprintf(path, sizeof(path), "%s/main", home);
+        FS_ConvertPath(path);
+        FS_WebScanIwdDirectory(path);
+    }
+
     fs_webStarted = 1;
+
+    /* Dedicated-style installs often lack localized_*.iwd; still allow English. */
+    if (fs_webIwds && !fs_webLanguageSearchPathAdded[0]) {
+        FS_WebAddLanguageSearchPath(0);
+    }
+
+    {
+        int n = 0;
+        webIwd_t *it;
+        for (it = fs_webIwds; it; it = it->next) {
+            n++;
+        }
+        Com_Printf("FS_Web: %d IWD(s) ready\n", n);
+    }
 }
 
 static const webIwdFile_t *FS_WebFindIwdFile(const char *qpath)
@@ -3105,7 +3441,16 @@ static int FS_FOpenFileRead_Internal(const char *filename, fileHandle_t *file, q
         const webIwdFile_t *iwdFile = FS_WebFindIwdFile(filename);
         unzFile zip;
 
+        if (FS_WebIsEngineBuiltinPath(filename)) {
+            if (FS_WebOpenBuiltinFile(filename, file, streamThread)) {
+                return fsh[*file].fileSize;
+            }
+        }
+
         if (!iwdFile) {
+            if (FS_WebOpenBuiltinFile(filename, file, streamThread)) {
+                return fsh[*file].fileSize;
+            }
             return -1;
         }
 
@@ -3114,20 +3459,24 @@ static int FS_FOpenFileRead_Internal(const char *filename, fileHandle_t *file, q
             return -1;
         }
 
-        zip = unzOpen(iwdFile->iwd->path);
-        if (!zip) {
-            return -1;
+        if (!iwdFile->iwd->zipHandle) {
+            iwdFile->iwd->zipHandle = unzOpen(iwdFile->iwd->path);
+            if (!iwdFile->iwd->zipHandle) {
+                Com_Printf("FS_Web: unzOpen failed for %s\n", iwdFile->iwd->path);
+                return -1;
+            }
         }
+
+        zip = iwdFile->iwd->zipHandle;
         if (unzSetCurrentFileInfoPosition(zip, iwdFile->pos) ||
             unzOpenCurrentFile(zip)) {
-            unzClose(zip);
             return -1;
         }
 
         entry = &fsh[h];
         Com_Memset(entry, 0, sizeof(*entry));
         entry->handleFiles.file.z = zip;
-        entry->handleFiles.unique = 1;
+        entry->handleFiles.unique = 0;
         entry->fileSize = iwdFile->size;
         entry->zipFilePos = (int)iwdFile->pos;
         entry->zipFile = (pack_t *)iwdFile->iwd;
@@ -3181,6 +3530,25 @@ int FS_Read(void *buffer, int len, fileHandle_t h)
     entry = FS_WebHandle(h);
     if (!entry || !buffer || len <= 0) {
         return 0;
+    }
+
+    if (entry->zipFile == FS_WEB_MEMFILE_TAG) {
+        webMemFile_t *mf;
+        int avail;
+        int n;
+
+        if (entry->zipFilePos < 0 || entry->zipFilePos >= FS_WEB_MEMFILE_SLOTS) {
+            return 0;
+        }
+
+        mf = &fs_webMemFiles[entry->zipFilePos];
+        avail = mf->size - mf->offset;
+        n = len < avail ? len : avail;
+        if (n > 0) {
+            Com_Memcpy(buffer, mf->data + mf->offset, n);
+            mf->offset += n;
+        }
+        return n;
     }
 
     if (entry->zipFile) {
@@ -3472,6 +3840,26 @@ const char **FS_ListFilteredFiles(searchpath_t *searchPath, const char *path, co
         FS_WebAppendSysList(items, &count, candidate, extension, filter, wantDirs);
     }
 
+    {
+        const char *base;
+        const char *home;
+
+        base = FS_WebDvarString(fs_basepath, "");
+        home = FS_WebDvarString(fs_homepath, base);
+
+        if (home[0]) {
+            Com_sprintf(candidate, sizeof(candidate), "%s/%s/%s", home, game, path ? path : "");
+            FS_ConvertPath(candidate);
+            FS_WebAppendSysList(items, &count, candidate, extension, filter, wantDirs);
+        }
+
+        if (base[0] && (!home[0] || I_stricmp(base, home))) {
+            Com_sprintf(candidate, sizeof(candidate), "%s/%s/%s", base, game, path ? path : "");
+            FS_ConvertPath(candidate);
+            FS_WebAppendSysList(items, &count, candidate, extension, filter, wantDirs);
+        }
+    }
+
     if (!filter) {
         FS_WebAppendIwdList(items, &count, path, extension);
     }
@@ -3742,6 +4130,67 @@ void FS_Startup(const char *gameName)
 
     I_strncpyz(fs_gamedir, gameName, sizeof(fs_gamedir));
     FS_WebIndexIwds();
+}
+
+/*
+ * SV_SpawnServer calls FS_Restart after FS_Shutdown+Com_Restart. Native impl
+ * lives under #ifndef __EMSCRIPTEN__; without this the wasm link stubs abort
+ * ("missing function: FS_Restart") as soon as Start New Server runs map.
+ */
+void FS_Restart(int checksumFeed)
+{
+    searchpath_t *search;
+
+    FS_Shutdown(0);
+    fs_checksumFeed = checksumFeed;
+
+    for (search = fs_searchpaths; search; search = (searchpath_t *)(uintptr_t)search->next) {
+        if (search->pack) {
+            search->pack->referenced = 0;
+        }
+    }
+
+    FS_Startup("main");
+    SEH_Init_StringEd();
+    SEH_UpdateLanguageInfo();
+    FS_SetRestrictions();
+
+    if (FS_ReadFile("default_mp.cfg", NULL) <= 0) {
+        if (lastValidBase[0]) {
+            FS_PureServerSetLoadedIwds("", "");
+            Dvar_SetString(fs_basepath, lastValidBase);
+            Dvar_SetString(fs_gameDirVar, lastValidGame);
+            lastValidBase[0] = 0;
+            lastValidGame[0] = 0;
+            Dvar_SetBool(fs_restrict, 0);
+            FS_Restart(checksumFeed);
+            Com_Error(1, "Invalid game folder\n");
+        }
+
+        Com_Error(0, "Couldn't load default_mp.cfg. Make sure the selected folder contains extracted main assets.\n");
+    }
+
+    if (I_stricmp(FS_WebDvarString(fs_gameDirVar, ""), lastValidGame) && !Com_SafeMode()) {
+        Cbuf_AddText("exec config_mp.cfg\n");
+    }
+
+    I_strncpyz(lastValidBase, FS_WebDvarString(fs_basepath, ""), sizeof(lastValidBase));
+    I_strncpyz(lastValidGame, FS_WebDvarString(fs_gameDirVar, ""), sizeof(lastValidGame));
+}
+
+qboolean FS_ConditionalRestart(int checksumFeed)
+{
+    const dvar_t *sv_running = *(const dvar_t **)imp_com_sv_running;
+
+    if (sv_running && sv_running->current.enabled)
+        return 0;
+
+    if ((fs_gameDirVar && fs_gameDirVar->modified) || fs_checksumFeed != checksumFeed) {
+        FS_Restart(checksumFeed);
+        return 1;
+    }
+
+    return 0;
 }
 
 void FS_InitFilesystem(void)

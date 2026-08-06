@@ -10,6 +10,8 @@ Automation helper:
 ## [Unreleased]
 
 ### Added
+- Ported beam tessellation helpers from donor r_beam.c: R_BeamTess_WidthHeuristic, R_BeamTess_ReadAtlasUV (material atlas frame UV lookup), R_BeamTess_SubmitRibbon, R_BeamTess_FromParams, R_BeamTess_FromCmd_Laser (command decode + width heuristic + BGRA color pack).
+- Ported shadow cookie projection pipeline from donor r_shadow_cookie.c: R_BuildShadowCookieProjection (ortho projection from sun dir + AABB), R_PickCastersByDistance (top-24 caster selection by dist/extent score), R_FlushShadowCookieAndAdapt (adaptive distance threshold with sc_blur/sc_shadowInRate/sc_shadowOutRate dvars), R_CullAabbBy5Planes (AABB frustum cull helper), R_GetShadowCookieProjection accessor.
 ### Changed
 - Added automated changelog entry helper script at tools/changelog_add.ps1.
 ### Deprecated

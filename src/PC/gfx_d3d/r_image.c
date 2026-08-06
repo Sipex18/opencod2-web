@@ -261,7 +261,8 @@ IDirect3DSurface9 *Image_GetSurface(GfxImage *image)
     return surface;
 }
 
-extern int R_AvailableTextureMemory(void);
+extern unsigned int R_AvailableTextureMemory(void);
+extern void Com_Printf(const char *fmt, ...);
 
 void R_SetPicmip(void)
 {
@@ -347,13 +348,27 @@ void R_SetPicmip(void)
 
 set_cvars:
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_SetPicmip set_cvars picmip=%d bump=%d spec=%d\n",
+               imageGlobals[2048], imageGlobals[2049], imageGlobals[2050]);
+#endif
     Cvar_SetValue = (void (*)(void *, int))ri.Dvar_SetInt;
     ri_Printf = *(void (**)(int, const char *, ...))&ri;
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_SetPicmip Dvar_SetInt=%p GetInt=%p\n",
+               (void *)ri.Dvar_SetInt, (void *)ri.Dvar_GetInt);
+#endif
     Cvar_SetValue(*(const dvar_t **)imp_r_picmip, imageGlobals[2048]);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_SetPicmip after SetInt picmip\n");
+#endif
     Cvar_SetValue(*(const dvar_t **)imp_r_picmip_bump, imageGlobals[2049]);
     Cvar_SetValue(*(const dvar_t **)imp_r_picmip_spec, imageGlobals[2050]);
-    ri_Printf(0, "Using picmip %i on most textures, %i on normal maps, and %i on spec maps",
+    ri_Printf(0, "Using picmip %i on most textures, %i on normal maps, and %i on spec maps\n",
               imageGlobals[2048], imageGlobals[2049], imageGlobals[2050]);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_SetPicmip done\n");
+#endif
 }
 
 static int imagecompare(GfxImage *image1, GfxImage *image2)
@@ -365,7 +380,6 @@ static int imagecompare(GfxImage *image1, GfxImage *image2)
     return image1->cardMemory.platform[0] < image2->cardMemory.platform[0];
 }
 
-extern void Com_Printf(const char *fmt, ...);
 extern int R_WatersEquivalent(const water_t *a, const water_t *b);
 extern void R_CreateWaterSetup(const water_t *water, int index, water_t *dest);
 
@@ -910,12 +924,21 @@ void R_InitImages(void)
 
     R_SetPicmip();
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_InitImages before $white\n");
+#endif
     {
         GfxImage *whiteImage = Image_Register("$white", 1, 0);
         rgp = (r_global_permanent_t *)imp_rgp;
         rgp->whiteImage = whiteImage;
     }
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_InitImages after $white\n");
+#endif
     rgp->blackImage = Image_Register("$black", 1, 0);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: R_InitImages after $black\n");
+#endif
 
     rendererType = r_rendererInUse->current.integer;
     if (rendererType == 2) {
@@ -924,10 +947,19 @@ void R_InitImages(void)
     } else {
 
         rgp->identityNormalMapImage = Image_Register("$identitynormalmap", 1, 0);
+#ifdef __EMSCRIPTEN__
+        Com_Printf("webdbg: R_InitImages after $identitynormalmap\n");
+#endif
         rgp->specularityImage = Image_Register("$specularity", 1, 0);
+#ifdef __EMSCRIPTEN__
+        Com_Printf("webdbg: R_InitImages after $specularity\n");
+#endif
         rgp->lightGridWeightsImage[0] = Image_Register("$lightgridweights0", 1, 0);
         rgp->lightGridWeightsImage[1] = Image_Register("$lightgridweights1", 1, 0);
         rgp->lightmapWeightsImage = Image_Register("$lightmapweights", 1, 0);
+#ifdef __EMSCRIPTEN__
+        Com_Printf("webdbg: R_InitImages after weight images\n");
+#endif
     }
 
     RB_InitImages();

@@ -304,7 +304,16 @@ int G_DObjCalcBone(gentity_t *ent, int boneIndex)
 
     calcPoseFunc = HANDLER_CALCPOSE((_ENT(ent)->handler));
     if (calcPoseFunc) {
+#ifdef __EMSCRIPTEN__
+        {
+            extern int printf(const char *, ...);
+            printf("SYNC-DBG: G_DObjCalcBone calcPoseFunc=%p handler=%d\n", (void *)calcPoseFunc, _ENT(ent)->handler);
+        }
+#endif
         calcPoseFunc(ent, partBits);
+#ifdef __EMSCRIPTEN__
+        puts("SYNC-DBG: G_DObjCalcBone after calcPoseFunc");
+#endif
     }
 
     SV_DObjCalcSkel(ent, partBits);
@@ -432,6 +441,7 @@ unsigned char G_SetAngle(gentity_t *ent, const vec_t *angle)
     p[0] = angle[0];
     p[1] = angle[1];
     p[2] = angle[2];
+    return 0;
 }
 
 qboolean G_XModelBad(int index)
@@ -456,6 +466,7 @@ unsigned char G_SetOrigin(gentity_t *ent, const vec_t *origin)
     p[0] = origin[0];
     p[1] = origin[1];
     p[2] = origin[2];
+    return 0;
 }
 
 unsigned char G_PlaySoundAlias(gentity_t *ent, int index)
@@ -791,13 +802,17 @@ unsigned char G_FreeEntity(gentity_t *ed)
     int i;
     gentity_t *ent;
 
+    Com_Printf("webdbg: G_FreeEntity enter ed=%p\n", (void *)ed);
     G_EntUnlink(ed);
+    Com_Printf("webdbg: G_FreeEntity after G_EntUnlink\n");
 
     while (((gentity_t *)(uintptr_t)_ENT(ed)->tagChildren)) {
         G_EntUnlink(((gentity_t *)(uintptr_t)_ENT(ed)->tagChildren));
     }
 
+    Com_Printf("webdbg: G_FreeEntity before SV_UnlinkEntity\n");
     SV_UnlinkEntity(ed);
+    Com_Printf("webdbg: G_FreeEntity after SV_UnlinkEntity\n");
 
     {
         void *tree = SV_DObjGetTree(ed);
@@ -806,7 +821,9 @@ unsigned char G_FreeEntity(gentity_t *ed)
         }
     }
 
+    Com_Printf("webdbg: G_FreeEntity before Com_SafeServerDObjFree\n");
     Com_SafeServerDObjFree((_ENT(ed)->s.number));
+    Com_Printf("webdbg: G_FreeEntity after Com_SafeServerDObjFree num=%d\n", (_ENT(ed)->s.number));
 
     entnum = (_ENT(ed)->s.number);
 
@@ -865,7 +882,9 @@ unsigned char G_FreeEntity(gentity_t *ed)
         CORPSE_ENTNUM(corpseIdx) = -1;
     }
 
+    Com_Printf("webdbg: G_FreeEntity before Scr_FreeEntity\n");
     Scr_FreeEntity(ed);
+    Com_Printf("webdbg: G_FreeEntity after Scr_FreeEntity\n");
 
     {
         int useCount = (_ENT(ed)->useCount);
@@ -885,6 +904,7 @@ unsigned char G_FreeEntity(gentity_t *ed)
 
         (_ENT(ed)->useCount) = useCount + 1;
     }
+    Com_Printf("webdbg: G_FreeEntity done\n");
 }
 
 int G_GetFreePlayerCorpseIndex(void)

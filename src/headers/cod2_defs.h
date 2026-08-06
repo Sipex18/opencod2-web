@@ -2919,7 +2919,7 @@ typedef OpaqueAUGraph * AUGraph;
 
 typedef OpaqueAudioConverter * AudioConverterRef;
 
-typedef void (*BG_RegisterWeapon)();
+typedef void (*BG_RegisterWeapon)(int weapIndex);
 
 typedef unsigned char BYTE;
 
@@ -2929,8 +2929,9 @@ typedef unsigned char Bool;
 
 typedef unsigned char Boolean;
 
-typedef unsigned int (*BuiltinFunction)();
-typedef unsigned int (*BuiltinMethod)();
+/* WASM: builtins/methods return via Scr_Add*; must be void (not unsigned int). */
+typedef void (*BuiltinFunction)(void);
+typedef void (*BuiltinMethod)();
 typedef unsigned char Bytef;
 
 typedef void *CDisplayList;
@@ -6459,6 +6460,7 @@ struct XAnimParts_s {
     float framerate;
     float frequency;
     byte notifyCount;
+    char assetType;
     short int boneCount;
     short unsigned int *names;
     char *simpleQuatBits;

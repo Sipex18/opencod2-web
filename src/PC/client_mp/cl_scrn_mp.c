@@ -31,7 +31,7 @@ const char *szShotName[] = {
 typedef void (*re_void_func)(void);
 typedef void (*re_int_func)(int);
 typedef void (*re_int2_func)(int, int);
-typedef void (*re_int4_func)(int, int, int, int);
+typedef void (*re_clear_screen_func)(int whichToClear, const float *color, float depth, int stencil);
 typedef void (*re_floatp_func)(float *);
 typedef float (*re_font_height_func)(int, float);
 typedef int (*re_font_iheight_func)(int);
@@ -40,6 +40,15 @@ typedef void (*re_draw_console_func)(const short int *, int, int, float, float, 
 typedef void (*re_write_cubemap_func)(const char *, int, float, float);
 
 #define RE_FUNC(re, offset, type) ((type)(*(void **)((byte *)(re) + (offset))))
+
+/* ClearScreen / R_AddCmdClearScreen: wasm call_indirect requires the float
+ * depth parameter — casting to void(int,int,int,int) traps with
+ * "function signature mismatch". */
+static void SCR_ClearScreenBlack(refexport_t *re)
+{
+    if (re && re->ClearScreen)
+        re->ClearScreen(1, (const float *)ptr_195f58c, 0.0f, 0);
+}
 
 extern void Com_Printf(const char *fmt, ...);
 extern void Com_Error(int code, const char *fmt, ...);
@@ -274,6 +283,15 @@ static void SCR_UpdateFrame(void)
     }
 
     RE_FUNC(re, 0xa8, re_void_func)();
+#ifdef __EMSCRIPTEN__
+    {
+        static int begin_dbg;
+        if (begin_dbg < 2) {
+            Com_Printf("webdbg: SCR after BeginFrame\n");
+            begin_dbg++;
+        }
+    }
+#endif
     CL_ClearScene();
     CL_ResetSkeletonCache(0);
 
@@ -281,14 +299,32 @@ static void SCR_UpdateFrame(void)
     int gameLoaded = (((clientStatic_t *)(cls))->uiStarted);
 
     if (!gameLoaded) {
-        RE_FUNC(re, 0xc8, re_int4_func)(1, (int)(unsigned int)ptr_195f58c, 0, 0);
+        SCR_ClearScreenBlack(re);
+#ifdef __EMSCRIPTEN__
+        {
+            static int clear_dbg;
+            if (clear_dbg < 2) {
+                Com_Printf("webdbg: SCR after ClearScreen (no UI)\n");
+                clear_dbg++;
+            }
+        }
+#endif
         goto end_frame;
     }
 
     clientConnection_t *clc = *(clientConnection_t **)clc_ptr_195ee8c;
     int connstate = clc->state;
     if (connstate != 8 && connstate != 1) {
-        RE_FUNC(re, 0xc8, re_int4_func)(1, (int)(unsigned int)ptr_195f58c, 0, 0);
+        SCR_ClearScreenBlack(re);
+#ifdef __EMSCRIPTEN__
+        {
+            static int clear_dbg2;
+            if (clear_dbg2 < 2) {
+                Com_Printf("webdbg: SCR after ClearScreen (menu)\n");
+                clear_dbg2++;
+            }
+        }
+#endif
     }
 
     UI_UpdateTime((((clientStatic_t *)(cls))->realtime));
@@ -436,13 +472,49 @@ check_ui:
 
 end_frame_draw:
     re = re_ptr_195eca8;
+#ifdef __EMSCRIPTEN__
+    {
+        static int post_ui_dbg;
+        if (post_ui_dbg < 3) {
+            Com_Printf("webdbg: SCR before DoneRenderingViews #%d\n", post_ui_dbg);
+            post_ui_dbg++;
+        }
+    }
+#endif
     RE_FUNC(re, 0xbc, re_void_func)();
+#ifdef __EMSCRIPTEN__
+    {
+        static int post_drv_dbg;
+        if (post_drv_dbg < 3) {
+            Com_Printf("webdbg: SCR before Con_DrawConsole #%d\n", post_drv_dbg);
+            post_drv_dbg++;
+        }
+    }
+#endif
     Con_DrawConsole();
+#ifdef __EMSCRIPTEN__
+    {
+        static int post_con_dbg;
+        if (post_con_dbg < 3) {
+            Com_Printf("webdbg: SCR before EndFrame #%d\n", post_con_dbg);
+            post_con_dbg++;
+        }
+    }
+#endif
     {
         re_void_func fn = re->EndFrame;
         if (fn)
             fn();
     }
+#ifdef __EMSCRIPTEN__
+    {
+        static int post_ef_dbg;
+        if (post_ef_dbg < 3) {
+            Com_Printf("webdbg: SCR after EndFrame #%d\n", post_ef_dbg);
+            post_ef_dbg++;
+        }
+    }
+#endif
     Sys_IsMainThread();
     return;
 
@@ -461,6 +533,12 @@ end_frame:
 
 void SCR_UpdateScreenInternal(void)
 {
+#ifdef __EMSCRIPTEN__
+    static int scr_dbg;
+    if (scr_dbg < 3) {
+        Com_Printf("webdbg: SCR_UpdateScreenInternal enter #%d\n", scr_dbg);
+    }
+#endif
     if (updateScreenCalled)
         return;
 
@@ -477,7 +555,18 @@ void SCR_UpdateScreenInternal(void)
         return;
 
     updateScreenCalled = 1;
+#ifdef __EMSCRIPTEN__
+    if (scr_dbg < 3) {
+        Com_Printf("webdbg: SCR_UpdateFrame begin #%d\n", scr_dbg);
+    }
+#endif
     SCR_UpdateFrame();
+#ifdef __EMSCRIPTEN__
+    if (scr_dbg < 3) {
+        Com_Printf("webdbg: SCR_UpdateFrame done #%d\n", scr_dbg);
+        scr_dbg++;
+    }
+#endif
     updateScreenCalled = 0;
 }
 

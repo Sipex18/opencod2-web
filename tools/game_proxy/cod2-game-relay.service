@@ -1,0 +1,18 @@
+[Unit]
+Description=CoD2 web WebSocket-to-UDP game relay
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/cod2-game-relay
+ExecStart=/usr/bin/python3 /opt/cod2-game-relay/relay.py
+Restart=on-failure
+RestartSec=3
+Environment=RELAY_PORT=20712
+Environment=RELAY_HOST=127.0.0.1
+Environment=COD2_PORT_MIN=28960
+Environment=COD2_PORT_MAX=29970
+
+[Install]
+WantedBy=multi-user.target

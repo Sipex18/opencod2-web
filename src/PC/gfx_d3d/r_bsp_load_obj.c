@@ -18,7 +18,8 @@ COD2_ASSERT_FIELD(struct r_globals_load_t, portalVerts, 12);
 COD2_ASSERT_FIELD(struct r_globals_load_t, aabbTrees, 16);
 COD2_ASSERT_FIELD(struct r_globals_load_t, aabbTreeCount, 20);
 
-#ifndef __EMSCRIPTEN__
+/* On-disk BSP structs needed by world loaders (listen/host map spawn). */
+#if 1 /* was: #ifndef __EMSCRIPTEN__ */
 typedef struct daabbnode_ondisk_s {
     float mins[3];
     float maxs[3];
@@ -786,7 +787,8 @@ finish:
     Hunk_ClearTempMemory();
 }
 
-#ifndef __EMSCRIPTEN__
+/* BSP world loaders required for map spawn (listen/host). */
+#if 1 /* was: #ifndef __EMSCRIPTEN__ */
 
 static void R_LoadNodesAndLeafs_impl(const byte *loadState)
 {
@@ -1181,7 +1183,7 @@ void __attribute_regparm__(1) R_LoadCullGroups(const int *load)
     R_LoadCullGroups_impl(load);
 }
 
-#endif
+#endif /* BSP world loaders */
 
 static int R_LoadSurfacesLump(const GfxBspLoad *load, int lumpOfs, int elemSize, const byte **outData)
 {

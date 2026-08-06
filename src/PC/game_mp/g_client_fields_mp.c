@@ -5,18 +5,18 @@ extern const char *va(const char *fmt, ...);
 extern void Scr_Error(const char *msg);
 extern unsigned short Scr_GetConstString(int index);
 extern const char *SL_ConvertToString(int stringId);
-extern unsigned int Scr_AddConstString(int stringId);
+extern void Scr_AddConstString(int stringId);
 extern int Scr_GetInt(int index);
 extern const char *Scr_GetString(int index);
 extern float Scr_GetFloat(int index);
-extern unsigned int Scr_AddFloat(float value);
-extern unsigned int Scr_AddInt(int value);
-extern unsigned int Scr_AddString(const char *str);
+extern void Scr_AddFloat(float value);
+extern void Scr_AddInt(int value);
+extern void Scr_AddString(const char *str);
 extern void Scr_AddClassField(int classnum, const char *name, unsigned int offset);
 extern void Scr_SetGenericField(gclient_t *client, int type, int offset);
 extern void Scr_GetGenericField(gclient_t *client, int type, int offset);
 extern void ClientUserinfoChanged(int clientNum);
-extern int CalculateRanks(void);
+extern void CalculateRanks(void);
 extern int GScr_GetStatusIconIndex(const char *name);
 extern int GScr_GetHeadIconIndex(const char *name);
 extern void SV_GetConfigstring(int index, char *buf, int bufSize);
@@ -27,23 +27,23 @@ extern byte g_entities_ptr[];
 #define SCR_CONST() ((const scr_const_t *)imp_scr_const)
 
 static void ClientScr_ReadOnly(gclient_t *pSelf, const client_fields_s *pField);
-static int ClientScr_SetSessionTeam(gclient_t *pSelf, const client_fields_s *pField);
-static unsigned int ClientScr_GetSessionTeam(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_SetSessionTeam(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_GetSessionTeam(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetSessionState(gclient_t *pSelf, const client_fields_s *pField);
-static unsigned int ClientScr_GetSessionState(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_GetSessionState(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetMaxHealth(gclient_t *pSelf, const client_fields_s *pField);
-static int ClientScr_SetScore(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_SetScore(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetSpectatorClient(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetStatusIcon(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_GetStatusIcon(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetHeadIcon(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_GetHeadIcon(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetHeadIconTeam(gclient_t *pSelf, const client_fields_s *pField);
-static unsigned int ClientScr_GetHeadIconTeam(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_GetHeadIconTeam(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetArchiveTime(gclient_t *pSelf, const client_fields_s *pField);
-static unsigned int ClientScr_GetArchiveTime(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_GetArchiveTime(gclient_t *pSelf, const client_fields_s *pField);
 static void ClientScr_SetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField);
-static unsigned int ClientScr_GetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField);
+static void ClientScr_GetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField);
 void GScr_AddFieldsForClient(void);
 void Scr_SetClientField(gclient_t *client, int offset);
 void Scr_GetClientField(gclient_t *client, int offset);
@@ -84,12 +84,13 @@ static void ClientScr_ReadOnly(gclient_t *pSelf, const client_fields_s *pField)
     Scr_Error(va("player field %s is read-only", pField->name));
 }
 
-static int ClientScr_SetSessionTeam(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_SetSessionTeam(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
     unsigned short str = Scr_GetConstString(0);
     const scr_const_t *sc = SCR_CONST();
 
+    (void)pField;
     if (str == sc->axis) {
         client->sess.cs.team = 1;
     } else if (str == sc->allies) {
@@ -103,25 +104,31 @@ static int ClientScr_SetSessionTeam(gclient_t *pSelf, const client_fields_s *pFi
     }
 
     ClientUserinfoChanged(ClientNum(client));
-    return CalculateRanks();
+    CalculateRanks();
 }
 
-static unsigned int ClientScr_GetSessionTeam(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_GetSessionTeam(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
     int team = client->sess.cs.team;
 
+    (void)pField;
     switch (team) {
     case 1:
-        return Scr_AddConstString(SCR_CONST()->axis);
+        Scr_AddConstString(SCR_CONST()->axis);
+        return;
     case 2:
-        return Scr_AddConstString(SCR_CONST()->allies);
+        Scr_AddConstString(SCR_CONST()->allies);
+        return;
     case 3:
-        return Scr_AddConstString(SCR_CONST()->spectator);
+        Scr_AddConstString(SCR_CONST()->spectator);
+        return;
     case 0:
-        return Scr_AddConstString(SCR_CONST()->none);
+        Scr_AddConstString(SCR_CONST()->none);
+        return;
     default:
-        return team;
+        Scr_AddInt(team);
+        return;
     }
 }
 
@@ -145,22 +152,28 @@ static void ClientScr_SetSessionState(gclient_t *pSelf, const client_fields_s *p
     }
 }
 
-static unsigned int ClientScr_GetSessionState(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_GetSessionState(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
     int state = client->sess.sessionState;
 
+    (void)pField;
     switch (state) {
     case 0:
-        return Scr_AddConstString(SCR_CONST()->playing);
+        Scr_AddConstString(SCR_CONST()->playing);
+        return;
     case 1:
-        return Scr_AddConstString(SCR_CONST()->dead);
+        Scr_AddConstString(SCR_CONST()->dead);
+        return;
     case 2:
-        return Scr_AddConstString(SCR_CONST()->spectator);
+        Scr_AddConstString(SCR_CONST()->spectator);
+        return;
     case 3:
-        return Scr_AddConstString(SCR_CONST()->intermission);
+        Scr_AddConstString(SCR_CONST()->intermission);
+        return;
     default:
-        return state;
+        Scr_AddInt(state);
+        return;
     }
 }
 
@@ -190,11 +203,12 @@ static void ClientScr_SetMaxHealth(gclient_t *pSelf, const client_fields_s *pFie
     }
 }
 
-static int ClientScr_SetScore(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_SetScore(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
+    (void)pField;
     client->sess.score = Scr_GetInt(0);
-    return CalculateRanks();
+    CalculateRanks();
 }
 
 static void ClientScr_SetSpectatorClient(gclient_t *pSelf, const client_fields_s *pField)
@@ -274,22 +288,27 @@ static void ClientScr_SetHeadIconTeam(gclient_t *pSelf, const client_fields_s *p
     }
 }
 
-static unsigned int ClientScr_GetHeadIconTeam(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_GetHeadIconTeam(gclient_t *pSelf, const client_fields_s *pField)
 {
     int clientNum = ClientNum(pSelf);
     gentity_s *ent = &G_Entities()[clientNum];
     int team = ((ent)->s.iHeadIconTeam);
     const scr_const_t *sc = SCR_CONST();
 
+    (void)pField;
     switch (team) {
     case 2:
-        return Scr_AddConstString(sc->allies);
+        Scr_AddConstString(sc->allies);
+        return;
     case 3:
-        return Scr_AddConstString(sc->spectator);
+        Scr_AddConstString(sc->spectator);
+        return;
     case 1:
-        return Scr_AddConstString(sc->axis);
+        Scr_AddConstString(sc->axis);
+        return;
     default:
-        return Scr_AddConstString(sc->none);
+        Scr_AddConstString(sc->none);
+        return;
     }
 }
 
@@ -299,22 +318,25 @@ static void ClientScr_SetArchiveTime(gclient_t *pSelf, const client_fields_s *pF
     client->sess.archiveTime = (int)(Scr_GetFloat(0) * 1000.0f);
 }
 
-static unsigned int ClientScr_GetArchiveTime(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_GetArchiveTime(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
-    return Scr_AddFloat((float)client->sess.archiveTime * 0.001f);
+    (void)pField;
+    Scr_AddFloat((float)client->sess.archiveTime * 0.001f);
 }
 
 static void ClientScr_SetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
+    (void)pField;
     client->sess.psOffsetTime = Scr_GetInt(0);
 }
 
-static unsigned int ClientScr_GetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField)
+static void ClientScr_GetPSOffsetTime(gclient_t *pSelf, const client_fields_s *pField)
 {
     gclient_s *client = (gclient_s *)pSelf;
-    return Scr_AddInt(client->sess.archiveTime);
+    (void)pField;
+    Scr_AddInt(client->sess.archiveTime);
 }
 
 void GScr_AddFieldsForClient(void)

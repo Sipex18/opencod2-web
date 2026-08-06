@@ -1,6 +1,8 @@
 #include "common_types.h"
 #include "imports.h"
 
+#include <string.h>
+
 extern const dvar_t *r_ignore;
 extern const dvar_t *r_overbrightBits;
 extern const dvar_t *r_gamma;
@@ -174,12 +176,137 @@ static const char *s_displayModeNames[] = {
     "640x480",
     "800x600",
     "1024x768",
+    "1280x720",
+    "1280x1024",
+    "1600x900",
+    "1920x1080",
+    "Auto",
     0,
 };
-static const char *s_displayRefreshNames[] = {
-    "60",
-    0,
+static const char *s_allDisplayRefreshNames[] = {
+    "60", "75", "120", "144", "165", "240", 0
 };
+static const int s_allDisplayRefreshValues[] = {
+    60, 75, 120, 144, 165, 240
+};
+/* Mutable filtered table pointed at by r_displayRefresh domain. */
+static const char *s_displayRefreshNames[8];
+
+static void R_BuildDisplayRefreshNames(int maxHz)
+{
+    int count = 0;
+    int i;
+
+    if (maxHz < 60)
+        maxHz = 60;
+
+    for (i = 0; s_allDisplayRefreshNames[i]; ++i) {
+        if (s_allDisplayRefreshValues[i] <= maxHz + 5) {
+            s_displayRefreshNames[count++] = s_allDisplayRefreshNames[i];
+        }
+    }
+    if (count == 0)
+        s_displayRefreshNames[count++] = s_allDisplayRefreshNames[0];
+    s_displayRefreshNames[count] = 0;
+}
+
+static void R_InitDisplayRefreshNames(void)
+{
+    int maxHz = 240;
+#ifdef __EMSCRIPTEN__
+    extern int Web_GetMonitorMaxHz(void);
+    {
+        int detected = Web_GetMonitorMaxHz();
+        /* 0 = not measured yet — keep full list until JS finishes rAF sample. */
+        if (detected >= 60)
+            maxHz = detected;
+    }
+#else
+    maxHz = 240;
+#endif
+    R_BuildDisplayRefreshNames(maxHz);
+}
+
+#ifdef __EMSCRIPTEN__
+void R_ApplyMonitorRefreshLimit(void)
+{
+    extern int Web_GetMonitorMaxHz(void);
+    extern void Dvar_UpdateEnumDomain(const dvar_t *dvar, const char **stringTable);
+    extern void Dvar_SetInt(const dvar_t *dvar, int value);
+    extern Bool Dvar_HasLatchedValue(const dvar_t *dvar);
+    extern void Com_Printf(const char *fmt, ...);
+    extern const dvar_t *r_displayRefresh;
+    int maxHz;
+    int newCount;
+    int i;
+    const char *wantLabel;
+    const char *latchLabel;
+    int wantIdx;
+    int latchIdx = -1;
+
+    if (!r_displayRefresh)
+        return;
+
+    maxHz = Web_GetMonitorMaxHz();
+    if (maxHz < 60) {
+        return;
+    }
+
+    /*
+     * Capture both current AND latched labels before the domain rebuild.
+     * Dvar_UpdateEnumDomain sets latched = current, losing the latched
+     * intent (e.g. config archived "144" while current is still "60").
+     * Preserve whichever is more meaningful.
+     */
+    wantLabel = NULL;
+    wantIdx = r_displayRefresh->current.integer;
+    if (wantIdx >= 0 &&
+        wantIdx < r_displayRefresh->domain.enumeration.stringCount) {
+        wantLabel = r_displayRefresh->domain.enumeration.strings[wantIdx];
+    }
+
+    latchLabel = NULL;
+    if (Dvar_HasLatchedValue(r_displayRefresh)) {
+        latchIdx = r_displayRefresh->latched.integer;
+        if (latchIdx >= 0 &&
+            latchIdx < r_displayRefresh->domain.enumeration.stringCount) {
+            latchLabel = r_displayRefresh->domain.enumeration.strings[latchIdx];
+        }
+    }
+
+    R_BuildDisplayRefreshNames(maxHz);
+    Dvar_UpdateEnumDomain(r_displayRefresh, s_displayRefreshNames);
+    newCount = r_displayRefresh->domain.enumeration.stringCount;
+    if (newCount <= 0)
+        return;
+
+    /* Prefer restoring the latched label (user's archived intent) over current. */
+    if (latchLabel) {
+        for (i = 0; i < newCount; ++i) {
+            if (s_displayRefreshNames[i] && !strcmp(latchLabel, s_displayRefreshNames[i])) {
+                Dvar_SetInt(r_displayRefresh, i);
+                Com_Printf("vid: refresh enum (%d opts, <=%d Hz) — preserved latched '%s' at idx %d\n",
+                           newCount, maxHz, latchLabel, i);
+                return;
+            }
+        }
+    }
+    if (wantLabel) {
+        for (i = 0; i < newCount; ++i) {
+            if (s_displayRefreshNames[i] && !strcmp(wantLabel, s_displayRefreshNames[i])) {
+                Dvar_SetInt(r_displayRefresh, i);
+                break;
+            }
+        }
+    }
+    if (r_displayRefresh->current.integer < 0 ||
+        r_displayRefresh->current.integer >= newCount) {
+        Dvar_SetInt(r_displayRefresh, newCount - 1);
+    }
+
+    Com_Printf("vid: refresh enum limited to <=%d Hz (%d options)\n", maxHz, newCount);
+}
+#endif
 static const char *r_forceLodNames[6] = {
     "high",
     "medium",
@@ -250,7 +377,14 @@ void R_RegisterDvars(void)
 
     r_textureMode = ri.Dvar_RegisterEnum("r_textureMode", textureModeNames, 2, 0x2001);
 
+    /* Stock graphics menu (ui/options_graphics*.cfg) mirrors r_texturebits <-> ui_r_texturebits. */
+    ri.Dvar_RegisterInt("r_texturebits", 32, 16, 32, 0x2021);
+
+#ifdef __EMSCRIPTEN__
+    r_anisotropy = ri.Dvar_RegisterInt("r_anisotropy", 4, 2, 16, 0x2001);
+#else
     r_anisotropy = ri.Dvar_RegisterInt("r_anisotropy", 8, 2, 16, 0x2001);
+#endif
 
     r_fullbright = ri.Dvar_RegisterBool("r_fullbright", 0, 0x2080);
 
@@ -290,11 +424,16 @@ void R_RegisterDvars(void)
 
     r_picmip_manual = ri.Dvar_RegisterBool("r_picmip_manual", 0, 0x2001);
 
+#ifdef __EMSCRIPTEN__
+    /* WebGL + PROXY_ALWAYS: slightly lower texture mips by default for bandwidth. */
+    r_picmip = ri.Dvar_RegisterInt("r_picmip", 1, 0, 3, 0x2001);
+    r_picmip_bump = ri.Dvar_RegisterInt("r_picmip_bump", 1, 0, 3, 0x2001);
+    r_picmip_spec = ri.Dvar_RegisterInt("r_picmip_spec", 1, 0, 3, 0x2001);
+#else
     r_picmip = ri.Dvar_RegisterInt("r_picmip", 0, 0, 3, 0x2001);
-
     r_picmip_bump = ri.Dvar_RegisterInt("r_picmip_bump", 0, 0, 3, 0x2001);
-
     r_picmip_spec = ri.Dvar_RegisterInt("r_picmip_spec", 0, 0, 3, 0x2001);
+#endif
 
     r_lightMap = ri.Dvar_RegisterEnum("r_lightMap", colorMapNames, 0, 0x2080);
 
@@ -424,7 +563,12 @@ void R_RegisterDvars(void)
 
     r_forceLod = ri.Dvar_RegisterEnum("r_forceLod", r_forceLodNames, 4, 0x2080);
 
+#ifdef __EMSCRIPTEN__
+    /* Shadow-cookie casters are expensive under proxied WebGL; off by default. */
+    sc_enable = ri.Dvar_RegisterBool("sc_enable", 0, 0x2000);
+#else
     sc_enable = ri.Dvar_RegisterBool("sc_enable", 1, 0x2000);
+#endif
 
     sc_blur = ri.Dvar_RegisterInt("sc_blur", 2, 0, 4, 0x2080);
 
@@ -514,6 +658,7 @@ void R_RegisterDvars(void)
 
     r_mode = ri.Dvar_RegisterEnum("r_mode", s_displayModeNames, 0, 0x2021);
 
+    R_InitDisplayRefreshNames();
     r_displayRefresh = ri.Dvar_RegisterEnum("r_displayRefresh", s_displayRefreshNames, 0, 0x2021);
 
     r_rendererPreference = ri.Dvar_RegisterEnum("r_rendererPreference", s_technologyNames, 1, 0x2021);

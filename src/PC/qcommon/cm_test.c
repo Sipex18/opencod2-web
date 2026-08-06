@@ -157,6 +157,10 @@ void CM_BoxLeafnums_r(leafList_t *ll, int nodenum)
 
     while (nodenum >= 0) {
         node = &cm.nodes[nodenum];
+        if (!node->plane) {
+            /* Corrupt/incomplete clip node — treat as leaf boundary. */
+            break;
+        }
         s = BoxOnPlaneSide(ll->bounds[0], ll->bounds[1], node->plane);
 
         if (s == 1) {

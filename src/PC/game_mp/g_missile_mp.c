@@ -43,7 +43,7 @@ extern WeaponDef *BG_GetWeaponDef(int weaponIndex);
 extern void BG_EvaluateTrajectory(trajectory_t *tr, int atTime, vec_t *result);
 extern void BG_EvaluateTrajectoryDelta(trajectory_t *tr, int atTime, vec_t *result);
 extern unsigned char G_SetOrigin(gentity_t *ent, const vec_t *origin);
-extern void G_SetAngle(gentity_t *ent, vec_t *angles);
+extern unsigned char G_SetAngle(gentity_t *ent, vec_t *angles);
 extern void G_TraceCapsule(trace_t *result, vec_t *start, vec_t *mins, vec_t *maxs, vec_t *end, int skipNumber, int mask);
 extern int DirToByte(vec_t *dir);
 extern unsigned char G_AddEvent(gentity_t *ent, int event, int eventParm);

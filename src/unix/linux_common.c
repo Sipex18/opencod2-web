@@ -123,6 +123,8 @@ int UpdateSystemActivity(int activity)
 
 #if COD2_IS_PATCH_13
 
+extern void Com_Printf(const char *fmt, ...);
+
 void Sys_OpenURL(const char *url, int activate)
 {
     char cmd[1100];
@@ -143,6 +145,15 @@ int main(int argc, char **argv)
     char cmdLine[4096];
     int i;
     int offset;
+
+#if defined(__EMSCRIPTEN__) && defined(WEB_WASMFS)
+    /* Must run on the proxied worker thread (see -sPROXY_TO_PTHREAD). */
+    extern int cod2_mount_opfs(void);
+    if (cod2_mount_opfs() != 0) {
+        fprintf(stderr, "cod2: OPFS mount failed\n");
+        return 1;
+    }
+#endif
 
     cmdLine[0] = '\0';
     offset = 0;

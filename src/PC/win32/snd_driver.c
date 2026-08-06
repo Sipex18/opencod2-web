@@ -63,7 +63,7 @@ extern void AIL_set_3D_sample_volume(void *S, float volume);
 extern void AIL_set_3D_sample_distances(void *S, float min_dist, float max_dist);
 extern void AIL_set_3D_sample_loop_count(void *S, int count);
 extern void AIL_set_3D_sample_effects_level(void *S, float level);
-extern void AIL_set_3D_sample_info(void *S, void *info);
+extern long int AIL_set_3D_sample_info(void *S, void *info);
 extern void AIL_set_3D_sample_offset(void *S, int offset);
 extern void AIL_set_3D_position(void *S, float x, float y, float z);
 extern void AIL_set_3D_stream_position(void *S, float x, float y, float z);
@@ -81,7 +81,8 @@ extern void AIL_set_digital_master_room_type(void *dig, int room_type);
 extern void AIL_set_digital_master_reverb_levels(void *dig, float dry, float wet);
 extern void AIL_set_3D_room_type(void *provider, int room_type);
 extern int AIL_startup(int flags);
-extern void AIL_set_redist_directory(const char *dir);
+/* Miles returns the path string; void mismatch → WASM unreachable via call_indirect. */
+extern char *AIL_set_redist_directory(const char *dir);
 extern void *AIL_open_digital_driver(int freq, int bits, int channels, int flags);
 extern int AIL_set_preference(int pref, int value);
 extern int AIL_enumerate_3D_providers(void *provider, void **handle, const char **name);
@@ -1595,6 +1596,13 @@ Bool SND_InitDriver(void)
     int i;
     int sndKhzVal, sndBitsVal;
     unsigned int maxRate;
+
+#ifdef __EMSCRIPTEN__
+    /* Miles/MacMSS is not wired. Menu music/clicks use web_audio.c instead;
+     * returning 0 skips Voice_Init and full 3D/stream playback. */
+    Com_Printf((const char *)"SND_InitDriver: Miles stubbed; menu WebAudio active\n");
+    return 0;
+#endif
 
     mss_q3fs = Dvar_RegisterBool((const char *)"mss_q3fs", 1, 0x1020);
     if (mss_q3fs->current.enabled != 0) {

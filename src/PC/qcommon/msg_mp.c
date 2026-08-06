@@ -860,8 +860,8 @@ void MSG_WriteLong(msg_t *msg, int c)
     msg->cursize = newsize;
 }
 
-extern void Huff_Init(void *huff);
-extern void Huff_addRef(void *huff, int ch);
+extern void Huff_Init(huffman_t *huff);
+extern void Huff_addRef(huff_t *huff, int ch);
 void MSG_Init(msg_t *buf, byte *data, int length)
 {
     int i, j;
@@ -871,8 +871,7 @@ void MSG_Init(msg_t *buf, byte *data, int length)
         Huff_Init(&msgHuff);
         for (i = 0; i < 256; i++) {
             for (j = 0; j < msg_hData[i]; j++) {
-                Huff_addRef(&msgHuff, (byte)i);
-
+                Huff_addRef(&msgHuff.compressor, (byte)i);
                 Huff_addRef(&msgHuff.decompressor, (byte)i);
             }
         }

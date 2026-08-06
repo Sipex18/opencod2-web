@@ -175,6 +175,7 @@ extern void UI_FillRect(float x, float y, float w, float h, int horzAlign, int v
 extern void *Menus_FindByName(uiInfo_t *info, const char *name);
 extern void Menu_Paint(uiInfo_t *info, void *menu, int full);
 extern void Dvar_SetInt(const void *dvar, int value);
+extern void Dvar_SetBool(const dvar_t *dvar, int value);
 extern void Dvar_SetString(const void *dvar, const char *value);
 extern void Dvar_SetIntByName(const char *name, int value);
 extern void Dvar_SetBoolByName(const char *name, int value);
@@ -202,9 +203,9 @@ extern int LAN_ServerIsDirty(int source, int index);
 extern int LAN_GetServerPing(int source, int index);
 extern void LAN_MarkServerDirty(int source, int index, int dirty);
 extern int LAN_UpdateDirtyPings(int source);
-extern int LAN_GetServerAddressString(int source, int index, char *addr, int addrSize);
-extern int LAN_RemoveServer(int source, const char *addr);
-extern int LAN_LoadCachedServers(void);
+extern void LAN_GetServerAddressString(int source, int index, char *addr, int addrSize);
+extern void LAN_RemoveServer(int source, const char *addr);
+extern void LAN_LoadCachedServers(void);
 extern int CIN_StopCinematic(int handle);
 extern int CIN_PlayCinematic(const char *name, int x, int y, int w, int h, int flags);
 extern int CIN_RunCinematic(int handle);
@@ -904,21 +905,104 @@ static void UI_AddServerStatusDvarRows(serverStatusInfo_t *info)
     }
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+ * Native Server Info sends UDP getstatus; the browser has no UDP path, so the
+ * popup stayed black (the previous EMSCRIPTEN ServerStatus stub cleared
+ * numLines and never filled them). Synthesize a statusResponse-shaped string
+ * from the HTTP master snapshot already in the LAN server cache.
+ */
+static int UI_FillServerStatusTextFromMaster(const char *serverAddress, char *out, int outSize)
+{
+    char info_buf[0x400];
+    int selected;
+    int disp;
+    const char *hostname;
+    const char *mapname;
+    const char *gametype;
+    const char *maxc;
+    const char *pure;
+    const char *pswrd;
+    const char *voice;
+    const char *game;
+    const char *clients;
+    const char *mod;
+    const char *fsGame;
+
+    if (!out || outSize <= 0)
+        return 0;
+    out[0] = '\0';
+
+    selected = sharedUiInfo.serverStatus.currentServer;
+    if (selected < 0 || selected >= sharedUiInfo.serverStatus.numDisplayServers)
+        return 0;
+
+    disp = sharedUiInfo.serverStatus.displayServers[selected];
+    LAN_GetServerInfo((ui_netSource)->current.integer, disp, info_buf, sizeof(info_buf));
+
+    hostname = Info_ValueForKey(info_buf, "hostname");
+    mapname = Info_ValueForKey(info_buf, "mapname");
+    gametype = Info_ValueForKey(info_buf, "gametype");
+    maxc = Info_ValueForKey(info_buf, "sv_maxclients");
+    pure = Info_ValueForKey(info_buf, "pure");
+    pswrd = Info_ValueForKey(info_buf, "pswrd");
+    voice = Info_ValueForKey(info_buf, "voice");
+    game = Info_ValueForKey(info_buf, "game");
+    clients = Info_ValueForKey(info_buf, "clients");
+    mod = Info_ValueForKey(info_buf, "mod");
+
+    /* Master "game" is often "cod2"; real fs_game only arrives via getstatus. */
+    fsGame = "";
+    if (mod && mod[0] && atoi(mod) != 0 && game && game[0] && I_stricmp(game, "cod2") != 0)
+        fsGame = game;
+
+    Com_sprintf(out, outSize,
+                "\\sv_hostname\\%s\\mapname\\%s\\g_gametype\\%s\\sv_maxclients\\%s"
+                "\\sv_pure\\%s\\pswrd\\%s\\sv_voice\\%s\\gamename\\%s\\clients\\%s"
+                "\\fs_game\\%s\\protocol\\118\\shortversion\\1.3",
+                hostname && hostname[0] ? hostname : "?",
+                mapname && mapname[0] ? mapname : "?",
+                gametype && gametype[0] ? gametype : "?",
+                maxc && maxc[0] ? maxc : "?",
+                pure && pure[0] ? pure : "0",
+                pswrd && pswrd[0] ? pswrd : "0",
+                voice && voice[0] ? voice : "0",
+                game && game[0] ? game : "Call of Duty 2",
+                clients && clients[0] ? clients : "0",
+                fsGame);
+
+    (void)serverAddress;
+    return out[0] != '\0';
+}
+#endif
+
 static int __attribute_regparm__(2) UI_GetServerStatusInfo(const char *serverAddress, serverStatusInfo_t *info)
 {
     char *p;
     int currentLine;
 
     if (!info) {
+#ifndef __EMSCRIPTEN__
         LAN_GetServerStatus(serverAddress, 0, 0);
+#endif
         return 0;
     }
 
     memset(info, 0, sizeof(*info));
 
     p = info->text;
+#ifdef __EMSCRIPTEN__
+    /*
+     * Do not call LAN_GetServerStatus here: CL_ServerStatus ends in
+     * NET_OutOfBandPrint with a 5-arg call vs 3-arg definition, which traps
+     * as wasm "unreachable" (see wasm-ld signature mismatch warning).
+     */
+    if (!UI_FillServerStatusTextFromMaster(serverAddress, p, (int)sizeof(info->text)))
+        return 0;
+#else
     if (!LAN_GetServerStatus(serverAddress, p, sizeof(info->text)))
         return 0;
+#endif
 
     I_strncpyz(info->address, serverAddress, sizeof(info->address));
     info->lines[0][0] = "address";
@@ -2345,22 +2429,27 @@ qboolean UI_OwnerDrawHandleKey(int ownerDraw, int flags, float *special, int key
         if (!UI_IsActionKey(key))
             return 0;
         {
+            int numFilters = (int)(sizeof(serverFilters) / sizeof(serverFilters[0]));
             int filterType;
-            if (key == 0xc9)
+            if (key == 0xc9) {
                 filterType = ui_serverFilterType - 1;
-            else
+                if (filterType < 0)
+                    filterType = numFilters - 1;
+            } else {
                 filterType = ui_serverFilterType + 1;
-
+                if (filterType >= numFilters)
+                    filterType = 0;
+            }
             ui_serverFilterType = filterType;
-
-            if (filterType > 0 || filterType < 0)
-                ui_serverFilterType = 0;
-
             UI_BuildServerDisplayList(1);
         }
         return 0;
 
-    case 0xf4:
+    /*
+     * CoD2 source.c / menudef: UI_NETGAMETYPE is 245 (draw + key).
+     * Was case 0xf4 (244) — map-preview id — so gametype clicks never matched.
+     */
+    case 245:
         if (!UI_IsActionKey(key))
             return 0;
         {
@@ -2385,7 +2474,14 @@ qboolean UI_OwnerDrawHandleKey(int ownerDraw, int flags, float *special, int key
         }
         return 1;
 
-    case 0xfd:
+    /*
+     * ui/menudefinition.h (shipped in the iwd): UI_JOINGAMETYPE 253. An earlier
+     * pass moved this to 252 to match the equally wrong draw case; 252 is not
+     * assigned to anything, so the filter never cycled. The range guard above
+     * (ownerDraw - 205 <= 0x30, i.e. up to 253) corroborates 253 as the last
+     * key-handling ownerdraw.
+     */
+    case 253:
         if (!UI_IsActionKey(key))
             return 0;
         {
@@ -2603,9 +2699,9 @@ int UI_OwnerDrawWidth(int ownerDraw, FontHandle font, float scale)
         break;
     case 0xdc: {
         int netSrcVal = (ui_netSource)->current.integer;
-        if (netSrcVal > sharedUiInfo.numJoinGameTypes) {
+        if (netSrcVal < 0 || netSrcVal > 2) {
             Dvar_SetInt(ui_netSource, 0);
-            netSrcVal = (ui_netSource)->current.integer;
+            netSrcVal = 0;
         }
         s = SEH_LocalizeTextMessage(va("EXE_NETSOURCE\x14%s", netSources[netSrcVal]), "net source", 0);
         break;
@@ -2616,6 +2712,28 @@ int UI_OwnerDrawWidth(int ownerDraw, FontHandle font, float scale)
             filterType = ui_serverFilterType;
         ui_serverFilterType = filterType;
         s = SEH_LocalizeTextMessage(va("EXE_SERVERFILTER\x14%s", serverFilters[filterType].description), "server filter", 0);
+        break;
+    }
+    /*
+     * UI_NETGAMETYPE (245) and UI_JOINGAMETYPE (253) are cycling text
+     * ownerdraws like UI_GAMETYPE/UI_NETSOURCE above, so centered or
+     * right-aligned instances need their width here too (ui_shared_mp.c adds
+     * UI_OwnerDrawWidth for textalignment 1 and 2).
+     */
+    case 245: {
+        int gtIdx = (ui_netGameType)->current.integer;
+        if (gtIdx < 0 || gtIdx >= sharedUiInfo.numGameTypes)
+            gtIdx = 0;
+        s = sharedUiInfo.gameTypes[gtIdx].gameTypeName;
+        break;
+    }
+    case 253: {
+        int jgtIdx = (ui_joinGameType)->current.integer;
+        if (jgtIdx < 0 || jgtIdx >= sharedUiInfo.numJoinGameTypes)
+            jgtIdx = 0;
+        s = sharedUiInfo.joinGameTypes[jgtIdx].gameTypeName;
+        if (!s || s[0] == '\0')
+            s = UI_SafeTranslateString("EXE_ALL");
         break;
     }
     case 0xf7:
@@ -2678,8 +2796,13 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
 
     case 220:
     {
+        int netSrc = (ui_netSource)->current.integer;
+        if (netSrc < 0 || netSrc > 2) {
+            Dvar_SetInt(ui_netSource, 0);
+            netSrc = 0;
+        }
         text = SEH_LocalizeTextMessage(
-            va("EXE_NETSOURCE\x14%s", netSources[(ui_netSource)->current.integer]),
+            va("EXE_NETSOURCE\x14%s", netSources[netSrc]),
             "net source", 0);
         UI_DrawText(text, 0x7fffffff, font, rect[0], rect[1], 0, 0, scale, color, textStyle);
         return;
@@ -2710,21 +2833,22 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
 
     case 244:
     {
-        UI_DrawMapPreview((const rectDef_t *)rect, color, 0);
+        /* Start New Server map preview — use net map index (createserver feeder). */
+        UI_DrawMapPreview((const rectDef_t *)rect, color, 1);
         return;
     }
 
     case 245:
     {
         int gtIdx = (ui_netGameType)->current.integer;
-        if (gtIdx > sharedUiInfo.numGameTypes) {
+        if (gtIdx < 0 || gtIdx >= sharedUiInfo.numGameTypes) {
             Dvar_SetInt(ui_netGameType, 0);
             Dvar_SetString(ui_netGameTypeName, sharedUiInfo.gameTypes[0].gameType);
-            gtIdx = (ui_netGameType)->current.integer;
+            gtIdx = 0;
         }
         {
             const char *gtName = sharedUiInfo.gameTypes[gtIdx].gameTypeName;
-            if (gtName[0] == '\0')
+            if (!gtName || gtName[0] == '\0')
                 gtName = "EXE_ALL";
             text = UI_SafeTranslateString(gtName);
             UI_DrawText(text, 0x7fffffff, font, rect[0], rect[1], 0, 0, scale, color, textStyle);
@@ -2838,16 +2962,17 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
         return;
     }
 
-    case 252:
+    /* UI_JOINGAMETYPE — joinserver.menu "gametypefield". */
+    case 253:
     {
         int jgtIdx = (ui_joinGameType)->current.integer;
-        if (jgtIdx > sharedUiInfo.numJoinGameTypes) {
+        if (jgtIdx < 0 || jgtIdx >= sharedUiInfo.numJoinGameTypes) {
             Dvar_SetInt(ui_joinGameType, 0);
-            jgtIdx = (ui_joinGameType)->current.integer;
+            jgtIdx = 0;
         }
         {
             const char *gtName = sharedUiInfo.joinGameTypes[jgtIdx].gameTypeName;
-            if (gtName[0] == '\0')
+            if (!gtName || gtName[0] == '\0')
                 gtName = "EXE_ALL";
             text = UI_SafeTranslateString(gtName);
             UI_DrawText(text, 0x7fffffff, font, rect[0], rect[1], 0, 0, scale, color, textStyle);
@@ -2855,7 +2980,8 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
         return;
     }
 
-    case 253:
+    /* UI_PREVIEWCINEMATIC */
+    case 254:
     {
         int cinHandle = sharedUiInfo.previewMovie;
         if (cinHandle <= -2)
@@ -2874,17 +3000,20 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
         return;
     }
 
-    case 254:
+    /* UI_STARTMAPCINEMATIC — the levelshot slot in createserver/callvote. */
+    case 255:
     {
         UI_DrawMapPreview((const rectDef_t *)rect, color, 1);
         return;
     }
 
-    case 263:
+    /* UI_RECORDLEVEL — options_voice.menu "voicechat_level_indicator". */
+    case 265:
         UI_DrawRecordLevel((rectDef_t *)rect);
         return;
 
-    case 264:
+    /* UI_AMITALKING */
+    case 266:
     {
         if ((*(dvar_t **)imp_sv_voice)->current.enabled == 0 || (*(dvar_t **)imp_cl_voice)->current.enabled == 0)
             return;
@@ -2897,14 +3026,13 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
         return;
     }
 
-    case 265:
-    case 266:
+    /* UI_TALKER1..UI_TALKER4 */
     case 267:
     case 268:
     case 269:
     case 270:
     {
-        int targetTalker = ownerDraw - 265;
+        int targetTalker = ownerDraw - 267;
         int talkerCount = 0;
         int clientNum;
         int pi;
@@ -2956,6 +3084,17 @@ void UI_OwnerDraw(float x, float y, float w, float h, int horzAlign, int vertAli
     }
 
     default:
+#ifdef __EMSCRIPTEN__
+        /* Menus reference ownerDraw ids we may not implement yet; log each once. */
+        {
+            static byte seen[512];
+            if (ownerDraw >= 0 && ownerDraw < 512 && !seen[ownerDraw]) {
+                seen[ownerDraw] = 1;
+                Com_Printf("uidbg: unhandled ownerDraw %d rect=%.0f,%.0f %.0fx%.0f\n",
+                           ownerDraw, rect[0], rect[1], rect[2], rect[3]);
+            }
+        }
+#endif
         return;
     }
 
@@ -3149,7 +3288,9 @@ static void UI_BuildServerStatus_impl(int force)
 
         Menu_SetFeederSelection(uiInfo, 0, 0xd, 0, 0);
         sharedUiInfo.serverStatusInfo.numLines = 0;
+#ifndef __EMSCRIPTEN__
         LAN_GetServerStatus(0, 0, 0);
+#endif
     } else {
         int nextRefresh = sharedUiInfo.nextServerStatusRefresh;
         if (nextRefresh == 0)
@@ -3213,11 +3354,21 @@ void UI_Refresh(void)
     if (Menu_Count(uiInfo) <= 0)
         return;
 
-    if (refreshTraceCount < 80 && (uiInfo->currentMenuType || uiInfo->uiDC.openMenuCount > 0)) {
+#ifdef __EMSCRIPTEN__
+    {
+        static int refresh_enter;
+        if (refresh_enter < 3) {
+            Com_Printf("webdbg: UI_Refresh before Menu_PaintAll #%d\n", refresh_enter);
+            refresh_enter++;
+        }
+    }
+#endif
+
+    if (getenv("MTRACE") && refreshTraceCount < 80 &&
+        (uiInfo->currentMenuType || uiInfo->uiDC.openMenuCount > 0)) {
         int i;
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] UI_Refresh active=%d menuCount=%d openCount=%d",
-                       uiInfo->currentMenuType, uiInfo->uiDC.menuCount, uiInfo->uiDC.openMenuCount);
+        Com_Printf("[menu-trace] UI_Refresh active=%d menuCount=%d openCount=%d",
+                   uiInfo->currentMenuType, uiInfo->uiDC.menuCount, uiInfo->uiDC.openMenuCount);
         for (i = 0; i < uiInfo->uiDC.openMenuCount && i < 16; ++i) {
             menuDef_t *menu = uiInfo->uiDC.menuStack[i];
             Com_Printf(" stack[%d]=%s", i, menu && menu->window.name ? menu->window.name : "<null>");
@@ -3227,6 +3378,15 @@ void UI_Refresh(void)
     }
 
     Menu_PaintAll(uiInfo);
+#ifdef __EMSCRIPTEN__
+    {
+        static int paint_dbg;
+        if (paint_dbg < 3) {
+            Com_Printf("webdbg: UI_Refresh after Menu_PaintAll #%d\n", paint_dbg);
+            paint_dbg++;
+        }
+    }
+#endif
 
     if (sharedUiInfo.serverStatus.refreshActive) {
         netSource = (ui_netSource)->current.integer;
@@ -3311,14 +3471,35 @@ void UI_RunMenuScript(const char **args)
     if (I_stricmp(name, "StartServer") == 0) {
 
         Dvar_SetBoolByName("cg_thirdPerson", 0);
+#ifdef __EMSCRIPTEN__
+        /*
+         * Browser client must stay non-dedicated (listen). A latched dedicated
+         * change skips client frames / UI and is useless without UDP sockets.
+         */
+        Dvar_SetInt(ui_dedicated, 0);
+        Dvar_SetFromStringByNameFromSource("dedicated", "0", 1);
+#else
         Dvar_SetFromStringByNameFromSource("dedicated",
                                            va("%i", (ui_dedicated)->current.integer), 1);
+#endif
         Dvar_SetStringByName("g_gametype",
                              sharedUiInfo.gameTypes[(ui_netGameType)->current.integer].gameType);
         {
             int mapIdx = (ui_currentNetMap)->current.integer;
-            int offset = mapIdx * 41 + mapIdx;
-            const char *mapName = *(const char **)((byte *)&sharedUiInfo.mapList[0].mapLoadName + offset * 4);
+            const char *mapName;
+            if (mapIdx < 0 || mapIdx >= sharedUiInfo.mapCount)
+                mapIdx = 0;
+            mapName = sharedUiInfo.mapList[mapIdx].mapLoadName;
+            if (!mapName || !mapName[0]) {
+                Com_Printf("StartServer: no map at index %d (mapCount=%d)\n",
+                           mapIdx, sharedUiInfo.mapCount);
+                return;
+            }
+#ifdef __EMSCRIPTEN__
+            Com_Printf("StartServer: listen map %s gametype %s\n",
+                       mapName,
+                       sharedUiInfo.gameTypes[(ui_netGameType)->current.integer].gameType);
+#endif
             Cbuf_ExecuteText(2, va("wait ; wait ; map %s\n", mapName));
         }
         return;
@@ -3476,9 +3657,12 @@ void UI_RunMenuScript(const char **args)
 
     if (I_stricmp(name, "voteTypeMap") == 0) {
         int mapIdx = (ui_currentNetMap)->current.integer;
-        int offset = mapIdx * 41 + mapIdx;
-        const char *mapName = *(const char **)((byte *)&sharedUiInfo.mapList[0].mapLoadName + offset * 4);
-        const char *gtName = sharedUiInfo.gameTypes[(ui_netGameType)->current.integer].gameType;
+        const char *mapName;
+        const char *gtName;
+        if (mapIdx < 0 || mapIdx >= sharedUiInfo.mapCount)
+            return;
+        mapName = sharedUiInfo.mapList[mapIdx].mapLoadName;
+        gtName = sharedUiInfo.gameTypes[(ui_netGameType)->current.integer].gameType;
         Cbuf_ExecuteText(2, va("callvote typemap %s %s\n", gtName, mapName));
         return;
     }
@@ -3488,8 +3672,7 @@ void UI_RunMenuScript(const char **args)
         if (mapIdx < 0 || mapIdx >= sharedUiInfo.mapCount)
             return;
         {
-            int offset = mapIdx * 41 + mapIdx;
-            const char *mapName = *(const char **)((byte *)&sharedUiInfo.mapList[0].mapLoadName + offset * 4);
+            const char *mapName = sharedUiInfo.mapList[mapIdx].mapLoadName;
             Cbuf_ExecuteText(2, va("callvote map %s\n", mapName));
         }
         return;
@@ -3875,13 +4058,13 @@ void UI_RunMenuScript(const char **args)
             LAN_GetServerAddressString((ui_netSource)->current.integer,
                                        sharedUiInfo.serverStatus.displayServers[selectedServer],
                                        sharedUiInfo.serverStatusAddress, 0x40);
-#ifdef __EMSCRIPTEN__
-            Menu_SetFeederSelection(uiInfo, 0, 0xd, 0, 0);
-            sharedUiInfo.serverStatusInfo.numLines = 0;
-            sharedUiInfo.nextServerStatusRefresh = uiInfo->uiDC.realTime + 500;
-#else
+            /*
+             * Web: UI_GetServerStatusInfo falls back to the HTTP master snapshot
+             * when UDP getstatus is unavailable, so the normal force path fills
+             * the popup. The previous EMSCRIPTEN stub cleared numLines and left
+             * the listbox permanently empty.
+             */
             UI_BuildServerStatus(1);
-#endif
         }
         return;
     }
@@ -4699,6 +4882,42 @@ static void UI_StartServerRefresh(qboolean full)
 
     now = uiInfo->uiDC.realTime;
 
+#ifdef __EMSCRIPTEN__
+    /* Masterlist is mod-heavy; Mod=No (0) from cfg hides every row. */
+    if ((ui_browserMod)->current.integer == 0)
+        Dvar_SetInt(ui_browserMod, -1);
+
+    /*
+     * LAN_ResetPings sets ping=-1 and native refills it from UDP infoResponse.
+     * The web client has no UDP: the HTTP master proxy supplies ping once per
+     * fill, so resetting it permanently strands every row behind the ping<=0
+     * check in UI_BuildServerDisplayList. Keep the proxy pings for Internet.
+     */
+    if (source == 1) {
+        if (!full) {
+            sharedUiInfo.serverStatus.refreshActive = 1;
+            sharedUiInfo.serverStatus.refreshtime = now + 1000;
+            sharedUiInfo.serverStatus.nextDisplayRefresh = 0;
+            return;
+        }
+        sharedUiInfo.serverStatus.refreshActive = 1;
+        sharedUiInfo.serverStatus.nextDisplayRefresh = now + 1000;
+        sharedUiInfo.serverStatus.numDisplayServers = 0;
+        sharedUiInfo.serverStatus.numPlayersOnServers = 0;
+        sharedUiInfo.serverStatus.serverCount = LAN_GetServerCount(source);
+        LAN_MarkServerDirty(source, -1, 1);
+        sharedUiInfo.serverStatus.refreshtime = now + 5000;
+        {
+            const char *debugProtocol = Dvar_GetVariantString("debug_protocol");
+            if (debugProtocol[0])
+                Cbuf_ExecuteText(0, va("globalservers %d %s full empty\n", 0, debugProtocol));
+            else
+                Cbuf_ExecuteText(0, va("globalservers %d %d full empty\n", 0, 118));
+        }
+        return;
+    }
+#endif
+
     if (!full) {
         LAN_ResetPings(source);
         sharedUiInfo.serverStatus.refreshActive = 1;
@@ -4727,9 +4946,46 @@ static void UI_StartServerRefresh(qboolean full)
         if (debugProtocol[0])
             Cbuf_ExecuteText(0, va("globalservers %d %s full empty\n", 0, debugProtocol));
         else
-            Cbuf_ExecuteText(0, va("globalservers %d %d full empty\n", 0, 0x73));
+            /* CoD2 1.3 protocol 118 — was 0x73 (115 / 1.2). */
+            Cbuf_ExecuteText(0, va("globalservers %d %d full empty\n", 0, 118));
     }
 }
+
+#ifdef __EMSCRIPTEN__
+/* Called from web_master.c when HTTP masterlist fill finishes. */
+void UI_WebMaster_NotifyServersReady(int source)
+{
+    int uiSource = (ui_netSource)->current.integer;
+
+    /* Re-assert open filters — archived cfg may re-latch Mod=No mid-session. */
+    if ((ui_browserMod)->current.integer == 0)
+        Dvar_SetInt(ui_browserMod, -1);
+
+    sharedUiInfo.serverStatus.refreshActive = 1;
+    sharedUiInfo.serverStatus.refreshtime = 0;
+    sharedUiInfo.serverStatus.nextDisplayRefresh = 0;
+
+    /*
+     * Only rebuild the display list if the completed source matches the tab the
+     * user is currently viewing; otherwise the wrong list would be presented.
+     */
+    if (source == uiSource) {
+        sharedUiInfo.serverStatus.serverCount = LAN_GetServerCount(source);
+        UI_BuildServerDisplayList(1);
+    }
+
+    {
+        int listed = sharedUiInfo.serverStatus.numDisplayServers;
+        int players = sharedUiInfo.serverStatus.numPlayersOnServers;
+        int total = LAN_GetServerCount(source);
+        sharedUiInfo.serverStatus.refreshActive = 0;
+        Com_Printf("%d servers listed in browser with %d players.\n", listed, players);
+        if (listed == 0 && total > 0)
+            Com_Printf("%d servers not listed (filtered out by game browser settings)\n",
+                       total);
+    }
+}
+#endif
 
 const char *UI_SafeTranslateString(const char *reference)
 {
@@ -4971,6 +5227,16 @@ void UI_Init(void)
     ui_playerProfileSelected = Dvar_RegisterString_mac("ui_playerProfileSelected", "", 0x1040);
     ui_playerProfileNameNew = Dvar_RegisterString_mac("ui_playerProfileNameNew", "", 0x1000);
 
+    /*
+     * HTTP masterlist is almost entirely modded (fs_game set). Archived configs
+     * often have ui_browserMod 0 ("No") which filters out every server.
+     */
+    Dvar_SetInt(ui_browserMod, -1);
+    Dvar_SetBool(ui_browserShowEmpty, 1);
+    Dvar_SetBool(ui_browserShowFull, 1);
+    Dvar_SetBool(ui_browserShowPassword, 1);
+    Dvar_SetBool(ui_browserShowNoPassword, 1);
+
     legacyBase = (byte *)imp_legacyHacksArray;
     (*(byte *)&((LegacyHacks *)legacyBase)->ui_newScriptMenu[0]) = 0;
     ((LegacyHacks *)legacyBase)->ui_newScriptMenuIndex = -1;
@@ -5012,6 +5278,18 @@ void UI_Init(void)
 
     UI_AssetCache();
     Menus_CloseAll(uiInfo);
+
+    /*
+     * ui_joinGametype is archived and was writable out of range while the draw
+     * path used "> num" instead of ">= num", so a stale index can silently hide
+     * most of the master list. Start each web session on All; the filter stays
+     * usable from the menu afterwards.
+     */
+    if ((ui_joinGameType)->current.integer != 0) {
+        Com_Printf("web: resetting ui_joinGametype %d -> 0 (All)\n",
+                   (ui_joinGameType)->current.integer);
+        Dvar_SetInt(ui_joinGameType, 0);
+    }
 
     *(int *)((byte *)&sharedUiInfo + 25940) = CL_RegisterMaterialNoMip("server_hardware_unknown", 3);
     *(int *)((byte *)&sharedUiInfo + 25944) = CL_RegisterMaterialNoMip("server_hardware_linux_dedicated", 3);
@@ -5157,48 +5435,64 @@ static void UI_RemoveDuplicateFromFavorites(int serverIndex)
 static void UI_BinaryInsertServer(int serverIndex)
 {
     int numDisplay = sharedUiInfo.serverStatus.numDisplayServers;
-    int *displayServers = sharedUiInfo.serverStatus.displayServers;
-    int lo = 0;
-    int hi = numDisplay;
-    int position = 0;
-    int lastCmp = 0;
+    const int *displayServers = sharedUiInfo.serverStatus.displayServers;
     int source = (ui_netSource)->current.integer;
     int sortKey = sharedUiInfo.serverStatus.sortKey;
     int sortDir = sharedUiInfo.serverStatus.sortDir;
+    int lo = 0;
+    int hi = numDisplay;
 
-    while (hi > 0) {
-        int mid = hi / 2;
-        int testIdx = lo + mid;
-        int cmp = LAN_CompareServers(source, sortKey, sortDir, serverIndex, displayServers[testIdx]);
+    /*
+     * Standard lower-bound search. The decompiled loop computed position=lo+1
+     * whenever no comparison ran, so on an empty list it asked for position 1,
+     * which UI_InsertServerAtPosition rejects (numServers 0 < 1) — the list
+     * could never accept its first entry. It also failed to shrink hi when
+     * cmp < 0 && hi == 1, which never terminates.
+     */
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        int cmp = LAN_CompareServers(source, sortKey, sortDir, serverIndex, displayServers[mid]);
 
-        lastCmp = cmp;
         if (cmp == 0) {
-            UI_InsertServerAtPosition(serverIndex, testIdx);
+            UI_InsertServerAtPosition(serverIndex, mid);
             return;
         }
-        if (cmp > 0) {
-            hi -= mid;
-            position = testIdx + 1;
-            lo = position;
-            hi--;
-        } else {
-            hi -= mid;
-        }
+        if (cmp > 0)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
 
-    if (lastCmp >= 0)
-        position = lo + 1;
-    else
-        position = lo;
-
-    UI_InsertServerAtPosition(serverIndex, position);
+    UI_InsertServerAtPosition(serverIndex, lo);
 }
+
+/*
+ * Reject-reason breakdown for the web browser list. Guessing which of the ~10
+ * filters eats the master list costs a full rebuild+deploy per guess, so the
+ * loop records why each server was dropped and prints a summary.
+ */
+enum {
+    SRVREJ_ADDR = 0, SRVREJ_EMPTY, SRVREJ_FULL, SRVREJ_PASSWORD, SRVREJ_NOPASSWORD,
+    SRVREJ_PURE, SRVREJ_DEDICATED, SRVREJ_MOD, SRVREJ_FF, SRVREJ_KC,
+    SRVREJ_GAMETYPE, SRVREJ_FILTERTYPE, SRVREJ_NOTDIRTY, SRVREJ_PING, SRVREJ_COUNT
+};
+
+static const char *const s_srvRejNames[SRVREJ_COUNT] = {
+    "addr", "showEmpty", "showFull", "showPassword", "showNoPassword",
+    "showPure", "showDedicated", "mod", "friendlyfire", "killcam",
+    "joinGametype", "serverFilterType", "notDirty", "ping"
+};
 
 static void UI_BuildServerDisplayList(qboolean force)
 {
     char info_buf[0x400];
     int count, i, clients, ping;
     int netSource;
+    int rejCounts[SRVREJ_COUNT];
+    int rejReason = 0;
+    int scanned = 0;
+
+    memset(rejCounts, 0, sizeof(rejCounts));
 
     if (!force) {
         if (uiInfo->uiDC.realTime <= sharedUiInfo.serverStatus.nextDisplayRefresh)
@@ -5251,56 +5545,77 @@ static void UI_BuildServerDisplayList(qboolean force)
     qsort(sharedUiInfo.serverStatus.displayServers, sharedUiInfo.serverStatus.numDisplayServers, 4, UI_ServersQsortCompare);
 
     for (i = 0; i < count; i++) {
-        if (!LAN_ServerIsDirty((ui_netSource)->current.integer, i))
+        if (!LAN_ServerIsDirty((ui_netSource)->current.integer, i)) {
+            rejCounts[SRVREJ_NOTDIRTY]++;
             continue;
+        }
 
         ping = LAN_GetServerPing((ui_netSource)->current.integer, i);
-        if (ping <= 0 && (ui_netSource)->current.integer != 2)
+        if (ping <= 0 && (ui_netSource)->current.integer != 2) {
+            rejCounts[SRVREJ_PING]++;
             continue;
+        }
 
+        scanned++;
         LAN_GetServerInfo((ui_netSource)->current.integer, i, info_buf, 0x400);
         clients = atoi(Info_ValueForKey(info_buf, "clients"));
         sharedUiInfo.serverStatus.numPlayersOnServers += clients;
 
+        rejReason = SRVREJ_ADDR;
         if (I_strnicmp(Info_ValueForKey(info_buf, "addr"), "000.000.000.000", 15) == 0)
             goto reject;
+        rejReason = SRVREJ_EMPTY;
         if (!(ui_browserShowEmpty)->current.enabled && clients == 0)
             goto reject;
+        rejReason = SRVREJ_FULL;
         if (!(ui_browserShowFull)->current.enabled &&
             clients == atoi(Info_ValueForKey(info_buf, "sv_maxclients")))
             goto reject;
+        rejReason = SRVREJ_PASSWORD;
         if (!(ui_browserShowPassword)->current.enabled &&
             atoi(Info_ValueForKey(info_buf, "pswrd")) != 0)
             goto reject;
+        rejReason = SRVREJ_NOPASSWORD;
         if (!(ui_browserShowNoPassword)->current.enabled &&
             atoi(Info_ValueForKey(info_buf, "pswrd")) == 0)
             goto reject;
+        rejReason = SRVREJ_PURE;
         if ((ui_browserShowPure)->current.enabled &&
             atoi(Info_ValueForKey(info_buf, "pure")) == 0)
             goto reject;
+        rejReason = SRVREJ_DEDICATED;
         if ((ui_browserShowDedicated)->current.enabled &&
             (unsigned)(atoi(Info_ValueForKey(info_buf, "hw")) - 1) > 2)
             goto reject;
+        rejReason = SRVREJ_MOD;
         if ((ui_browserMod)->current.integer >= 0 &&
             atoi(Info_ValueForKey(info_buf, "mod")) != (ui_browserMod)->current.integer)
             goto reject;
+        rejReason = SRVREJ_FF;
         if ((ui_browserFriendlyfire)->current.integer >= 0 &&
             atoi(Info_ValueForKey(info_buf, "ff")) != (ui_browserFriendlyfire)->current.integer)
             goto reject;
+        rejReason = SRVREJ_KC;
         if ((ui_browserKillcam)->current.integer >= 0 &&
             atoi(Info_ValueForKey(info_buf, "kc")) != (ui_browserKillcam)->current.integer)
             goto reject;
 
+        rejReason = SRVREJ_GAMETYPE;
         {
             int joinGTIdx = (ui_joinGameType)->current.integer;
-            const char *joinGTName = sharedUiInfo.joinGameTypes[joinGTIdx].gameTypeName;
-            if (joinGTName[0] != '\0') {
-                const char *joinGTShort = sharedUiInfo.joinGameTypes[joinGTIdx].gameType;
-                if (I_stricmp(Info_ValueForKey(info_buf, "gametype"), joinGTShort) != 0)
-                    goto reject;
+            if (joinGTIdx < 0 || joinGTIdx >= sharedUiInfo.numJoinGameTypes)
+                joinGTIdx = 0;
+            {
+                const char *joinGTName = sharedUiInfo.joinGameTypes[joinGTIdx].gameTypeName;
+                if (joinGTName && joinGTName[0] != '\0') {
+                    const char *joinGTShort = sharedUiInfo.joinGameTypes[joinGTIdx].gameType;
+                    if (I_stricmp(Info_ValueForKey(info_buf, "gametype"), joinGTShort) != 0)
+                        goto reject;
+                }
             }
         }
 
+        rejReason = SRVREJ_FILTERTYPE;
         if (ui_serverFilterType > 0) {
             const char *filterBaseName = *(const char **)((byte *)serverFilters + ui_serverFilterType * 8 + 4);
             if (I_stricmp(Info_ValueForKey(info_buf, "game"), filterBaseName) != 0)
@@ -5319,7 +5634,31 @@ static void UI_BuildServerDisplayList(qboolean force)
         continue;
 
     reject:
+        rejCounts[rejReason]++;
         LAN_MarkServerDirty((ui_netSource)->current.integer, i, 0);
+    }
+
+    if (force && count > 0 && sharedUiInfo.serverStatus.numDisplayServers == 0) {
+        int r;
+        Com_Printf("srvdbg: %d servers, %d scanned, 0 listed. Rejects:", count, scanned);
+        for (r = 0; r < SRVREJ_COUNT; r++) {
+            if (rejCounts[r])
+                Com_Printf(" %s=%d", s_srvRejNames[r], rejCounts[r]);
+        }
+        Com_Printf("\n");
+        Com_Printf("srvdbg: filters empty=%d full=%d pwd=%d nopwd=%d pure=%d ded=%d mod=%d ff=%d kc=%d jgt=%d/%d ftype=%d\n",
+                   (ui_browserShowEmpty)->current.enabled,
+                   (ui_browserShowFull)->current.enabled,
+                   (ui_browserShowPassword)->current.enabled,
+                   (ui_browserShowNoPassword)->current.enabled,
+                   (ui_browserShowPure)->current.enabled,
+                   (ui_browserShowDedicated)->current.enabled,
+                   (ui_browserMod)->current.integer,
+                   (ui_browserFriendlyfire)->current.integer,
+                   (ui_browserKillcam)->current.integer,
+                   (ui_joinGameType)->current.integer,
+                   sharedUiInfo.numJoinGameTypes,
+                   ui_serverFilterType);
     }
 
     sharedUiInfo.serverStatus.refreshtime = uiInfo->uiDC.realTime;
@@ -5384,7 +5723,7 @@ static void UI_DrawMapPreview(const rectDef_t *rect, const vec_t *color, int net
 {
     int map;
     int mapCount;
-    int material;
+    MaterialHandle material;
 
     if (net) {
         map = (ui_currentNetMap)->current.integer;
@@ -5392,26 +5731,35 @@ static void UI_DrawMapPreview(const rectDef_t *rect, const vec_t *color, int net
         map = (ui_currentMap)->current.integer;
     }
 
-    mapCount = *(int *)((char *)&sharedUiInfo + 4944);
+    mapCount = sharedUiInfo.mapCount;
     if (map < 0 || map >= mapCount) {
-
-        if (net) {
+        if (net)
             Dvar_SetInt(ui_currentNetMap, 0);
-        } else {
+        else
             Dvar_SetInt(ui_currentMap, 0);
-        }
         map = 0;
     }
 
-    material = *(int *)((char *)&sharedUiInfo + 5104 + map * 164);
-
+    material = sharedUiInfo.mapList[map].levelShot;
     if (!material) {
-        material = CL_RegisterMaterialNoMip("menu/art/unknownmap", 3);
+        const char *imageName = sharedUiInfo.mapList[map].imageName;
+        const char *loadName = sharedUiInfo.mapList[map].mapLoadName;
+        if (imageName && imageName[0])
+            material = CL_RegisterMaterialNoMip(imageName, 3);
+        if (!material && loadName && loadName[0])
+            material = CL_RegisterMaterialNoMip(va("loadscreen_%s", loadName), 3);
+        if (!material && loadName && loadName[0])
+            material = CL_RegisterMaterialNoMip(va("levelshots/%s", loadName), 3);
+        if (material)
+            sharedUiInfo.mapList[map].levelShot = material;
     }
+
+    if (!material)
+        material = CL_RegisterMaterialNoMip("menu/art/unknownmap", 3);
 
     UI_DrawHandlePic(rect->x, rect->y, rect->w, rect->h,
                      rect->horzAlign, rect->vertAlign,
-                     color, material);
+                     color, (int)material);
 }
 
 void UI_SetMap(const char *mapname, const char *gametype)
@@ -5459,7 +5807,19 @@ void UI_MouseEventAbsolute(int x, int y)
 {
     int *cursorX = &uiInfo->uiDC.cursorx;
     int *cursorY = &uiInfo->uiDC.cursory;
-
+#ifdef __EMSCRIPTEN__
+    /*
+     * SDL reports framebuffer pixels. UI hit-tests use virtual 640x480.
+     * Clamping alone broke menus whenever r_mode != 640 (and with CSS contain).
+     */
+    {
+        extern void Web_MapMouseToVirtual(int sdlX, int sdlY, int *outX, int *outY);
+        int vx, vy;
+        Web_MapMouseToVirtual(x, y, &vx, &vy);
+        x = vx;
+        y = vy;
+    }
+#else
     if (x < 0)
         x = 0;
     else if (x > 640)
@@ -5469,6 +5829,7 @@ void UI_MouseEventAbsolute(int x, int y)
         y = 0;
     else if (y > 480)
         y = 480;
+#endif
 
     *cursorX = x;
     *cursorY = y;
@@ -5624,6 +5985,94 @@ void UI_DrawText(const char *text, int maxChars, FontHandle font, float x, float
     y = (float)(int)floorf(y + 0.5f);
 
     CL_DrawTextPhysical(text, maxChars, font, x, y, xScale, yScale, color, style);
+}
+
+/*
+ * Native UI_DrawConnectScreen lives under #ifndef __EMSCRIPTEN__ with the
+ * alternate feeder helpers. Listen/map load draws this every frame while
+ * connstate is challenging/connecting — without it wasm aborts.
+ */
+static void UI_DrawCenteredText(const char *text, FontHandle font, float scale, float y, const vec_t *color, int style)
+{
+    float actualScale = CL_NormalizedTextScale(font, scale);
+    int pixelWidth = CL_TextWidth(text, 0, font);
+    int scaledWidth = (int)((float)pixelWidth * actualScale);
+    float x = 320.0f - (float)(scaledWidth / 2);
+    UI_DrawText(text, 0x7fffffff, font, x, y, 0, 0, scale, color, style);
+}
+
+void UI_DrawConnectScreen(void)
+{
+    byte *legacyBase;
+    FontHandle font;
+    uiClientState_t cstate;
+    int bConnectInfoDisplayed;
+    const char *pszGameType;
+    const char *mapDisplayName;
+    const float connectScale = 0.5f;
+
+    legacyBase = *(byte **)imp_legacyHacks;
+    if (!legacyBase)
+        return;
+
+    {
+        int loading = 0;
+        if ((*(unsigned char *)&((LegacyHacks *)legacyBase)->cl_serverloadmap[0]) != 0 ||
+            (*(unsigned char *)&((LegacyHacks *)legacyBase)->cl_serverloadgametype[0]) != 0)
+            loading = 1;
+        CG_DrawInformation(loading);
+    }
+
+    font = UI_GetFontHandle(0, connectScale);
+    GetClientState(&cstate);
+
+    if (g_mapname[0] != '\0') {
+        int numGameTypes = sharedUiInfo.numGameTypes;
+        pszGameType = g_gametype;
+
+        if (numGameTypes > 0) {
+            int gi;
+            for (gi = 0; gi < numGameTypes; gi++) {
+                if (I_stricmp(g_gametype, sharedUiInfo.gameTypes[gi].gameType) == 0) {
+                    pszGameType = sharedUiInfo.gameTypes[gi].gameTypeName;
+                    break;
+                }
+            }
+        }
+
+        UI_DrawCenteredText(UI_SafeTranslateString(pszGameType), font, connectScale, 89.0f,
+                            (const vec_t *)imp_colorWhite, 6);
+
+        mapDisplayName = g_mapname;
+        {
+            int numMaps = sharedUiInfo.mapCount;
+            int mi;
+            for (mi = 0; mi < numMaps; mi++) {
+                if (I_stricmp(g_mapname, sharedUiInfo.mapList[mi].mapLoadName) == 0) {
+                    if (sharedUiInfo.mapList[mi].mapName && sharedUiInfo.mapList[mi].mapName[0])
+                        mapDisplayName = sharedUiInfo.mapList[mi].mapName;
+                    break;
+                }
+            }
+        }
+        UI_DrawCenteredText(mapDisplayName, font, connectScale, 119.0f, (const vec_t *)imp_colorWhite, 6);
+        bConnectInfoDisplayed = 1;
+    } else {
+        bConnectInfoDisplayed = 0;
+    }
+
+    {
+        int cs = cstate.connState;
+        if (cs == CA_CHALLENGING || cs == CA_CONNECTING) {
+            if (bConnectInfoDisplayed)
+                return;
+            if (I_stricmp(cstate.servername, "localhost") == 0)
+                return;
+            UI_DrawCenteredText(UI_SafeTranslateString(cs == CA_CHALLENGING ? "EXE_AWAITINGCHALLENGE"
+                                                                             : "EXE_AWAITINGCONNECTION"),
+                                font, connectScale, 145.0f, (const vec_t *)imp_colorWhite, 6);
+        }
+    }
 }
 #endif
 

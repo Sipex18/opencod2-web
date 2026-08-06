@@ -70,13 +70,13 @@ extern const char *SL_ConvertToString(unsigned int stringValue);
 extern unsigned int SL_GetLowercaseString_(const char *str, unsigned int user, int type);
 extern unsigned int SL_GetString_(const char *str, unsigned int user, int type);
 extern unsigned int Scr_CreateCanonicalFilename(const char *filename);
-extern int Scr_EvalVariable(unsigned int varId);
+extern unsigned long long Scr_EvalVariable(unsigned int varId);
 extern int Scr_IsInOpcodeMemory(const char *pos);
 extern Bool Scr_IsIdentifier(const char *token);
 extern int Scr_AllocArray(void);
 extern void *XAnimCreateAnims(const char *debugName, int size, Alloc_t Alloc);
 extern void XAnimBlend(void *anims, unsigned int animIndex, const char *name, unsigned int children, unsigned int num, unsigned int flags);
-extern void XAnimPrecache(const char *name, Alloc_t Alloc);
+extern XAnimParts *XAnimPrecache(const char *name, Alloc_t Alloc);
 extern void XAnimCreate(void *anims, unsigned int animIndex, const char *name);
 extern void XAnimSetupSyncNodes(void *anims);
 extern byte *Scr_AddSourceBuffer(const char *filename, const char *extFilename, byte *oldFilename, int flag);
@@ -271,6 +271,7 @@ static void Scr_PrecacheAnimationTree(unsigned int parentNode)
 {
     unsigned int node;
     unsigned int name;
+    const char *animName;
 
     for (node = FindNextSibling(parentNode); node; node = FindNextSibling(node)) {
         name = GetVariableName(node);
@@ -281,7 +282,10 @@ static void Scr_PrecacheAnimationTree(unsigned int parentNode)
             Scr_PrecacheAnimationTree(FindObject(node));
             continue;
         }
-        XAnimPrecache(SL_ConvertToString(name), Hunk_AllocXAnimTreePrecache);
+        animName = SL_ConvertToString(name);
+        Com_Printf("webdbg: XAnimPrecache '%s'\n", animName ? animName : "(null)");
+        XAnimPrecache(animName, Hunk_AllocXAnimTreePrecache);
+        Com_Printf("webdbg: XAnimPrecache returned '%s'\n", animName ? animName : "(null)");
     }
 }
 
@@ -387,6 +391,8 @@ struct scr_animtree_t Scr_FindAnimTree(const char *filename)
     struct scr_animtree_t result;
     unsigned int filenameId;
     unsigned int fileId;
+    unsigned int xanimId;
+    unsigned long long packed;
 
     filenameId = Scr_CreateCanonicalFilename(filename);
     fileId = FindVariable(scrAnimPub.animtrees, filenameId);
@@ -396,12 +402,14 @@ struct scr_animtree_t Scr_FindAnimTree(const char *filename)
     if (!fileId)
         return result;
 
-    GetVariableName(fileId);
     fileId = FindObject(fileId);
-    if (!FindVariable(fileId, 1))
+    xanimId = FindVariable(fileId, SCR_ANIMTREE_XANIM);
+    if (!xanimId)
         return result;
 
-    result.anims = (struct XAnim_s *)(uintptr_t)Scr_EvalVariable(FindVariable(fileId, 1));
+    /* Scr_EvalVariable packs (type<<32)|u; codepos pointer is low 32 bits. */
+    packed = Scr_EvalVariable(xanimId);
+    result.anims = (struct XAnim_s *)(uintptr_t)(unsigned int)packed;
     return result;
 }
 
@@ -578,8 +586,10 @@ static Bool Scr_LoadAnimTreeInternal(const char *filename, unsigned int parentNo
 
     sourceBuffer = (const char *)Scr_AddSourceBuffer(0, extFilename, 0, 1);
     if (!sourceBuffer) {
+        Com_Printf("webdbg: Scr_LoadAnimTreeInternal missing '%s'\n", extFilename);
         return 0;
     }
+    Com_Printf("webdbg: Scr_LoadAnimTreeInternal loaded '%s'\n", extFilename);
 
     scrParserPub.scriptfilename = extFilename;
     Com_BeginParseSession("Scr_AnimTreeParse");
@@ -611,16 +621,19 @@ void Scr_LoadAnimTreeAtIndex(int index, Alloc_t Alloc, int user)
     unsigned int name;
     int size;
     int size2;
+    const char *filename;
     scr_animtree_t animtree;
     VariableValue tempValue;
 
     id = scrAnimGlob.using_xanim_lookup[user][index];
     filenameId = GetVariableName(id) & 0xffff;
     fileId = FindObject(id);
+    filename = SL_ConvertToString(filenameId);
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex index=%d id=%u name='%s'\n",
+               index, id, filename ? filename : "(null)");
 
-    if (FindVariable(fileId, SCR_ANIMTREE_XANIM)) {
+    if (FindVariable(fileId, SCR_ANIMTREE_XANIM))
         return;
-    }
 
     namesVar = FindVariable(fileId, SCR_ANIMTREE_NAMES);
     if (!namesVar) {
@@ -632,23 +645,31 @@ void Scr_LoadAnimTreeAtIndex(int index, Alloc_t Alloc, int user)
     names = FindObject(namesVar);
     scrAnimPub.animtree_node = Scr_AllocArray();
 
-    if (!Scr_LoadAnimTreeInternal(SL_ConvertToString(filenameId),
-                                  scrAnimPub.animtree_node, names)) {
-        Com_Error(1, "unknown anim tree '%s'", SL_ConvertToString(filenameId));
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex before LoadAnimTreeInternal '%s'\n",
+               filename ? filename : "(null)");
+    if (!Scr_LoadAnimTreeInternal(filename, scrAnimPub.animtree_node, names)) {
+        Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex FAIL unknown tree '%s'\n",
+                   filename ? filename : "(null)");
+        Com_Error(1, "unknown anim tree '%s'", filename);
     }
 
     size = Scr_GetAnimTreeSize(scrAnimPub.animtree_node);
-    animtree.anims =
-        (struct XAnim_s *)XAnimCreateAnims(SL_ConvertToString(filenameId), size, Alloc);
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex size=%d\n", size);
+    animtree.anims = (struct XAnim_s *)XAnimCreateAnims(filename, size, Alloc);
 
     name = SL_GetString_("root", 0, 4);
     ConnectScriptToAnim(names, 0, filenameId, name, index);
     SL_RemoveRefToString(name);
 
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex before PrecacheAnimationTree\n");
     Scr_PrecacheAnimationTree(scrAnimPub.animtree_node);
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex after PrecacheAnimationTree\n");
+
     size2 = Scr_CreateAnimationTree(scrAnimPub.animtree_node, names, animtree.anims,
                                     1, "root", 0, filenameId, index);
-    (void)size2;
+    if (size != size2) {
+        Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex size mismatch size=%d size2=%d\n", size, size2);
+    }
 
     Scr_CheckAnimsDefined(names, filenameId);
 
@@ -662,4 +683,5 @@ void Scr_LoadAnimTreeAtIndex(int index, Alloc_t Alloc, int user)
 
     XAnimSetupSyncNodes(animtree.anims);
     scrAnimPub.xanim_lookup[user][index] = animtree;
+    Com_Printf("webdbg: Scr_LoadAnimTreeAtIndex done '%s'\n", filename ? filename : "(null)");
 }

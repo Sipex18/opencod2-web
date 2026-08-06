@@ -264,5 +264,206 @@
     forgetHandle() { return idbDel(KEY_DIR_HANDLE); }
   };
 
+  async function ingestFiles(files, onProgress) {
+    // files: [{ rel, size, file: File }, ...]
+    return copyToOpfs(files, onProgress);
+  }
+
+  Cod2Fs.ingestFiles = ingestFiles;
+  Cod2Fs.isWantedFile = isWantedFile;
+
+  // ---- Remote HTTP assets (VPS / CDN) ------------------------------------
+  // Manifest shape: { baseUrl?: string, files: [{ path, size }] }
+  // Paths are relative to baseUrl (default: same origin "/").
+  // Example path: "main/iw_00.iwd"
+
+  function joinUrl(base, rel) {
+    var b = String(base || '/');
+    if (b.charAt(b.length - 1) !== '/') b += '/';
+    return b + String(rel || '').replace(/^\/+/, '');
+  }
+
+  async function fetchJson(url) {
+    var res = await fetch(url, { credentials: 'same-origin', cache: 'no-cache' });
+    if (!res.ok) throw new Error('Failed to fetch ' + url + ' (' + res.status + ')');
+    return res.json();
+  }
+
+  async function downloadToOpfs(baseUrl, files, onProgress) {
+    var root = await opfsRoot();
+    var base = await opfsDir(root, OPFS_ROOT, true);
+    /* Stable order so UI / workers don't bounce between names randomly. */
+    files = files.slice().sort(function (a, b) {
+      return String(a.path || '').localeCompare(String(b.path || ''));
+    });
+    var bytesTotal = 0, i;
+    var CONCURRENCY = 2;
+    for (i = 0; i < files.length; i++) bytesTotal += (files[i].size | 0);
+
+    var meta = { ready: false, files: new Array(files.length), source: 'remote', baseUrl: baseUrl };
+    var nextIndex = 0;
+    var finishedCount = 0;
+    var finishedBytes = 0;
+    /* idx -> bytes received so far (in-flight only). */
+    var inflight = Object.create(null);
+    var currentName = '';
+    var lastReportAt = 0;
+
+    function totalDone() {
+      var n = finishedBytes, k;
+      for (k in inflight) n += inflight[k];
+      return n;
+    }
+
+    function report(phase, fileName) {
+      if (!onProgress) return;
+      var now = Date.now();
+      /* Throttle mid-stream updates; always emit start/skip/finish. */
+      if (phase === 'progress' && (now - lastReportAt) < 200) return;
+      lastReportAt = now;
+      if (fileName) currentName = fileName;
+      onProgress({
+        phase: phase,
+        fileIndex: Math.min(finishedCount + (Object.keys(inflight).length ? 1 : 0), files.length),
+        fileCount: files.length,
+        fileName: currentName,
+        finishedCount: finishedCount,
+        bytesDone: totalDone(),
+        bytesTotal: bytesTotal
+      });
+    }
+
+    async function writeStream(res, writable, idx, expected) {
+      var loaded = 0;
+      inflight[idx] = 0;
+      if (res.body && typeof res.body.getReader === 'function') {
+        var reader = res.body.getReader();
+        for (;;) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          await writable.write(chunk.value);
+          loaded += chunk.value.byteLength;
+          inflight[idx] = loaded;
+          report('progress', null);
+        }
+        await writable.close();
+      } else {
+        var buf = new Uint8Array(await res.arrayBuffer());
+        await writable.write(buf);
+        await writable.close();
+        loaded = buf.byteLength;
+      }
+      delete inflight[idx];
+      return loaded || expected;
+    }
+
+    async function processOne(idx) {
+      var rec = files[idx];
+      var rel = String(rec.path || '');
+      var size = rec.size | 0;
+      var skip = false;
+      try {
+        var existing = await opfsFileHandle(base, rel, false);
+        var ef = await existing.getFile();
+        if (size > 0 && ef.size === size) skip = true;
+      } catch (err) { /* missing */ }
+
+      if (skip) {
+        finishedCount++;
+        finishedBytes += size;
+        meta.files[idx] = { path: rel, size: size };
+        report('skip', rel);
+        return;
+      }
+
+      report('copy', rel);
+      var url = joinUrl(baseUrl, rel);
+      var res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Download failed: ' + url + ' (' + res.status + ')');
+      var fh = await opfsFileHandle(base, rel, true);
+      var writable = await fh.createWritable();
+      var written = await writeStream(res, writable, idx, size);
+      if (size > 0 && written !== size) {
+        throw new Error('Size mismatch for ' + rel + ': got ' + written + ', expected ' + size);
+      }
+      finishedCount++;
+      finishedBytes += written;
+      meta.files[idx] = { path: rel, size: written };
+      report('progress', rel);
+    }
+
+    async function worker() {
+      for (;;) {
+        var idx = nextIndex++;
+        if (idx >= files.length) return;
+        await processOne(idx);
+      }
+    }
+
+    var workers = [];
+    var n = Math.min(CONCURRENCY, files.length || 1);
+    for (i = 0; i < n; i++) workers.push(worker());
+    await Promise.all(workers);
+
+    meta.ready = true;
+    await idbSet(KEY_CACHE_META, meta);
+    if (typeof navigator.storage.persist === 'function') {
+      try { await navigator.storage.persist(); } catch (e) { /* ignore */ }
+    }
+    return meta;
+  }
+
+  async function detectRemoteConfig() {
+    // Priority:
+    // 1) window.COD2_REMOTE_ASSETS = { manifestUrl, baseUrl }
+    // 2) ?assets=/play/assets.json  (or absolute URL)
+    // 3) sibling ./assets.json
+    var cfg = global.COD2_REMOTE_ASSETS;
+    if (cfg && cfg.manifestUrl) {
+      return {
+        manifestUrl: cfg.manifestUrl,
+        baseUrl: cfg.baseUrl || '/'
+      };
+    }
+    try {
+      var params = new URLSearchParams(global.location && location.search || '');
+      var q = params.get('assets');
+      if (q) {
+        return { manifestUrl: q, baseUrl: params.get('base') || '/' };
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      var probe = await fetch('assets.json', { method: 'HEAD', credentials: 'same-origin', cache: 'no-cache' });
+      if (probe.ok) return { manifestUrl: 'assets.json', baseUrl: '/' };
+    } catch (e2) { /* ignore */ }
+    return null;
+  }
+
+  async function ingestRemote(remoteCfg, onProgress) {
+    if (!hasOpfs()) {
+      throw new Error('OPFS is required for remote assets. Use Chrome / Edge.');
+    }
+    if (onProgress) onProgress({ phase: 'scan' });
+    var manifest = await fetchJson(remoteCfg.manifestUrl);
+    var baseUrl = remoteCfg.baseUrl || manifest.baseUrl || '/';
+    var files = manifest.files || [];
+    if (!files.length) throw new Error('Remote manifest has no files: ' + remoteCfg.manifestUrl);
+    var looks = false;
+    for (var i = 0; i < files.length; i++) {
+      var p = String(files[i].path || '').toLowerCase();
+      if (p.indexOf('main/') === 0 && p.endsWith('.iwd')) { looks = true; break; }
+    }
+    if (!looks) {
+      throw new Error('Remote manifest does not look like a CoD2 install (no main/*.iwd).');
+    }
+    var meta = await downloadToOpfs(baseUrl, files, onProgress);
+    if (onProgress) onProgress({ phase: 'done', fileCount: files.length });
+    return meta;
+  }
+
+  Cod2Fs.detectRemoteConfig = detectRemoteConfig;
+  Cod2Fs.ingestRemote = ingestRemote;
+  Cod2Fs.joinUrl = joinUrl;
+
   global.Cod2Fs = Cod2Fs;
 })(typeof window !== 'undefined' ? window : this);

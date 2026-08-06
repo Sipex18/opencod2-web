@@ -28,6 +28,7 @@ extern float ceilf(float x);
 
 extern char *va(const char *format, ...);
 extern void Com_DPrintf(const char *fmt, ...);
+extern void Com_Printf(const char *fmt, ...);
 extern void Com_Error(int code, const char *fmt, ...);
 extern void SV_GameSendServerCommand(int clientNum, int svscmd_type, const char *text);
 extern int BG_FindWeaponIndexForName(const char *name);
@@ -120,7 +121,9 @@ int G_GetWeaponIndexForName(const char *name)
 {
     if (!((struct level_locals_t *)imp_level)->initializing)
         return BG_FindWeaponIndexForName(name);
-    return BG_GetWeaponIndexForName(name, bg_weaponInfoMem);
+    /* Pass G_RegisterWeapon callback — not a random void* alias — so WASM
+     * call_indirect sees a correctly typed (i32)->void function pointer. */
+    return BG_GetWeaponIndexForName(name, (BG_RegisterWeapon)imp_G_RegisterWeapon);
 }
 
 void G_SetEquippedOffHand(int clientNum, int offHandIndex)
@@ -467,6 +470,8 @@ void G_SetupWeaponDef(void)
 
     Com_DPrintf("----------------------\n");
     Com_DPrintf("Game: G_SetupWeaponDef\n");
+    Com_Printf("webdbg: G_SetupWeaponDef enter iNumWeapons=%d numItems=%d\n",
+               *(int *)imp_bg_iNumWeapons, *(int *)imp_bg_numItems);
 
     if (*(int *)imp_bg_iNumWeapons) {
         Com_DPrintf("----------------------\n");
@@ -475,16 +480,29 @@ void G_SetupWeaponDef(void)
 
     SV_SetWeaponInfoMemory();
     ClearRegisteredItems();
+    Com_Printf("webdbg: G_SetupWeaponDef before BG_ClearWeaponDef\n");
     BG_ClearWeaponDef();
+    Com_Printf("webdbg: G_SetupWeaponDef after BG_ClearWeaponDef\n");
 
     registerWeapon = (BG_RegisterWeapon)imp_G_RegisterWeapon;
     BG_FillInAmmoItems(registerWeapon);
+    Com_Printf("webdbg: G_SetupWeaponDef after BG_FillInAmmoItems\n");
 
-    if ((*(level_locals_t **)imp_level)->initializing)
+    /*
+     * imp_level already IS the level_locals_t* (see import_pointers.c:
+     * imp_level = (void*)(uintptr_t)level, and every other call site in this
+     * file / g_trigger_mp.c / g_active_mp.c uses single indirection). The
+     * original decompiled double indirection here read the first 4 bytes of
+     * `level` as a bogus pointer, so `initializing` always evaluated false
+     * and defaultweapon_mp was never registered (weapons=0 items=0 in web log).
+     */
+    if (((level_locals_t *)imp_level)->initializing)
         BG_GetWeaponIndexForName("defaultweapon_mp", registerWeapon);
     else
         BG_FindWeaponIndexForName("defaultweapon_mp");
 
+    Com_Printf("webdbg: G_SetupWeaponDef done weapons=%d items=%d\n",
+               *(int *)imp_bg_iNumWeapons, *(int *)imp_bg_numItems);
     Com_DPrintf("----------------------\n");
 }
 

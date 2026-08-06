@@ -235,12 +235,13 @@ void R_InitRenderTargets(void)
 
     device = ((DxGlobals *)(dxPtr))->device;
     vtable = VTABLE(device);
-    hr = ((HRESULT(D3DVTCC *)(void *, UINT, byte *))vtable[0x38 / 4])(
-        device, 0, (byte *)&DX_PTR()->windows[0]);
+    hr = ((HRESULT(D3DVTCC *)(void *, UINT, IDirect3DSwapChain9 **))vtable[0x38 / 4])(
+        device, 0, &DX_PTR()->windows[0].swapChain);
 
     if (hr < 0) {
         const char *errDesc = R_ErrorDescription(hr);
-        Com_Error(0, "Couldn't get an interface to the swap chain: %s\n", errDesc);
+        Com_Error(0, "Couldn't get an interface to the swap chain: %s\n",
+                  errDesc ? errDesc : "unknown");
     }
 
     do {
@@ -273,17 +274,19 @@ void R_InitRenderTargets(void)
 
         if (hr < 0) {
             const char *errDesc = R_ErrorDescription(hr);
-            Com_Error(0, "Couldn't create a %i x %i depth-stencil surface: %s\n", fullWidth, fullHeight, errDesc);
+            Com_Error(0, "Couldn't create a %i x %i depth-stencil surface: %s\n",
+                      fullWidth, fullHeight, errDesc ? errDesc : "unknown");
         }
     }
 
     {
-        void (*riPrintf)() = *(void (**)())&ri;
-        riPrintf(0, "Requested frame buffer to be %s\n", "24-bit color with 8-bit alpha");
-
         dxPtr = DX();
         {
-            IDirect3DSurface9 *colorSurf = ((DxGlobals *)dxPtr)->renderTargets[R_RENDERTARGET_FRAME_BUFFER].colorSurface;
+            IDirect3DSurface9 *colorSurf =
+                ((DxGlobals *)dxPtr)->renderTargets[R_RENDERTARGET_FRAME_BUFFER].colorSurface;
+            if (!colorSurf) {
+                Com_Error(0, "Couldn't get back buffer surface from device\n");
+            }
             void **surfVtable = VTABLE(colorSurf);
             ((D3DSurface_GetDescFn)surfVtable[0x30 / 4])((void *)colorSurf, &desc);
         }
@@ -291,8 +294,11 @@ void R_InitRenderTargets(void)
         surfaceFormat = desc.Format;
         ((DxGlobals *)dxPtr)->backBufferFormat = surfaceFormat;
 
-        riPrintf = *(void (**)())&ri;
-        riPrintf(0, "DirectX returned a frame buffer that is %s\n", R_DescribeFormat(surfaceFormat));
+        /* Variadic Printf — never call through an empty () prototype (WASM OOB / sig mismatch). */
+        ((void (*)(int, const char *, ...))ri.Printf)(
+            0, "Requested frame buffer to be %s\n", "24-bit color with 8-bit alpha");
+        ((void (*)(int, const char *, ...))ri.Printf)(
+            0, "DirectX returned a frame buffer that is %s\n", R_DescribeFormat(surfaceFormat));
     }
 
     dxPtr = DX();

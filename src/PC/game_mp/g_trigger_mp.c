@@ -2,9 +2,9 @@
 #include "imports.h"
 
 extern int Scr_IsSystemActive(int flag);
-extern unsigned int Scr_AddEntity(gentity_t *ent);
+extern void Scr_AddEntity(gentity_t *ent);
 extern void Scr_Notify(gentity_t *ent, unsigned int stringId, int numArgs);
-extern unsigned int Scr_AddInt(int value);
+extern void Scr_AddInt(int value);
 extern unsigned int Scr_GetNumParam(void);
 extern float Scr_GetFloat(int param);
 extern void Scr_Error(const char *msg);

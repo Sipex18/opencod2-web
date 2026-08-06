@@ -3,7 +3,22 @@
 #include "common_types.h"
 #include "generated_syms.h"
 
+#include <stdint.h>
+
 extern PlayerKeyState playerKeys[1];
+extern unsigned char bg_itemlist[];
+extern const char str_002157b8[];
+
+/*
+ * literals.S "Missing global variables" — web build does not link that .S.
+ * bg_numItems must be real BSS/data: BG_FillInAmmoItems does *(int*)imp_bg_numItems.
+ * If it resolves to the emscripten "missing function" stub, that read OOBs.
+ */
+int bg_numItems = 0;
+float faceAxis[6][3];
+int iSlotPreferenceOrder[16];
+int refEntIsInWorldSpace = 0;
+float sign[4];
 
 qkey_t *keys = 0;
 int __mh_execute_header = 0;
@@ -11,10 +26,9 @@ char name[64] __attribute__((aligned(4))) = {0};
 
 void *TheStringPackage = 0;
 
-const CodeSamplerSource s_codeSamplers[1] = {{0}};
-const CodeSamplerSource s_defaultCodeSamplers[1] = {{0}};
-const CodeConstantSource s_codeConsts[1] = {{0}};
-const CodeConstantSource s_defaultCodeConsts[1] = {{0}};
+/* s_codeSamplers / s_codeConsts / defaults live in r_material_code_tables.c.
+ * Do not stub them here: --allow-multiple-definition would prefer these empty
+ * tables and break technique binds (sampler.feedback, constant.materialColor). */
 
 byte *_dvar_shellshock_fadein = 0;
 byte *_dvar_shellshock_fadeout = 0;
@@ -169,10 +183,24 @@ void *sv_voiceQuality_dvar;
 void *sv_zombietime_dvar;
 void *trace_mins;
 
+/* web_gen/data.c still embeds Mac absolute 0x002157b8; rewrite to empty string. */
+static void Web_FixBgItemlistRelocs(void)
+{
+    uint32_t *words = (uint32_t *)bg_itemlist;
+    uint32_t empty = (uint32_t)(uintptr_t)str_002157b8;
+    unsigned i;
+
+    for (i = 0; i < (5824 / 4); i++) {
+        if (words[i] == 0x002157b8u)
+            words[i] = empty;
+    }
+}
+
 __attribute__((constructor))
 static void Web_InitWasmAliases(void)
 {
     keys = playerKeys[0].keys;
+    Web_FixBgItemlistRelocs();
 
     cg_dvar1 = imp_cg_nopredict;
     cg_dvar2 = imp_cg_synchronousClients;

@@ -1,5 +1,8 @@
 #include "common_types.h"
 #include "imports.h"
+#ifdef __EMSCRIPTEN__
+#include "web/web_master.h"
+#endif
 extern clientStatic_t cls;
 
 typedef struct serverStatusRequest_s {
@@ -37,7 +40,7 @@ extern int I_strnicmp(const char *s0, const char *s1, size_t n);
 extern int Com_AddToString(const char *add, char *msg, int len, int maxlen, qboolean mayAddQuotes);
 extern void CL_Netchan_SendOOBPacket(int len, const char *data, int type, int addr0, int addr1);
 extern int NET_StringToAdr(const char *s, netadr_t *a);
-extern int NET_OutOfBandPrint(int type, int addr0, int addr1, int addr2, const char *data);
+extern Bool NET_OutOfBandPrint(netsrc_t sock, netadr_t adr, const char *data);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
 extern int Sys_Milliseconds(void);
 extern int sscanf(const char *str, const char *format, ...);
@@ -582,6 +585,19 @@ void CL_GlobalServers_f(void)
 
     Com_Printf((const char *)"Requesting servers from the master...\n");
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * Browser WASM has no UDP master query. Use same-origin HTTP master proxy
+     * (web_master.c / tools/master_proxy) to fill globalServers for Join Game.
+     */
+    {
+        clientStatic_t *cls = (clientStatic_t *)imp_cls;
+        cls->pingUpdateSource = 1;
+        CL_WebMaster_Request(1, Cmd_Argv(2));
+    }
+    return;
+#endif
+
     NET_StringToAdr((const char *)"cod2master.activision.com", &to);
 
     {
@@ -611,7 +627,7 @@ void CL_GlobalServers_f(void)
         *(short *)(buffptr + 4) = 0x6f;
     }
 
-    NET_OutOfBandPrint(1, to.type, *(int *)to.ip, *(int *)&to.port, command);
+    NET_OutOfBandPrint(1, to, command);
 }
 
 void CL_ServersResponsePacket(netadr_t from, msg_t *msg)
@@ -812,6 +828,11 @@ void CL_Ping_f(void)
         return;
     }
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf((const char *)"ping: not available on web (no UDP)\n");
+    return;
+#endif
+
     memset(&to, 0, sizeof(netadr_t));
 
     if (!NET_StringToAdr(Cmd_Argv(1), &to))
@@ -874,7 +895,7 @@ fill_slot:
         CL_SetServerInfoByAddress(entry->adr, NULL, 0);
     }
 
-    NET_OutOfBandPrint(0, to.type, *(int *)to.ip, *(int *)&to.port, (const char *)"getinfo xxx");
+    NET_OutOfBandPrint(0, to, (const char *)"getinfo xxx");
 
 }
 
@@ -1028,6 +1049,12 @@ int CL_ServerStatus(char *serverAddress, char *serverStatusString, int maxLen)
         return 0;
     }
 
+#ifdef __EMSCRIPTEN__
+    if (serverStatusString)
+        *serverStatusString = '\0';
+    return 0;
+#endif
+
     if (!NET_StringToAdr(serverAddress, &to))
         return 0;
 
@@ -1099,7 +1126,7 @@ found_entry:
             serverStatus->time = 0;
             serverStatus->startTime = Sys_Milliseconds();
 
-            NET_OutOfBandPrint(0, to.type, *(int *)to.ip, *(int *)&to.port, (const char *)"getstatus");
+            NET_OutOfBandPrint(0, to, (const char *)"getstatus");
             return 0;
         }
     }
@@ -1114,7 +1141,7 @@ found_entry:
     serverStatus->startTime = Sys_Milliseconds();
     serverStatus->time = 0;
 
-    NET_OutOfBandPrint(0, to.type, *(int *)to.ip, *(int *)&to.port, (const char *)"getstatus");
+    NET_OutOfBandPrint(0, to, (const char *)"getstatus");
     return 0;
 }
 
@@ -1124,6 +1151,11 @@ void CL_ServerStatus_f(void)
     const char *serverAddr;
     serverStatusRequest_t *statusEntry;
     int i;
+
+#ifdef __EMSCRIPTEN__
+    Com_Printf((const char *)"serverstatus: not available on web (no UDP)\n");
+    return;
+#endif
 
     Com_Memset(&to, 0, sizeof(netadr_t));
 
@@ -1144,7 +1176,7 @@ void CL_ServerStatus_f(void)
     if (!NET_StringToAdr(serverAddr, &to))
         return;
 
-    NET_OutOfBandPrint(0, to.type, *(int *)to.ip, *(int *)&to.port, (const char *)"getstatus");
+    NET_OutOfBandPrint(0, to, (const char *)"getstatus");
 
     {
         for (i = 0; i < 16; i++) {

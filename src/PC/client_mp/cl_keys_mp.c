@@ -707,6 +707,16 @@ void CL_CharEvent(int key)
 
     if (key == '`' || key == '~')
         return;
+#ifdef __EMSCRIPTEN__
+    /* Suppress the '0' character when it acts as console toggle (mirrors
+     * the unconditional ` / ~ filter above).  When 0 is rebound to
+     * something else the char passes through so digits remain typeable. */
+    if (key == '0') {
+        const char *b0 = Key_GetBindingInternal('0');
+        if (!b0 || !b0[0] || I_stricmp(b0, "toggleconsole") == 0)
+            return;
+    }
+#endif
 
     keyCatchers = (*(clientActive_t **)imp_cl)->keyCatchers;
 
@@ -1232,6 +1242,19 @@ void CL_KeyEvent(int key, const qboolean down, const unsigned int time)
         CL_HandleConsoleToggleKey(down);
         return;
     }
+#ifdef __EMSCRIPTEN__
+    /* Web / HU-layout convention: treat '0' as console toggle only when
+     * it is bound to "toggleconsole" or has no binding.  If the user has
+     * bound 0 to something else (weapon slot, etc.), let it through the
+     * normal bind path so the binding is respected. */
+    if (key == '0') {
+        const char *b0 = Key_GetBindingInternal('0');
+        if (!b0 || !b0[0] || I_stricmp(b0, "toggleconsole") == 0) {
+            CL_HandleConsoleToggleKey(down);
+            return;
+        }
+    }
+#endif
 
     if (key == 0x1b) {
         CL_HandleEscapeKey(down);

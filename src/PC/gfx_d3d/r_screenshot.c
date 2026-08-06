@@ -44,7 +44,7 @@ extern float Vec3Normalize(vec3_t v);
 extern float FresnelTerm(float n0, float n1, float cosAngle);
 extern int MacDisplay_GetCardType(void);
 extern int MacOpenGLUtils_GetPCPixelShaderVersion(void);
-extern void MacDisplay_GetCurrentDimensions(int *width, int *height);
+extern short unsigned int MacDisplay_GetCurrentDimensions(int *width, int *height);
 
 static void R_ClearGLErrors(void)
 {
@@ -80,7 +80,7 @@ void R_BeginCubemapShot(const int pixelWidthHeight, const int pixelBorder)
         device = (void *)dx->device;
         vtable = *(int **)device;
 
-        ((void(D3DVTCC *)(void *, int, int, int, int, float, int))vtable[0xAC / 4])(device, 0, 0, 7, 0xFFFF00FF, 1.0f, 0);
+        ((HRESULT(D3DVTCC *)(void *, int, int, int, int, float, int))vtable[0xAC / 4])(device, 0, 0, 7, 0xFFFF00FF, 1.0f, 0);
     } while (*(volatile int *)&alwaysfails != 0);
 }
 

@@ -2,6 +2,9 @@
 #include "imports.h"
 #include <stdlib.h>
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#    include <SDL2/SDL.h>
+#endif
 
 float g_scale1 = 1.0f;
 float g_scale2 = 16777216.0f;
@@ -85,11 +88,11 @@ extern int MacDisplay_GetSupportsAnisotropicFiltering(void);
 extern float MacDisplay_GetMaxSupportedAnisotropy(void);
 extern int MacDisplay_GetMaxTextureImageUnits(void);
 extern int MacDisplay_GetMaxTextureUnits(void);
-extern void MacDisplay_ReleaseContext(void *ctx);
-extern void MacDisplay_SetGammaRamp(const D3DGAMMARAMP *pRamp);
+extern short unsigned int MacDisplay_ReleaseContext(int *ioContextRef);
+extern short unsigned int MacDisplay_SetGammaRamp(const D3DGAMMARAMP *pRamp);
 extern void MacDisplay_FadeOut(int val);
 extern void MacDisplay_FadeIn(float val);
-extern void MacDisplay_GetCurrentDimensions(int *w, int *h);
+extern short unsigned int MacDisplay_GetCurrentDimensions(int *w, int *h);
 extern void *MacDisplay_CreateScreenContext(int depth, int windowed, int stencil, int multiSample, int fsaa, int *hasAux);
 extern void MacDisplay_SwapContext(void *ctx);
 extern void MacDisplay_SetMode(int w, int h, int depth, int freq);
@@ -99,7 +102,7 @@ extern const char *MacDisplay_GetGLRenderer(void);
 extern const char *MacDisplay_GetGLExtensions(void);
 extern void game_dprintf(const char *fmt, ...);
 extern void COpenGLMatrix_SetIdentity(float *m);
-extern void D3DXMatrixMultiply(float *out, const float *a, const float *b);
+extern D3DXMATRIX *D3DXMatrixMultiply(D3DXMATRIX *pOut, const D3DXMATRIX *pM1, const D3DXMATRIX *pM2);
 extern int MacOpenGLUtils_ConvertD3DProjectionMatrixToOpenGL(float *m, float ViewportWidth, float ViewportHeight);
 extern D3DMATRIX *RB_GetActiveWorldMatrix(void);
 
@@ -570,16 +573,28 @@ static GLenum CDirect3DDevice_MapBlendFunc(DWORD blend)
     }
 }
 
-static unsigned int CDirect3DDevice_GetTextureGLId(IDirect3DBaseTexture9 *texture)
+static int CDirect3DDevice_IsLikelyValidObjectPtr(const void *ptr)
 {
-    if (!texture || (unsigned int)texture <= 0x08000000u)
+    if (!ptr)
+        return 0;
+#ifdef __EMSCRIPTEN__
+    /* WASM linear-memory heap lives below 128MB; PC-only >0x08000000 filter rejects real objects. */
+    return 1;
+#else
+    return (unsigned int)ptr > 0x08000000u;
+#endif
+}
+
+unsigned int CDirect3DDevice_GetTextureGLId(IDirect3DBaseTexture9 *texture)
+{
+    if (!CDirect3DDevice_IsLikelyValidObjectPtr(texture))
         return 0;
     return *(unsigned int *)((byte *)texture + 0x54);
 }
 
 static GLenum CDirect3DDevice_GetTextureTarget(IDirect3DBaseTexture9 *texture)
 {
-    if (!texture || (unsigned int)texture <= 0x08000000u)
+    if (!CDirect3DDevice_IsLikelyValidObjectPtr(texture))
         return 0x0DE1;
     if (*(void ***)texture == vtbl_CDirect3DCubeTexture)
         return GL_TEXTURE_CUBE_MAP;
@@ -930,11 +945,11 @@ static void CDirect3DDevice_ApplySamplerState(UINT sampler, GLenum target)
                     CDirect3DDevice_MapTextureMagFilter(magFilter));
 }
 
-static void CDirect3DDevice_UpdateTextureIfNeeded(IDirect3DBaseTexture9 *texture)
+void CDirect3DDevice_UpdateTextureIfNeeded(IDirect3DBaseTexture9 *texture)
 {
     extern void CDirect3DTexture_UpdateOpenGLSurfaces(const CDirect3DTexture *_this);
 
-    if (!texture || (unsigned int)texture <= 0x08000000u)
+    if (!CDirect3DDevice_IsLikelyValidObjectPtr(texture))
         return;
     if (*(void ***)texture == vtbl_CDirect3DTexture)
         CDirect3DTexture_UpdateOpenGLSurfaces((const CDirect3DTexture *)texture);
@@ -1105,17 +1120,27 @@ HRESULT CDirect3DDevice_CreateVertexShader(const CDirect3DDevice *_this,
                                            const DWORD *pFunction, IDirect3DVertexShader9 **ppShader)
 {
     void *shader;
+#ifndef __EMSCRIPTEN__
     int errorPos;
+#endif
     (void)_this;
+    /* Full CDirect3DVertexShader object (real vtables). A tiny COM stub is unsafe:
+     * callers index destructor slots past a short vtbl into adjacent NULLs →
+     * RuntimeError: null function on WebGL. */
     shader = malloc(0x19c);
     memset(shader, 0, 0x19c);
     CDirect3DVertexShader_CDirect3DVertexShader((const CDirect3DVertexShader *)shader, (const char *)pFunction);
     *ppShader = (IDirect3DVertexShader9 *)shader;
+#ifdef __EMSCRIPTEN__
+    /* WebGL has no GL_PROGRAM_ERROR_POSITION_ARB; never fail create on that query. */
+    return 0;
+#else
     glGetIntegerv(0x864b, &errorPos);
     if (errorPos != -1) {
         return 0x8876086c;
     }
     return 0;
+#endif
 }
 
 HRESULT CDirect3DDevice_CreatePixelShader(const CDirect3DDevice *_this,
@@ -1123,6 +1148,19 @@ HRESULT CDirect3DDevice_CreatePixelShader(const CDirect3DDevice *_this,
 {
     (void)_this;
 
+#ifdef __EMSCRIPTEN__
+    /* WebGL2 has no ARB fragment programs. Always return the soft stub so
+     * materials finish loading; drawing goes through webgl2_compat GLSL. */
+    (void)pFunction;
+    {
+        PixelShaderStub *ps;
+        ps = (PixelShaderStub *)calloc(1, sizeof(PixelShaderStub));
+        ps->vtable = ps_stub_vtbl;
+        ps->refCount = 1;
+        *ppShader = (IDirect3DPixelShader9 *)ps;
+    }
+    return 0;
+#else
     if (pFunction) {
         const char *src = (const char *)pFunction;
         if (src[0] == '!' && src[1] == '!') {
@@ -1144,6 +1182,7 @@ HRESULT CDirect3DDevice_CreatePixelShader(const CDirect3DDevice *_this,
         *ppShader = (IDirect3DPixelShader9 *)ps;
     }
     return 0;
+#endif
 }
 
 HRESULT CDirect3DDevice_CreatePixelShaderOpenGL(const CDirect3DDevice *_this,
@@ -1153,6 +1192,17 @@ HRESULT CDirect3DDevice_CreatePixelShaderOpenGL(const CDirect3DDevice *_this,
     (void)_this;
     (void)ShaderType;
 
+#ifdef __EMSCRIPTEN__
+    (void)pSrcData;
+    {
+        PixelShaderStub *ps;
+        ps = (PixelShaderStub *)calloc(1, sizeof(PixelShaderStub));
+        ps->vtable = ps_stub_vtbl;
+        ps->refCount = 1;
+        *ppShader = (IDirect3DPixelShader9 *)ps;
+    }
+    return 0;
+#else
     if (pSrcData) {
         const char *src = (const char *)pSrcData;
         if (src[0] == '!' && src[1] == '!') {
@@ -1173,6 +1223,7 @@ HRESULT CDirect3DDevice_CreatePixelShaderOpenGL(const CDirect3DDevice *_this,
         *ppShader = (IDirect3DPixelShader9 *)ps;
     }
     return 0;
+#endif
 }
 
 HRESULT CDirect3DDevice_CreateDepthStencilSurface(const CDirect3DDevice *_this,
@@ -1784,13 +1835,23 @@ HRESULT CDirect3DDevice_DrawIndexedPrimitive(const CDirect3DDevice *_this,
                     glTexID = g_prebind_texID;
                     stage0Target = g_prebind_texTarget ? g_prebind_texTarget : 0x0DE1;
                 }
+                if (!glTexID && is2D) {
+                    const Material *mmat = ((materialCommands_t *)imp_tess)->material;
+                    if (mmat) {
+                        GfxImage *mimg = CDirect3DDevice_SelectMaterialColorImage(mmat);
+                        unsigned int mtex = CDirect3DDevice_GetImageGLId(mimg);
+                        if (mtex) {
+                            glTexID = mtex;
+                            stage0Target = CDirect3DDevice_GetImageTextureTarget(mimg);
+                        }
+                    }
+                }
             } else {
                 glTexID = 0;
             }
 
             if (!is2D && stride != 0x44) {
-                extern void *imp_tess;
-                const Material *mmat = *(const Material **)((byte *)imp_tess + 0x5a7bc);
+                const Material *mmat = ((materialCommands_t *)imp_tess)->material;
                 if (mmat) {
                     GfxImage *mimg = CDirect3DDevice_SelectMaterialColorImage(mmat);
                     unsigned int mtex = CDirect3DDevice_GetImageGLId(mimg);
@@ -1801,9 +1862,7 @@ HRESULT CDirect3DDevice_DrawIndexedPrimitive(const CDirect3DDevice *_this,
                 }
             }
             if (!glTexID && usesLightmap) {
-                extern void *imp_tess;
-                byte *tessBase = (byte *)imp_tess;
-                const Material *mat = *(const Material **)(tessBase + 0x5a7bc);
+                const Material *mat = ((materialCommands_t *)imp_tess)->material;
                 materialImage = CDirect3DDevice_SelectMaterialColorImage(mat);
                 glTexID = CDirect3DDevice_GetImageGLId(materialImage);
                 stage0Target = CDirect3DDevice_GetImageTextureTarget(materialImage);
@@ -1816,10 +1875,8 @@ HRESULT CDirect3DDevice_DrawIndexedPrimitive(const CDirect3DDevice *_this,
                     CDirect3DDevice_ApplyTextureStageState(0);
 
                     {
-                        extern void *imp_tess;
                         extern GfxWorld s_world;
-                        byte *tessBase = (byte *)imp_tess;
-                        int lmapIndex = *(int *)(tessBase + 0x5a7c4);
+                        int lmapIndex = ((materialCommands_t *)imp_tess)->lmapIndex;
                         int lmapAllowed = !dev->alphaBlendEnable || dev->destBlend == 6;
                         CDirect3DDevice_DisableExtraTextureUnits();
                         if (lmapAllowed && stage0Target != GL_TEXTURE_CUBE_MAP && lmapIndex >= 0 && lmapIndex < 31 && s_world.lightmaps) {
@@ -2444,7 +2501,9 @@ HRESULT CDirect3DDevice_SetVertexShaderConstantF(const CDirect3DDevice *_this, U
     const float *pf = pConstantData;
     (void)_this;
     for (i = StartRegister; i < StartRegister + Vector4fCount; i++) {
+#ifndef __EMSCRIPTEN__
         glProgramEnvParameter4fvARB(0x8620, i, pf);
+#endif
         if (i < 256)
             memcpy(g_vsConst + i * 4, pf, 16);
         pf += 4;
@@ -2693,9 +2752,30 @@ HRESULT CDirect3DDevice_CreateAdditionalSwapChain(const CDirect3DDevice *_this, 
 }
 HRESULT CDirect3DDevice_GetSwapChain(const CDirect3DDevice *_this, UINT iSwapChain, IDirect3DSwapChain9 **pSwapChain)
 {
-    (void)_this;
+    DeviceImpl *dev = (DeviceImpl *)_this;
+
     (void)iSwapChain;
-    (void)pSwapChain;
+    if (!pSwapChain) {
+        return (HRESULT)0x80004003; /* E_POINTER */
+    }
+
+    if (!dev->swapChain) {
+        CDirect3DSwapChain *sc = (CDirect3DSwapChain *)calloc(1, 0x40);
+        if (!sc) {
+            return (HRESULT)0x8007000E; /* E_OUTOFMEMORY */
+        }
+        CDirect3DSwapChain_CDirect3DSwapChain(sc);
+        if (dev->backBuffer) {
+            CDirect3DSwapChain_SetBackBuffer(sc, (const IDirect3DSurface9 *)dev->backBuffer);
+        }
+        dev->swapChain = (IDirect3DSwapChain9 *)sc;
+    }
+
+    {
+        void **vtbl = *(void ***)dev->swapChain;
+        ((ULONG (*)(const void *))vtbl[1])((const void *)dev->swapChain);
+    }
+    *pSwapChain = dev->swapChain;
     return 0;
 }
 UINT CDirect3DDevice_GetNumberOfSwapChains(const CDirect3DDevice *_this)
@@ -3130,8 +3210,14 @@ void CDirect3DDevice_Init(void *device)
     dev->viewportH = 480;
     dev->viewportMinZ = 0.0f;
     dev->viewportMaxZ = 1.0f;
-    glViewport(0, 0, 640, 480);
-    glDepthRange(0.0, 1.0);
+    /* Skip GL state until a context exists — early calls hang under PROXY_TO_PTHREAD. */
+#ifdef __EMSCRIPTEN__
+    if (SDL_GL_GetCurrentContext())
+#endif
+    {
+        glViewport(0, 0, 640, 480);
+        glDepthRange(0.0, 1.0);
+    }
     dev->zEnable = 1;
     dev->zWriteEnable = 1;
     dev->cullMode = 1;

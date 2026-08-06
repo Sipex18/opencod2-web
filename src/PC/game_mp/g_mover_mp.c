@@ -46,7 +46,7 @@ extern int CM_AreaEntities(vec_t *mins, vec_t *maxs, int *entityList, int maxcou
 extern void BG_EvaluateTrajectory(trajectory_t *tr, int atTime, vec_t *result);
 extern void G_Damage(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, const vec_t *dir, const vec_t *point, int damage, int dflags, int mod, int hitLoc, int timeOffset);
 extern void G_GeneralLink(gentity_t *ent);
-extern void G_RunThink(gentity_t *ent);
+extern int G_RunThink(gentity_t *ent);
 
 void use_trigger_use(gentity_t *ent, gentity_t *other, gentity_t *activator);
 static void trigger_use_shared(gentity_t *ent);

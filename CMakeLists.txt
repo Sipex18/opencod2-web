@@ -71,47 +71,67 @@ set(WEB_C ${WEB_PC_C} ${WEB_MAC_C} ${WEB_STUBS_C} ${WEB_ROOT_C})
 # native asm-data .c, and the blobs replaced by the generated web versions.
 list(FILTER WEB_C EXCLUDE REGEX "^src/(data|import_pointers|literals|bss|rodata|strings)\\.c$")
 list(FILTER WEB_C EXCLUDE REGEX "^src/stubs/(link_stubs|missing_c_syms)\\.c$")
+# Miles/AIL driver is replaced by src/web/web_snd_driver.c (Web Audio) below.
+list(FILTER WEB_C EXCLUDE REGEX "^src/PC/win32/snd_driver\\.c$")
 # the Linux platform layer + bundled zlib + web glue are added explicitly.
 list(APPEND WEB_C
   src/unix/linux_common.c src/unix/linux_input.c src/unix/linux_net.c src/unix/sysdiff_statehash.c
   src/PC/zlib/adler32.c src/PC/zlib/infblock.c src/PC/zlib/infcodes.c src/PC/zlib/inffast.c
   src/PC/zlib/inflate.c src/PC/zlib/inftrees.c src/PC/zlib/infutil.c src/PC/zlib/zutil.c
-  src/web/webgl2_compat.c src/web/wasm_aliases.c src/web/cod2_wasmfs_mount.c)
+  src/web/webgl2_compat.c src/web/wasm_aliases.c src/web/cod2_wasmfs_mount.c src/web/builtin_engine_assets.c src/web/web_vid_scale.c src/web/web_master.c src/web/web_snd_driver.c src/web/web_net.c)
 
 add_executable(cod2 ${WEB_C} ${WEB_GEN_C})
 target_compile_definitions(cod2 PRIVATE WEB_BUILD=1 SDL_DISABLE_IMMINTRIN_H)
 target_include_directories(cod2 PRIVATE
   ${COD2_SRC_DIR}/PC/speex ${COD2_SRC_DIR}/PC/zlib ${COD2_SRC_DIR}
   ${COD2_SRC_DIR}/headers ${CMAKE_SOURCE_DIR})
-target_compile_options(cod2 PRIVATE -w -O0 -gsource-map -flto ${COD2_WNO})
+# -O0 + PROXY_TO_PTHREAD + glTexImage2D hits emscripten mailbox unaligned-access
+# (github.com/emscripten-core/emscripten/issues/23963). Use -O1 for web.
+target_compile_options(cod2 PRIVATE -w -O2 -msimd128 -sUSE_SDL=2 ${COD2_WNO})
 set_source_files_properties(src/PC/qcommon/crash_handler.c PROPERTIES
   COMPILE_DEFINITIONS "COD2_GIT_HASH=\"${COD2_GIT_HASH}\"")
 
 set(WEB_LINK
-  -flto -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1
+  -O2
+  -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sSTACK_SIZE=5242880
-  -sFORCE_FILESYSTEM=1 -sASSERTIONS=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=0
-  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall
-  --shell-file ${COD2_SRC_DIR}/web/shell.html
-  -Wl,--allow-multiple-definition)
+  -sFORCE_FILESYSTEM=1 -sASSERTIONS=0 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=0
+  -sWARN_ON_UNDEFINED_SYMBOLS=0 -sMALLOC=emmalloc
+  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,UTF8ToString
+  --shell-file ${COD2_SRC_DIR}/web/shell_nzp.html
+  -Wl,--allow-multiple-definition
+  -Wl,--allow-undefined
+  -Wl,--no-fatal-warnings)
 if(COD2_WEB_WASMFS)
+  # OPFS ProxyWorker cannot start on the browser main thread. Run main() on a
+  # worker via PROXY_TO_PTHREAD. Prefer OFFSCREEN_FRAMEBUFFER (proxy present to
+  # the DOM canvas) over OFFSCREENCANVAS transfer — SDL2+OffscreenCanvas often
+  # yields a black screen.
   target_compile_options(cod2 PRIVATE -DWEB_WASMFS -pthread)
-  list(APPEND WEB_LINK -sWASMFS -pthread -sPTHREAD_POOL_SIZE=2
-       -sEXPORTED_FUNCTIONS=_main,_cod2_mount_opfs)
+  list(APPEND WEB_LINK -sWASMFS -pthread -sPTHREAD_POOL_SIZE=4 -sPROXY_TO_PTHREAD=1
+       -sOFFSCREEN_FRAMEBUFFER=1
+       -sEXPORTED_FUNCTIONS=_main,_cod2_mount_opfs,_CL_WebMaster_Begin,_CL_WebMaster_AddServer,_CL_WebMaster_UpdatePing,_CL_WebMaster_End)
 elseif(COD2_WEB_WORKERFS)
   target_compile_options(cod2 PRIVATE -pthread)
   list(APPEND WEB_LINK -pthread -sPTHREAD_POOL_SIZE=4 -sPROXY_TO_PTHREAD=1
-       -sOFFSCREENCANVAS_SUPPORT=1 "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas" -lworkerfs.js)
+       -sOFFSCREENCANVAS_SUPPORT=1 "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas" -lworkerfs.js
+       -sEXPORTED_FUNCTIONS=_main,_CL_WebMaster_Begin,_CL_WebMaster_AddServer,_CL_WebMaster_UpdatePing,_CL_WebMaster_End)
 else()
   list(APPEND WEB_LINK -lidbfs.js)   # legacy MEMFS default (matches `make web`)
 endif()
-target_link_options(cod2 PRIVATE ${WEB_LINK})
+# SHELL: keeps duplicate --post-js flags (CMake otherwise de-dupes the flag).
+target_link_options(cod2 PRIVATE ${WEB_LINK}
+  "SHELL:--post-js ${COD2_SRC_DIR}/web/gl_proxied_frame_fix.js"
+  "SHELL:--post-js ${COD2_SRC_DIR}/web/web_master.js"
+  "SHELL:--post-js ${COD2_SRC_DIR}/web/web_net.js"
+  "SHELL:--post-js ${COD2_SRC_DIR}/web/web_audio.js")
 set_target_properties(cod2 PROPERTIES SUFFIX ".html"
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # the browser-side loader sits next to cod2.html (shell.html loads it as a sibling).
 add_custom_command(TARGET cod2 POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/cod2_fs.js ${CMAKE_BINARY_DIR}/cod2_fs.js)
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/cod2_fs.js ${CMAKE_BINARY_DIR}/cod2_fs.js
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/remote-config.js ${CMAKE_BINARY_DIR}/remote-config.js)
 
 # =============================================================================
 elseif(WIN32)

@@ -22,8 +22,8 @@ extern void G_GetPlayerViewOrigin(gentity_t *ent, vec_t *origin);
 extern float Vec3Normalize(vec_t *v);
 extern float Vec3NormalizeTo(const vec_t *v, vec_t *out);
 extern int G_LocationalTracePassed(const vec_t *start, const vec_t *end, int entityNum, int contentmask);
-extern unsigned int Scr_AddEntity(gentity_t *ent);
-extern unsigned int Scr_AddInt(int value);
+extern void Scr_AddEntity(gentity_t *ent);
+extern void Scr_AddInt(int value);
 extern void Scr_Notify(gentity_t *ent, int name, int numArgs);
 extern int LogAccuracyHit(gentity_t *target, gentity_t *attacker);
 extern int CM_AreaEntities(const vec_t *mins, const vec_t *maxs, int *entityList, int maxcount, int areatype);
@@ -31,7 +31,7 @@ extern void G_TraceCapsule(void *results, const vec_t *start, const vec_t *end, 
 extern void Scr_PlayerDamage(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, int damage, int dflags, int mod, int weapon, const vec_t *dir, const vec_t *point, hitLocation_t hitLoc, int timeOffset);
 extern int Com_GetServerDObj(int clientNum);
 extern int BG_AnimScriptEvent(void *ps, int event, int isContinue, int force);
-extern void Scr_PlayerKilled(gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath, int iWeapon, const vec_t *vDir, hitLocation_t hitLoc, int psTimeOffset);
+extern void Scr_PlayerKilled(gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath, int iWeapon, const vec_t *vDir, hitLocation_t hitLoc, int psTimeOffset, int deathAnimDuration);
 extern gentity_t *fire_grenade(gentity_t *self, vec_t *start, vec_t *dir, int grenadeWPID, int clientNum);
 extern void Cmd_Score_f(gentity_t *ent);
 extern void SV_UnlinkEntity(gentity_t *ent);
@@ -648,7 +648,7 @@ void player_die(gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int 
     animResult = BG_AnimScriptEvent(&cl->ps, 1, 0, 1);
 
     Scr_PlayerKilled(self, inflictor, attacker, damage, meansOfDeath,
-                     iWeapon, vDir, hitLoc, psTimeOffset);
+                     iWeapon, vDir, hitLoc, psTimeOffset, 0);
 
     {
         int maxClients = level.maxclients;

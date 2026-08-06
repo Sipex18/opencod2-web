@@ -342,6 +342,8 @@ int MacOpenGLUtils_GetOpenGLTextureType(bool *CreateOpenGLResources, GLenum *Ope
 
     case D3DFMT_A8R8G8B8:
     case D3DFMT_X8R8G8B8:
+        /* Internal is always RGBA. Desktop uploads as BGRA (Mac path); WebGL2
+         * cannot use GL_BGRA — CDirect3DSurface converts BGRA→RGBA on upload. */
         *OpenGLInternalFormat = 0x1908;
         *OpenGLFormat = 0x80E1;
         *OpenGLElementType = 0x1401;

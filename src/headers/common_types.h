@@ -4497,15 +4497,16 @@ typedef long unsigned int (*AIL_file_open_callback)();
 typedef long unsigned int (*AIL_file_read_callback)();
 typedef long int (*AIL_file_seek_callback)();
 typedef OpaqueAUGraph * AUGraph;
-typedef void * (*Alloc_t)();
+typedef void *(*Alloc_t)(int size);
 typedef OpaqueAudioConverter * AudioConverterRef;
-typedef void (*BG_RegisterWeapon)();
+typedef void (*BG_RegisterWeapon)(int weapIndex);
 typedef unsigned char BYTE;
 typedef short int Bits16[16];
 typedef unsigned char Bool;
 typedef unsigned char Boolean;
-typedef unsigned int (*BuiltinFunction)();
-typedef unsigned int (*BuiltinMethod)();
+/* WASM: builtins/methods return via Scr_Add*; must be void (not unsigned int). */
+typedef void (*BuiltinFunction)(void);
+typedef void (*BuiltinMethod)();
 typedef unsigned char Bytef;
 typedef void *CDisplayList;
 typedef const __CFArray * CFArrayRef;
@@ -4743,6 +4744,16 @@ typedef void * (*encoder_init_func)();
 typedef int fileHandle_t;
 typedef float float16;
 typedef void (*float_DCT_method_ptr)();
+#ifdef __EMSCRIPTEN__
+typedef void (*fn_blocked)(gentity_t *);
+typedef void (*fn_controller)(gentity_t *, int *);
+typedef void (*fn_die)(gentity_t *, gentity_t *, gentity_t *, int, int, int, const vec_t *, const int, int);
+typedef void (*fn_pain)(gentity_t *, gentity_t *, int, const vec_t *, const int, const vec_t *, const int);
+typedef void (*fn_reached)(gentity_t *);
+typedef void (*fn_think)(gentity_t *);
+typedef void (*fn_touch)(gentity_t *, gentity_t *, int);
+typedef void (*fn_use)(gentity_t *, gentity_t *, gentity_t *);
+#else
 typedef int (*fn_blocked)();
 typedef int (*fn_controller)();
 typedef int (*fn_die)();
@@ -4751,6 +4762,7 @@ typedef int (*fn_reached)();
 typedef int (*fn_think)();
 typedef void (*fn_touch)();
 typedef unsigned int (*fn_use)();
+#endif
 typedef void (*forward_DCT_method_ptr)();
 typedef double (*free_func)();
 typedef huff_entropy_decoder * huff_entropy_ptr;
@@ -8021,7 +8033,7 @@ struct PrecacheEntry {
     scr_string_t filename;
     Bool include;
     unsigned int sourcePos;
-    int next;
+    struct PrecacheEntry *next;
 };
 
 struct ProcessSerialNumber {
@@ -9733,6 +9745,7 @@ struct XAnimParts_s {
     float framerate;
     float frequency;
     byte notifyCount;
+    char assetType;
     short int boneCount;
     short unsigned int *names;
     char *simpleQuatBits;

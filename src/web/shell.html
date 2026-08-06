@@ -1,4 +1,6 @@
 <!doctype html>
+<!-- DEPRECATED: CMake web builds use src/web/shell_nzp.html (--shell-file).
+     Do not add features here; they will not ship. Keep this file only as a legacy reference. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -86,6 +88,67 @@
   (function () {
     'use strict';
 
+    window.detectedScreenHz = 0;
+    window.applyMonitorHzLimit = function () {
+      try {
+        if (typeof Module !== 'undefined' && Module.ccall) {
+          Module.ccall('Web_ApplyMonitorRefreshLimit', null, [], []);
+        } else if (typeof _Web_ApplyMonitorRefreshLimit === 'function') {
+          _Web_ApplyMonitorRefreshLimit();
+        }
+      } catch (e) {}
+    };
+    (function () {
+      var known = [60, 75, 120, 144, 165, 240];
+      function snapHz(fps) {
+        var i;
+        for (i = known.length - 1; i >= 0; i--) {
+          if (fps + 8 >= known[i])
+            return known[i];
+        }
+        return 60;
+      }
+      function runSample(reason, cb) {
+        var times = [];
+        var last = performance.now();
+        function tick(now) {
+          var dt = now - last;
+          last = now;
+          if (dt > 2 && dt < 100) times.push(dt);
+          if (times.length < 45) {
+            requestAnimationFrame(tick);
+          } else {
+            times.sort(function (a, b) { return a - b; });
+            var median = times[Math.floor(times.length / 2)];
+            var fps = Math.round(1000 / median);
+            if (fps < 50) fps = 60;
+            var snapped = snapHz(fps);
+            console.log('[cod2-vid] Hz sample (' + reason + '): ~' + fps +
+                        ' fps -> snap ' + snapped + ' Hz (prev=' + window.detectedScreenHz + ')');
+            if (cb) cb(snapped);
+          }
+        }
+        requestAnimationFrame(tick);
+      }
+      function applyIfHigher(snapped) {
+        if (snapped > window.detectedScreenHz) {
+          window.detectedScreenHz = snapped;
+          window.applyMonitorHzLimit();
+        }
+      }
+      runSample('initial', function (snapped) {
+        window.detectedScreenHz = snapped;
+        window.applyMonitorHzLimit();
+        if (snapped <= 60) {
+          document.addEventListener('visibilitychange', function onVis() {
+            if (document.visibilityState !== 'visible') return;
+            document.removeEventListener('visibilitychange', onVis);
+            setTimeout(function () { runSample('post-visible', applyIfHigher); }, 200);
+          });
+        }
+      });
+    })();
+
     var canvas    = document.getElementById('canvas');
     var overlay   = document.getElementById('overlay');
     var pickBtn   = document.getElementById('pickBtn');
@@ -161,21 +224,23 @@
       // The WORKERFS zero-copy build links -lworkerfs.js (WORKERFS global) and
       // runs main() on a worker (PROXY_TO_PTHREAD). WORKERFS provides the
       // synchronous on-demand reads of the picked folder's File objects.
-      return typeof WORKERFS !== 'undefined';
+      // Without -lworkerfs.js emscripten leaves a string stub — require .mount.
+      return !!(typeof WORKERFS === 'object' && WORKERFS &&
+                typeof WORKERFS.mount === 'function');
     }
 
     // Pick mount roots + (MEMFS) persistent home, then build the launch args.
     // Must run once the runtime is up (Module._cod2_mount_opfs is then known).
     function configureFsBackend() {
-      if (isWorkerfsBuild()) {
+      if (isWasmfsBuild()) {
+        FS_BASEPATH = '/opfs/cod2';
+        FS_HOMEPATH = '/opfs/home';
+        idbfsHome = false;
+      } else if (isWorkerfsBuild()) {
         // Zero-copy: read the iwds in place from disk. fs_homepath is a small
         // OPFS-backed writable tree; assets are NOT copied anywhere.
         FS_BASEPATH = '/cod2';
         FS_HOMEPATH = '/cod2home';
-        idbfsHome = false;
-      } else if (isWasmfsBuild()) {
-        FS_BASEPATH = '/opfs/cod2';
-        FS_HOMEPATH = '/opfs/home';
         idbfsHome = false;
       } else {
         FS_BASEPATH = '/cod2';
@@ -366,7 +431,26 @@
       canvas.focus();
       try { Module.callMain(GAME_ARGS); }
       catch (e) { console.error(e); }
+      /* Measurement may finish before or after callMain; re-apply once WASM is up. */
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 500);
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 2000);
     }
+
+    var resizeTimer = 0;
+    window.addEventListener('resize', function () {
+      if (!started) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        resizeTimer = 0;
+        try {
+          if (typeof Module !== 'undefined' && Module.ccall) {
+            Module.ccall('Web_OnWindowResize', null, [], []);
+          } else if (typeof _Web_OnWindowResize === 'function') {
+            _Web_OnWindowResize();
+          }
+        } catch (e) {}
+      }, 200);
+    });
 
     // ---- Buttons --------------------------------------------------------
     pickBtn.addEventListener('click', function () {

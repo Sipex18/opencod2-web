@@ -528,6 +528,16 @@ static void R_EndFrame_impl(void)
         return;
     }
 
+#ifdef __EMSCRIPTEN__
+    {
+        static int ef_dbg;
+        if (ef_dbg < 3) {
+            printf("webdbg: R_EndFrame enter #%d\n", ef_dbg);
+            ef_dbg++;
+        }
+    }
+#endif
+
     RB_AdaptiveGpuSyncTarget();
     R_UnlockSkinnedCache();
 
@@ -542,8 +552,35 @@ static void R_EndFrame_impl(void)
     cl->usedCritical = 0;
     cl->lastCmd = NULL;
 
+#ifdef __EMSCRIPTEN__
+    {
+        static int ef_exec_dbg;
+        if (ef_exec_dbg < 3) {
+            printf("webdbg: R_EndFrame before ExecuteRenderCommands #%d\n", ef_exec_dbg);
+            ef_exec_dbg++;
+        }
+    }
+#endif
     RB_ExecuteRenderCommands(frontEndDataOut);
+#ifdef __EMSCRIPTEN__
+    {
+        static int ef_rb_dbg;
+        if (ef_rb_dbg < 3) {
+            printf("webdbg: R_EndFrame before RB_EndFrame #%d\n", ef_rb_dbg);
+            ef_rb_dbg++;
+        }
+    }
+#endif
     RB_EndFrame();
+#ifdef __EMSCRIPTEN__
+    {
+        static int ef_done_dbg;
+        if (ef_done_dbg < 3) {
+            printf("webdbg: R_EndFrame done #%d\n", ef_done_dbg);
+            ef_done_dbg++;
+        }
+    }
+#endif
 
     data = (GfxBackEndData *)s_backEndData;
     frontEndDataOut = data;

@@ -8,6 +8,11 @@
 #include <unistd.h>
 #include <errno.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include "web/web_net.h"
+#endif
+
 static qboolean usingSocks;
 static qboolean networkingEnabled;
 static const dvar_t *net_noudp;
@@ -61,7 +66,7 @@ static qboolean NET_GetDvars(void);
 void NET_Sleep(int msec);
 qboolean Sys_StringToAdr(const char *s, netadr_t *a);
 qboolean Sys_GetPacket(netadr_t *net_from, msg_t *net_message);
-void Sys_SendPacket(int length, const void *data, netadr_t to);
+Bool Sys_SendPacket(int length, const void *data, netadr_t to);
 void NET_OpenIP(void);
 void NET_Config(qboolean enableNetworking);
 void NET_Init(void);
@@ -204,11 +209,21 @@ qboolean Sys_StringToAdr(const char *s, netadr_t *a)
     if (I_isdigit((signed char)s[0])) {
         sadr.sin_addr.s_addr = inet_addr(s);
     } else {
+#ifdef __EMSCRIPTEN__
+        /*
+         * libc gethostbyname on WASM traps (unreachable). Numeric IPs still work
+         * above; hostname soft-fails so master/rcon paths never abort the module.
+         */
+        (void)h;
+        (void)s;
+        return 0;
+#else
         h = gethostbyname(s);
         if (!h) {
             return 0;
         }
         sadr.sin_addr.s_addr = *(unsigned long *)h->h_addr_list[0];
+#endif
     }
 
     if (sadr.sin_family != AF_INET) {
@@ -230,6 +245,13 @@ qboolean Sys_GetPacket(netadr_t *net_from, msg_t *net_message)
     socklen_t fromlen;
     struct sockaddr from;
     int err;
+
+#ifdef __EMSCRIPTEN__
+    /* Drain WebSocket relay receive queue (browser has no real UDP). */
+    if (Web_Net_Recv(net_from, net_message))
+        return 1;
+    return 0;
+#endif
 
     for (protocol = 0; protocol <= 1; protocol++) {
         if (protocol == 0) {
@@ -304,7 +326,7 @@ qboolean Sys_GetPacket(netadr_t *net_from, msg_t *net_message)
     return 0;
 }
 
-void Sys_SendPacket(int length, const void *data, netadr_t to)
+Bool Sys_SendPacket(int length, const void *data, netadr_t to)
 {
     int net_socket;
     struct sockaddr_in addr;
@@ -312,14 +334,21 @@ void Sys_SendPacket(int length, const void *data, netadr_t to)
     int err;
 
     if (to.type != NA_BROADCAST && to.type != NA_IP) {
+#ifdef __EMSCRIPTEN__
+        return 0;
+#else
         Com_Error(0, "Sys_SendPacket: bad address type");
-        return;
+        return 0;
+#endif
     }
 
+#ifdef __EMSCRIPTEN__
+    return Web_Net_Send(length, data, to);
+#else
     net_socket = ip_socket;
 
     if (!net_socket) {
-        return;
+        return 0;
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -337,7 +366,7 @@ void Sys_SendPacket(int length, const void *data, netadr_t to)
     if (usingSocks && to.type == NA_IP) {
         if (length > (int)sizeof(socksBuf) - 10) {
             Com_Printf("Sys_SendPacket: SOCKS packet too large (%i bytes)\n", length);
-            return;
+            return 0;
         }
         socksBuf[0] = 0;
         socksBuf[1] = 0;
@@ -352,25 +381,31 @@ void Sys_SendPacket(int length, const void *data, netadr_t to)
     }
 
     if (ret != -1) {
-        return;
+        return 1;
     }
 
     err = WSAGetLastError();
     if (err == 10035) {
-        return;
+        return 1;
     }
 
     if (err == 10049) {
         if (to.type == NA_BROADCAST) {
-            return;
+            return 0;
         }
     }
 
     Com_Printf("Sys_SendPacket: %s\n", strerror(errno));
+    return 0;
+#endif
 }
 
 void NET_OpenIP(void)
 {
+#ifdef __EMSCRIPTEN__
+    ip_socket = 0;
+    return;
+#endif
     const dvar_t *ip;
     const dvar_t *port;
     int i;

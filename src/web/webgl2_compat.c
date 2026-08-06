@@ -916,10 +916,9 @@ WEBGL2_WEAK void glTexEnvfv(unsigned int target, unsigned int pname, const float
         glTexEnvi(target, pname, (int)params[0]);
 }
 
-WEBGL2_WEAK int glTexEnvf(unsigned int target, unsigned int pname, float param)
+WEBGL2_WEAK void glTexEnvf(unsigned int target, unsigned int pname, float param)
 {
     glTexEnvi(target, pname, (int)param);
-    return 0;
 }
 
 WEBGL2_WEAK void glClearDepth(double depth) { glClearDepthf((float)depth); }

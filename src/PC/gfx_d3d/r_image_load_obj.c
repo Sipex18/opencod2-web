@@ -17,7 +17,7 @@ extern void *Hunk_AllocateTempMemoryInternal(int size);
 extern void Hunk_FreeTempMemory(void *buf);
 extern void R_LoadJpg(const char *filepath, void **file, byte **pic, int *width, int *height, int *imageFormat);
 extern void R_GenerateOutdoorImage(GfxImage *image);
-extern void Image_BuildSpecularityMap(int unused, byte *pic);
+extern void Image_BuildSpecularityMap(float shift, byte *pic);
 
 extern GfxImage *Image_Alloc(const char *name, int category, int semantic, int imageTrack);
 static vec3_t lightGridLookupMatrix[3];
@@ -272,6 +272,13 @@ static void __attribute_regparm__(3) Image_LoadWavelet(GfxImage *image, const by
             void *pTemp = __Znam(allocSize);
             memcpy(pTemp, newAddr, sizeForLevel);
 
+            /*
+             * Mac PPC port byte-reversed each texel DWORD before GL upload.
+             * Wavelet already emits B,G,R,A (D3DFMT_A8R8G8B8 / GL_BGRA). On
+             * little-endian (web/WASM) that reverse turns cream UI (logo_cod2)
+             * into light-blue after the WebGL BGRA→RGBA upload convert.
+             */
+#if !defined(__EMSCRIPTEN__) && defined(__BIG_ENDIAN__)
             {
                 unsigned int swapCount = (unsigned int)allocSize / 4;
                 unsigned int u;
@@ -281,6 +288,7 @@ static void __attribute_regparm__(3) Image_LoadWavelet(GfxImage *image, const by
                         (v >> 24) | (v << 24) | ((v << 8) & 0xff0000) | ((v >> 8) & 0xff00);
                 }
             }
+#endif
 
             int cubeFace = Image_CubemapFace(face);
             Image_UploadData(image, format, cubeFace, level - picmip, (const byte *)pTemp);
@@ -770,7 +778,7 @@ GfxImage *Image_Load(const char *name, int semantic, int imageTrack)
     if (!memcmp(name, "$specularity", 13)) {
         byte pic[0x2000];
         image = Image_Alloc(name, 1, (byte)semantic, imageTrack);
-        Image_BuildSpecularityMap(0, pic);
+        Image_BuildSpecularityMap(0.0f, pic);
         Image_Setup(image, 0x20, 0x100, 1, 3, 0, 0x32);
         Image_UploadData(image, 0x32, Image_CubemapFace(0), 0, pic);
         return image;

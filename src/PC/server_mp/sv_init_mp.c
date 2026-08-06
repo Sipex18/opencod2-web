@@ -959,17 +959,33 @@ void SV_SpawnServer(const char *server)
         DBG_Hunk_PrintUsage("SV: before SV_InitGameProgs");
     }
     SV_InitGameProgs(savepersist);
+#ifdef __EMSCRIPTEN__
+    puts("SYNC-DBG: SV_SpawnServer after SV_InitGameProgs");
+#endif
 
     isDedicated = *(int *)((byte *)(void *)imp_com_dedicated + 8);
     if (isDedicated) {
+#ifdef __EMSCRIPTEN__
+        puts("SYNC-DBG: SV_SpawnServer before FX_InitSystem");
+#endif
         FX_InitSystem(0);
         FX_CreateDefaultEffect();
     }
 
+#ifdef __EMSCRIPTEN__
+    puts("SYNC-DBG: SV_SpawnServer before SV_RunFrame loop");
+#endif
+#ifdef __EMSCRIPTEN__
+    for (i = 0; i < 30; i++) {
+#else
     for (i = 0; i < 3; i++) {
+#endif
         svsg->time += 100;
         SV_RunFrame();
     }
+#ifdef __EMSCRIPTEN__
+    puts("SYNC-DBG: SV_SpawnServer after SV_RunFrame loop");
+#endif
 
     sv = (byte *)imp_sv;
     if (*(int *)(sv + SV_NUMENTITIES_OFF) > 1) {

@@ -7,7 +7,7 @@ extern refexport_t re;
 extern float sinf(float x);
 extern float cosf(float x);
 extern double tan(double x);
-extern void CM_BoxTrace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, unsigned int model, int brushmask);
+extern int CM_BoxTrace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, unsigned int model, int brushmask);
 extern GfxEntity *R_AddRefEntityToScene(GfxEntity *ent, const struct XModel *model, int unk);
 extern void FX_AddScheduledEffects(void);
 extern void FX_UpdateAllNonBolt(void);

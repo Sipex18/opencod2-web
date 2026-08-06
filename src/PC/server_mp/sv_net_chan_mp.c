@@ -1,6 +1,9 @@
 #include "common_types.h"
 #include "imports.h"
 #include <stddef.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 COD2_ASSERT_FIELD(client_t, reliableAcknowledge,     0x20810);
 COD2_ASSERT_FIELD(client_t, messageAcknowledge,      0x20818);
@@ -115,6 +118,11 @@ Bool SV_Netchan_Transmit(client_t *client, int length, byte *data)
     key = (byte)(*(int *)(cl + CLIENT_CHALLENGE_OFF));
     key ^= (byte)outgoingSequence;
 
+#ifdef __EMSCRIPTEN__
+    netchan = (netchan_t *)(cl + CLIENT_NETCHAN_OFF);
+    printf("SV_Netchan_Transmit: enter len=%d addrType=%d dataSize=%d\n", length, netchan->remoteAddress.type, dataSize);
+#endif
+
     index = 0;
     for (i = 0; i < dataSize; i++) {
         byte ch;
@@ -133,6 +141,9 @@ Bool SV_Netchan_Transmit(client_t *client, int length, byte *data)
     }
 
     netchan = (netchan_t *)(cl + CLIENT_NETCHAN_OFF);
+#ifdef __EMSCRIPTEN__
+    printf("SV_Netchan_Transmit: before Netchan_Transmit addrType=%d\n", netchan->remoteAddress.type);
+#endif
     return Netchan_Transmit(netchan, length, data);
 }
 

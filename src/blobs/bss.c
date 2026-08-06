@@ -202,7 +202,7 @@ unsigned char vq8[524288];
 unsigned char sAspyrIntroPlayed[32];
 unsigned char g_testLods[128];
 unsigned char szReference[1024];
-unsigned char currentPos[128];
+unsigned int currentPos;
 unsigned char bg_defaultWeaponDefs[1568];
 unsigned char g_playerAnimTypeNames[256];
 unsigned char g_playerAnimTypeNamesCount[96];
@@ -608,8 +608,13 @@ unsigned char player_view_pitch_up[112];
 unsigned char cm[384];
 unsigned char bg_weaponDefs[608];
 unsigned char scrVmPub[17184];
+#if defined(__EMSCRIPTEN__)
+int g_script_error_level;
+unsigned char g_script_error[33 * 156];
+#else
 unsigned char g_script_error_level[32];
 unsigned char g_script_error[2400];
+#endif
 unsigned char scrVarPub[262240];
 unsigned char scrVarGlob[1048608];
 unsigned char scrCompilePub[65592];

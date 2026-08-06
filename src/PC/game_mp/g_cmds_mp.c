@@ -20,7 +20,7 @@ extern const dvar_t *g_gametype;
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
 extern char *va(const char *fmt, ...);
 extern void Com_Printf(const char *fmt, ...);
-extern int G_LogPrintf(const char *fmt, ...);
+extern void G_LogPrintf(const char *fmt, ...);
 extern int SV_GetClientPing(int clientNum);
 extern int SV_GetGuid(int clientNum);
 extern void SV_GameSendServerCommand(int clientNum, int type, const char *text);
@@ -38,7 +38,7 @@ extern const dvar_t *Dvar_RegisterString_mac(const char *dvarName, const char *v
 extern void Cbuf_ExecuteText(int exec_when, const char *text);
 extern void SV_GetConfigstring(int index, char *buffer, int bufferLength);
 extern qboolean SV_MapExists(const char *name);
-extern unsigned int Scr_AddString(const char *value);
+extern void Scr_AddString(const char *value);
 extern void Scr_Notify(gentity_t *ent, unsigned short stringValue, int paramcount);
 extern unsigned int Scr_VoteCalled(gentity_t *self, char *command, char *param1, char *param2);
 extern qboolean Scr_IsValidGameType(const char *pszGameType);
@@ -71,7 +71,7 @@ extern char *vtos(const vec_t *v);
 extern unsigned char G_PrintEntities(void);
 extern double atof(const char *nptr);
 extern int atoi(const char *nptr);
-extern unsigned int Scr_PlayerVote(gentity_t *self, char *option);
+extern void Scr_PlayerVote(gentity_t *self, char *option);
 
 enum {
     GCMDS_MAX_CLIENTS = 64

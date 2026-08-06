@@ -764,6 +764,15 @@ void CL_BlendSavedScreen(int fadeMsec)
 
 void CL_DrawStretchPicPhysical(float x, float y, float w, float h, float s1, float t1, float s2, float t2, const vec_t *color, MaterialHandle material)
 {
+#ifdef __EMSCRIPTEN__
+    {
+        static int stretch_dbg;
+        if (stretch_dbg < 2) {
+            Com_Printf("webdbg: CL_DrawStretchPicPhysical\n");
+            stretch_dbg++;
+        }
+    }
+#endif
     RE->DrawStretchPic(x, y, w, h, s1, t1, s2, t2, color, material);
 }
 

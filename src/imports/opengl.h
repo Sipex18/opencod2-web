@@ -66,9 +66,9 @@ void glReadPixels(int x, int y, int width, int height, unsigned int format, unsi
 void glScissor(int x, int y, int width, int height);
 int glSetFenceAPPLE();
 int glShadeModel();
-int glStencilFunc();
-int glStencilMask();
-int glStencilOp();
+void glStencilFunc(unsigned int func, int ref, unsigned int mask);
+void glStencilMask(unsigned int mask);
+void glStencilOp(unsigned int fail, unsigned int zfail, unsigned int zpass);
 int glTestFenceAPPLE();
 void glTexCoord2f(float s, float t);
 void glTexEnvf(unsigned int target, unsigned int pname, float param);

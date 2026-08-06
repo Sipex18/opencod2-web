@@ -1,26 +1,122 @@
 #include "common_types.h"
 #include "imports.h"
 
-extern void G_FreeEntity();
-extern void SP_corona();
-extern void SP_info_notnull();
-extern void SP_info_null();
-extern void SP_light();
-extern void SP_misc_model();
-extern void SP_script_brushmodel();
-extern void SP_script_model();
-extern void SP_script_origin();
-extern void SP_trigger_damage();
-extern void SP_trigger_disk();
-extern void SP_trigger_hurt();
-extern void SP_trigger_lookat();
-extern void SP_trigger_multiple();
-extern void SP_trigger_once();
-extern void SP_trigger_radius();
-extern void SP_turret();
-extern void trigger_use();
-extern void trigger_use_touch();
+extern unsigned char G_FreeEntity(gentity_t *ent);
+extern void SP_corona(gentity_t *ent);
+extern void SP_info_notnull(gentity_t *ent);
+extern void SP_info_null(gentity_t *ent);
+extern void SP_light(gentity_t *ent);
+extern void SP_misc_model(gentity_t *ent);
+extern void SP_script_brushmodel(gentity_t *ent);
+extern void SP_script_model(gentity_t *ent);
+extern void SP_script_origin(gentity_t *ent);
+extern void SP_trigger_damage(gentity_t *ent);
+extern void SP_trigger_disk(gentity_t *ent);
+extern void SP_trigger_hurt(gentity_t *ent);
+extern void SP_trigger_lookat(gentity_t *ent);
+extern void SP_trigger_multiple(gentity_t *ent);
+extern void SP_trigger_once(gentity_t *ent);
+extern void SP_trigger_radius(gentity_t *ent);
+extern void SP_turret(gentity_t *ent);
+extern void trigger_use(gentity_t *ent);
+extern void trigger_use_touch(gentity_t *ent);
 extern spawn_t spawns[24];
+
+/* WASM-safe: direct calls only — call_indirect through spawn_t is unreliable
+ * when decompiler decls disagree with real SP_* signatures. */
+static void G_InvokeSpawnFunc(const char *classname, gentity_t *ent)
+{
+    if (!strcmp(classname, "info_null") || !strcmp(classname, "func_group")) {
+        SP_info_null(ent);
+        return;
+    }
+    if (!strcmp(classname, "info_notnull")) {
+        SP_info_notnull(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_multiple")) {
+        SP_trigger_multiple(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_radius")) {
+        SP_trigger_radius(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_disk")) {
+        SP_trigger_disk(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_hurt")) {
+        SP_trigger_hurt(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_once")) {
+        SP_trigger_once(ent);
+        return;
+    }
+    if (!strcmp(classname, "light")) {
+        SP_light(ent);
+        return;
+    }
+    if (!strcmp(classname, "misc_model")) {
+        SP_misc_model(ent);
+        return;
+    }
+    if (!strcmp(classname, "misc_mg42") || !strcmp(classname, "misc_turret")) {
+        SP_turret(ent);
+        return;
+    }
+    if (!strcmp(classname, "corona")) {
+        SP_corona(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_use")) {
+        trigger_use(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_use_touch")) {
+        trigger_use_touch(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_damage")) {
+        SP_trigger_damage(ent);
+        return;
+    }
+    if (!strcmp(classname, "trigger_lookat")) {
+        SP_trigger_lookat(ent);
+        return;
+    }
+    if (!strcmp(classname, "script_brushmodel")) {
+        SP_script_brushmodel(ent);
+        return;
+    }
+    if (!strcmp(classname, "script_model")) {
+        SP_script_model(ent);
+        return;
+    }
+    if (!strcmp(classname, "script_origin")) {
+        SP_script_origin(ent);
+        return;
+    }
+}
+
+static int G_SpawnFuncKind(const char *classname)
+{
+    if (!strcmp(classname, "script_struct"))
+        return 0; /* skip — G_FreeEntity sentinel in original table */
+    if (!strcmp(classname, "info_null") || !strcmp(classname, "func_group")
+        || !strcmp(classname, "info_notnull") || !strcmp(classname, "trigger_multiple")
+        || !strcmp(classname, "trigger_radius") || !strcmp(classname, "trigger_disk")
+        || !strcmp(classname, "trigger_hurt") || !strcmp(classname, "trigger_once")
+        || !strcmp(classname, "light") || !strcmp(classname, "misc_model")
+        || !strcmp(classname, "misc_mg42") || !strcmp(classname, "misc_turret")
+        || !strcmp(classname, "corona") || !strcmp(classname, "trigger_use")
+        || !strcmp(classname, "trigger_use_touch") || !strcmp(classname, "trigger_damage")
+        || !strcmp(classname, "trigger_lookat") || !strcmp(classname, "script_brushmodel")
+        || !strcmp(classname, "script_model") || !strcmp(classname, "script_origin"))
+        return 1; /* known spawn */
+    return 2; /* unmatched — fields only */
+}
 
 extern void Scr_AddUndefined(void);
 extern qboolean G_SpawnStringInternal(SpawnVar *spawnVar, const char *key, const char *defaultString, const char **out);
@@ -33,12 +129,12 @@ extern void Com_Printf(const char *fmt, ...);
 extern int atoi(const char *str);
 extern double atof(const char *str);
 extern unsigned int Scr_FindField(const char *name, int *type);
-extern unsigned int Scr_AddInt(int value);
-extern unsigned int Scr_AddString(const char *value);
-extern unsigned int Scr_AddFloat(float value);
-extern unsigned int Scr_AddVector(const float *value);
+extern void Scr_AddInt(int value);
+extern void Scr_AddString(const char *value);
+extern void Scr_AddFloat(float value);
+extern void Scr_AddVector(const float *value);
 extern void Scr_AddObject(unsigned int id);
-extern unsigned int Scr_AddConstString(unsigned int value);
+extern void Scr_AddConstString(unsigned int value);
 extern void Scr_SetString(scr_string_t *to, unsigned int value);
 extern const char *SL_ConvertToString(unsigned int stringValue);
 extern int G_GetWeaponIndexForName(const char *name);
@@ -60,8 +156,8 @@ extern unsigned int Scr_GetConstString(unsigned int index);
 extern const char *Scr_GetString(unsigned int index);
 extern int Scr_GetOffset(int classnum, const char *name);
 extern unsigned int Scr_GetNumParam(void);
-extern unsigned int Scr_MakeArray(void);
-extern unsigned int Scr_AddArray(void);
+extern void Scr_MakeArray(void);
+extern void Scr_AddArray(void);
 extern int Scr_GetInt(unsigned int index);
 extern float Scr_GetFloat(unsigned int index);
 extern void Scr_GetVector(unsigned int index, float *vectorValue);
@@ -736,9 +832,16 @@ void G_LoadStructs(void)
     const char *classname;
     scr_thread_t threadId;
     SpawnVar *spawnVar;
+    unsigned int initHandle = G_ScrData()->initstructs;
 
-    threadId = Scr_ExecThread(G_ScrData()->initstructs, 0);
-    Scr_FreeThread(threadId);
+    Com_Printf("G_LoadStructs: initstructs=%u\n", initHandle);
+    if (initHandle) {
+        threadId = Scr_ExecThread(initHandle, 0);
+        Scr_FreeThread(threadId);
+        Com_Printf("G_LoadStructs: initstructs thread done\n");
+    } else {
+        Com_Printf("G_LoadStructs: initstructs missing — skipping script init\n");
+    }
 
     for (spawnVar = G_LevelSpawnVar(); G_ParseSpawnVars(spawnVar); spawnVar = G_LevelSpawnVar()) {
         G_SpawnStringInternal(spawnVar, (const char *)"classname", (const char *)"", &classname);
@@ -748,6 +851,7 @@ void G_LoadStructs(void)
     }
 
     SV_ResetEntityParsePoint();
+    Com_Printf("G_LoadStructs: spawn parse done\n");
 }
 
 void Scr_SetGenericField(byte *b, fieldtype_t type, int ofs)
@@ -819,8 +923,8 @@ void G_CallSpawn(void)
 {
     const char *classname;
     const gitem_t *item;
-    spawn_t *spawn;
     gentity_t *ent;
+    int kind;
 
     G_SpawnString_core((const char *)"classname", (const char *)"", &classname);
 
@@ -829,47 +933,64 @@ void G_CallSpawn(void)
         return;
     }
 
+    Com_Printf("webdbg: G_CallSpawn classname='%s'\n", classname);
+
     item = G_GetItemForClassname(classname);
     if (item) {
+        Com_Printf("webdbg: G_CallSpawn before G_Spawn (item)\n");
         ent = G_Spawn();
+        Com_Printf("webdbg: G_CallSpawn before G_ParseEntityFields (item)\n");
         G_ParseEntityFields(ent);
+        Com_Printf("webdbg: G_CallSpawn before G_SpawnItem\n");
         G_SpawnItem(ent, item);
+        Com_Printf("webdbg: G_CallSpawn after G_SpawnItem\n");
         return;
     }
 
-    for (spawn = spawns; spawn->name; ++spawn) {
-        if (!strcmp(spawn->name, classname)) {
-            break;
-        }
+    kind = G_SpawnFuncKind(classname);
+    if (kind == 0) {
+        Com_Printf("webdbg: G_CallSpawn skip classname='%s'\n", classname);
+        return;
     }
-
-    if (!spawn->name) {
+    if (kind == 2) {
+        Com_Printf("webdbg: G_CallSpawn unmatched classname, before G_Spawn\n");
         ent = G_Spawn();
         G_ParseEntityFields(ent);
+        Com_Printf("webdbg: G_CallSpawn unmatched classname done\n");
         return;
     }
 
-    if ((void (*)(gentity_t *))spawn->spawn != (void (*)(gentity_t *))imp_G_FreeEntity) {
-        ent = G_Spawn();
-        G_ParseEntityFields(ent);
-        ((void (*)(gentity_t *))spawn->spawn)(ent);
-    }
+    Com_Printf("webdbg: G_CallSpawn before G_Spawn '%s'\n", classname);
+    ent = G_Spawn();
+    Com_Printf("webdbg: G_CallSpawn before G_ParseEntityFields '%s'\n", classname);
+    G_ParseEntityFields(ent);
+    Com_Printf("webdbg: G_CallSpawn before direct spawn '%s'\n", classname);
+    G_InvokeSpawnFunc(classname, ent);
+    Com_Printf("webdbg: G_CallSpawn after direct spawn '%s'\n", classname);
 }
 
 void G_SpawnEntitiesFromString(void)
 {
     SpawnVar *spawnVar;
+    int iter = 0;
 
+    Com_Printf("webdbg: G_SpawnEntitiesFromString before first G_ParseSpawnVars\n");
     if (!G_ParseSpawnVars(G_LevelSpawnVar())) {
         Com_Error(1, (const char *)"\x15SpawnEntities: no entities");
     }
+    Com_Printf("webdbg: G_SpawnEntitiesFromString before SP_worldspawn\n");
 
     SP_worldspawn();
+    Com_Printf("webdbg: G_SpawnEntitiesFromString after SP_worldspawn\n");
 
     spawnVar = G_LevelSpawnVar();
     while (G_ParseSpawnVars(spawnVar)) {
+        Com_Printf("webdbg: G_SpawnEntitiesFromString iter=%d before G_CallSpawn\n", iter);
         G_CallSpawn();
+        Com_Printf("webdbg: G_SpawnEntitiesFromString iter=%d after G_CallSpawn\n", iter);
+        iter++;
     }
+    Com_Printf("webdbg: G_SpawnEntitiesFromString loop done iters=%d\n", iter);
 }
 
 spawn_t spawns[24] = {

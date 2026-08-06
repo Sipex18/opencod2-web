@@ -1,0 +1,1194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta property="og:title" content="Call of Duty 2 — Web" />
+  <meta property="og:description" content="Call of Duty 2 in the browser — WebGL client." />
+  <meta content="#1a1c14" name="theme-color" />
+  <title>Call of Duty 2 — Web</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg0: #0b0c09;
+      --ink: #d8d2c0;
+      --muted: #8a8474;
+      --faint: #5a5648;
+      --brass: #c4a35a;
+      --brass-dim: #8a7340;
+      --danger: #d4654a;
+      --panel-w: min(440px, 100%);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%; width: 100%;
+      margin: 0; padding: 0;
+      overflow: hidden;
+      color: var(--ink);
+      font: 15px/1.5 Barlow, "Segoe UI", sans-serif;
+      background: var(--bg0);
+    }
+    canvas {
+      border: 0 none;
+      width: 100% !important;
+      height: 100% !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      object-fit: contain;
+      object-position: center;
+      background: #000;
+      display: none;
+      outline: none;
+      margin: 0;
+      padding: 0;
+    }
+    #overlay {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px 18px;
+      background: #0b0c09;
+      isolation: isolate;
+    }
+    .bg-layer {
+      position: absolute; inset: -20%;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .bg-base {
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 55% at 50% 18%, rgba(196, 163, 90, 0.11), transparent 58%),
+        radial-gradient(ellipse 100% 70% at 50% 110%, rgba(36, 42, 28, 0.9), transparent 55%),
+        linear-gradient(168deg, #151710 0%, #0b0c09 48%, #080907 100%);
+    }
+    .bg-orb {
+      border-radius: 50%;
+      filter: blur(72px);
+      opacity: 0.55;
+      will-change: transform;
+    }
+    .bg-orb-a {
+      width: 55vw; height: 55vw;
+      max-width: 720px; max-height: 720px;
+      left: -8%; top: -18%;
+      background: radial-gradient(circle, rgba(196, 163, 90, 0.28), transparent 68%);
+      animation: drift-a 28s ease-in-out infinite;
+    }
+    .bg-orb-b {
+      width: 48vw; height: 48vw;
+      max-width: 640px; max-height: 640px;
+      right: -12%; bottom: -22%;
+      left: auto; top: auto;
+      background: radial-gradient(circle, rgba(70, 82, 48, 0.45), transparent 70%);
+      animation: drift-b 34s ease-in-out infinite;
+    }
+    .bg-orb-c {
+      width: 36vw; height: 36vw;
+      max-width: 480px; max-height: 480px;
+      left: 38%; top: 42%;
+      background: radial-gradient(circle, rgba(140, 110, 50, 0.14), transparent 70%);
+      animation: drift-c 22s ease-in-out infinite;
+    }
+    .bg-haze {
+      inset: 0;
+      background:
+        linear-gradient(105deg, transparent 0%, rgba(216, 210, 192, 0.03) 45%, transparent 70%),
+        linear-gradient(0deg, rgba(0, 0, 0, 0.35), transparent 40%);
+      animation: haze-shift 40s ease-in-out infinite;
+      opacity: 0.9;
+    }
+    .bg-vignette {
+      inset: 0;
+      background: radial-gradient(ellipse 70% 65% at 50% 45%, transparent 35%, rgba(0, 0, 0, 0.55) 100%);
+    }
+    .bg-grain {
+      inset: 0;
+      opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 180px 180px;
+      mix-blend-mode: overlay;
+      animation: grain-soft 8s linear infinite;
+    }
+    @keyframes drift-a {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+      50% { transform: translate3d(8%, 10%, 0) scale(1.08); }
+    }
+    @keyframes drift-b {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+      50% { transform: translate3d(-10%, -6%, 0) scale(1.12); }
+    }
+    @keyframes drift-c {
+      0%, 100% { transform: translate3d(0, 0, 0); }
+      33% { transform: translate3d(-6%, 4%, 0); }
+      66% { transform: translate3d(5%, -5%, 0); }
+    }
+    @keyframes haze-shift {
+      0%, 100% { opacity: 0.75; transform: translate3d(0, 0, 0); }
+      50% { opacity: 1; transform: translate3d(-2%, 1%, 0); }
+    }
+    @keyframes grain-soft {
+      0% { transform: translate3d(0, 0, 0); }
+      100% { transform: translate3d(-180px, -180px, 0); }
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulse-brass {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(196, 163, 90, 0); }
+      50% { box-shadow: 0 0 0 6px rgba(196, 163, 90, 0.12); }
+    }
+    #panel {
+      position: relative;
+      z-index: 1;
+      width: var(--panel-w);
+      text-align: center;
+      animation: rise 0.7s ease-out both;
+    }
+    .brand-mark {
+      width: 96px; height: 96px;
+      margin: 0 auto 16px;
+      display: block;
+      object-fit: contain;
+      filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.65));
+      animation: rise 0.85s ease-out both;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      font-family: Oswald, Impact, sans-serif;
+      font-weight: 500;
+      font-size: 11px;
+      letter-spacing: 0.42em;
+      text-transform: uppercase;
+      color: var(--brass);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-family: Oswald, Impact, sans-serif;
+      font-weight: 700;
+      font-size: clamp(34px, 8vw, 48px);
+      line-height: 0.95;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #f0ead8;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, 0.45);
+    }
+    h1 span {
+      display: block;
+      font-size: 0.42em;
+      font-weight: 500;
+      letter-spacing: 0.28em;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+    .sub {
+      margin: 0 auto 28px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 400;
+      max-width: 34ch;
+    }
+    #msg {
+      min-height: 1.4em;
+      margin: 0 0 16px;
+      font-size: 13px;
+      color: var(--ink);
+      white-space: pre-wrap;
+    }
+    #msg.error { color: var(--danger); }
+    #bar {
+      height: 3px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      display: none;
+      margin-bottom: 18px;
+    }
+    #barFill {
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--brass-dim), var(--brass));
+      transition: width .12s linear;
+    }
+    button {
+      font-family: Oswald, Impact, sans-serif;
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid rgba(216, 210, 192, 0.28);
+      padding: 11px 20px;
+      margin: 0 4px 8px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    button:hover:not(:disabled) {
+      color: #fff;
+      border-color: var(--brass);
+      background: rgba(196, 163, 90, 0.08);
+    }
+    button:disabled {
+      opacity: .35;
+      cursor: default;
+    }
+    #beginBtn {
+      display: inline-block;
+      min-width: 220px;
+      font-size: 15px;
+      letter-spacing: 0.18em;
+      padding: 14px 36px;
+      margin-bottom: 12px;
+      color: #1a160c;
+      background: var(--brass);
+      border-color: var(--brass);
+      animation: pulse-brass 2.8s ease-in-out infinite;
+    }
+    #beginBtn:hover:not(:disabled) {
+      color: #0c0a06;
+      background: #d4b56a;
+      border-color: #d4b56a;
+    }
+    #beginBtn:disabled { animation: none; }
+    #extra { margin-top: 2px; }
+    #dropzone {
+      border: 1px dashed rgba(216, 210, 192, 0.2);
+      color: var(--faint);
+      padding: 18px 16px;
+      margin-top: 20px;
+      font-size: 13px;
+      display: none;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    #dropzone.dragover {
+      border-color: var(--brass);
+      color: var(--ink);
+      background: rgba(196, 163, 90, 0.06);
+    }
+    #pickFallback { display: none; }
+    #bootLog {
+      display: none;
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      bottom: 10px;
+      z-index: 100;
+      max-height: 36vh;
+      overflow: auto;
+      padding: 12px 14px;
+      background: rgba(10, 11, 8, 0.92);
+      border: 1px solid rgba(196, 163, 90, 0.22);
+      color: #9aaf7a;
+      font: 11px/1.45 ui-monospace, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
+    }
+    #bootLog.err { color: #e8a090; border-color: rgba(212, 101, 74, 0.45); }
+    #bootLogBar {
+      display: none;
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 101;
+    }
+    #bootLogBar button {
+      background: rgba(12, 14, 10, 0.85);
+      color: var(--muted);
+      border: 1px solid rgba(216, 210, 192, 0.2);
+      padding: 7px 12px;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+    #bootLogBar button:first-child { margin-left: 0; }
+    @media (prefers-reduced-motion: reduce) {
+      .bg-orb, .bg-haze, .bg-grain, #beginBtn { animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+  <div id="overlay">
+    <div class="bg-layer bg-base" aria-hidden="true"></div>
+    <div class="bg-layer bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-layer bg-orb bg-orb-b" aria-hidden="true"></div>
+    <div class="bg-layer bg-orb bg-orb-c" aria-hidden="true"></div>
+    <div class="bg-layer bg-haze" aria-hidden="true"></div>
+    <div class="bg-layer bg-vignette" aria-hidden="true"></div>
+    <div class="bg-layer bg-grain" aria-hidden="true"></div>
+    <div id="panel">
+      <img class="brand-mark" src="cod2-icon.png" width="96" height="96" alt="Call of Duty 2">
+      <p class="eyebrow">Web client</p>
+      <h1>Call of Duty 2<span>in your browser</span></h1>
+      <p class="sub" id="subline">Runs from your game files. Nothing is uploaded.</p>
+      <div id="msg">Loading runtime…</div>
+      <div id="bar"><div id="barFill"></div></div>
+      <button id="beginBtn" type="button" disabled>Enter</button>
+      <div id="extra">
+        <button id="changeBtn" type="button" style="display:none" aria-hidden="true">Change folder</button>
+        <button id="clearBtn" type="button" style="display:none">Clear cache</button>
+      </div>
+      <div id="dropzone" style="display:none" aria-hidden="true"></div>
+      <div id="pickFallback"><input id="folderIn" type="file" webkitdirectory multiple></div>
+    </div>
+  </div>
+
+  <div id="bootLogBar">
+    <button id="consoleToggleBtn" type="button">Hide console</button>
+    <button id="consoleDownloadBtn" type="button">Download log</button>
+  </div>
+  <div id="bootLog"></div>
+
+  <script>var ENGINE_ASSET_VER = 'o1-ping17-20260729';</script>
+  <script src="remote-config.js?v=o1-ping17-20260729"></script>
+  <script src="cod2_fs.js?v=o1-ping17-20260729"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    var canvas = document.getElementById('canvas');
+    var overlay = document.getElementById('overlay');
+    var msgEl = document.getElementById('msg');
+    var barEl = document.getElementById('bar');
+    var barFill = document.getElementById('barFill');
+    var beginBtn = document.getElementById('beginBtn');
+    var changeBtn = document.getElementById('changeBtn');
+    var clearBtn = document.getElementById('clearBtn');
+    var dropzone = document.getElementById('dropzone');
+    var folderIn = document.getElementById('folderIn');
+    var bootLogEl = document.getElementById('bootLog');
+    var bootLogBar = document.getElementById('bootLogBar');
+    var consoleToggleBtn = document.getElementById('consoleToggleBtn');
+    var consoleDownloadBtn = document.getElementById('consoleDownloadBtn');
+    var bootLogLines = [];
+    var consoleLogRing = [];
+    var CONSOLE_LOG_MAX_CHARS = 512 * 1024;
+    var consoleLogChars = 0;
+    var bootLogVisible = true;
+    var overlayHiddenForGame = false;
+    var fatalLatched = false;
+    var sawGl = false;
+    var sawClientInit = false;
+
+    var runtimeReady = false;
+    var busy = false;
+    var started = false;
+    var beginTarget = 'pick'; // 'pick' | 'resume' | 'cache' | 'remote'
+    var savedHandle = null;
+    var savedMeta = null;
+    var remoteCfg = null;
+
+    /* Measure monitor refresh via rAF so r_displayRefresh enum can be capped.
+     * 0 = not measured yet (engine must not shrink the Hz list early). */
+    window.detectedScreenHz = 0;
+    window.applyMonitorHzLimit = function () {
+      try {
+        if (typeof Module !== 'undefined' && Module.ccall) {
+          Module.ccall('Web_ApplyMonitorRefreshLimit', null, [], []);
+        } else if (typeof _Web_ApplyMonitorRefreshLimit === 'function') {
+          _Web_ApplyMonitorRefreshLimit();
+        }
+      } catch (e) {}
+    };
+    (function () {
+      var known = [60, 75, 120, 144, 165, 240];
+      function snapHz(fps) {
+        var i;
+        for (i = known.length - 1; i >= 0; i--) {
+          if (fps + 8 >= known[i])
+            return known[i];
+        }
+        return 60;
+      }
+      function runSample(reason, cb) {
+        var times = [];
+        var last = performance.now();
+        function tick(now) {
+          var dt = now - last;
+          last = now;
+          if (dt > 2 && dt < 100) times.push(dt);
+          if (times.length < 45) {
+            requestAnimationFrame(tick);
+          } else {
+            times.sort(function (a, b) { return a - b; });
+            var median = times[Math.floor(times.length / 2)];
+            var fps = Math.round(1000 / median);
+            if (fps < 50) fps = 60;
+            var snapped = snapHz(fps);
+            console.log('[cod2-vid] Hz sample (' + reason + '): ~' + fps +
+                        ' fps -> snap ' + snapped + ' Hz (prev=' + window.detectedScreenHz + ')');
+            if (cb) cb(snapped);
+          }
+        }
+        requestAnimationFrame(tick);
+      }
+      function applyIfHigher(snapped) {
+        if (snapped > window.detectedScreenHz) {
+          window.detectedScreenHz = snapped;
+          window.applyMonitorHzLimit();
+        }
+      }
+      runSample('initial', function (snapped) {
+        window.detectedScreenHz = snapped;
+        window.applyMonitorHzLimit();
+        if (snapped <= 60) {
+          document.addEventListener('visibilitychange', function onVis() {
+            if (document.visibilityState !== 'visible') return;
+            document.removeEventListener('visibilitychange', onVis);
+            setTimeout(function () { runSample('post-visible', applyIfHigher); }, 200);
+          });
+        }
+      });
+    })();
+
+    var resizeTimer = 0;
+    window.addEventListener('resize', function () {
+      if (!started) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        resizeTimer = 0;
+        try {
+          if (typeof Module !== 'undefined' && Module.ccall) {
+            Module.ccall('Web_OnWindowResize', null, [], []);
+          } else if (typeof _Web_OnWindowResize === 'function') {
+            _Web_OnWindowResize();
+          }
+        } catch (e) {}
+      }, 200);
+    });
+
+    var FS_BASEPATH = '/cod2';
+    var FS_HOMEPATH = '/cod2home';
+    var idbfsHome = false;
+    var GAME_ARGS = [];
+
+    function buildArgs() {
+      /* Do not pass empty fs_game (becomes `set fs_game` → USAGE spam).
+       * Do not +set r_fullscreen (read-only after renderer init). */
+      GAME_ARGS = ['+set', 'fs_basepath', FS_BASEPATH,
+                   '+set', 'fs_homepath', FS_HOMEPATH];
+      if (window.Module) Module.arguments = GAME_ARGS;
+    }
+
+    function setMsg(t, isErr) {
+      msgEl.textContent = t || '';
+      msgEl.className = isErr ? 'error' : '';
+    }
+    function showBar(show) { barEl.style.display = show ? 'block' : 'none'; }
+    function setProgress(done, total) {
+      barFill.style.width = (total > 0 ? Math.min(100, (done / total) * 100) : 0) + '%';
+    }
+    function fmtMB(n) { return (n / (1024 * 1024)).toFixed(1) + ' MB'; }
+
+    function appendBootLog(line, isErr) {
+      if (!bootLogEl) return;
+      var s = String(line == null ? '' : line).replace(/\s+$/, '');
+      if (!s) return;
+      bootLogLines.push(s);
+      if (bootLogLines.length > 120) bootLogLines.shift();
+      pushConsoleLog(s, isErr);
+      if (bootLogBar) bootLogBar.style.display = 'block';
+      if (bootLogVisible) bootLogEl.style.display = 'block';
+      if (isErr) bootLogEl.classList.add('err');
+      bootLogEl.textContent = bootLogLines.join('\n');
+      if (bootLogVisible) bootLogEl.scrollTop = bootLogEl.scrollHeight;
+    }
+
+    function pushConsoleLog(line, isErr) {
+      var stamp = new Date().toISOString();
+      var entry = stamp + (isErr ? ' [ERR] ' : ' [OUT] ') + line;
+      consoleLogRing.push(entry);
+      consoleLogChars += entry.length + 1;
+      while (consoleLogChars > CONSOLE_LOG_MAX_CHARS && consoleLogRing.length > 1) {
+        consoleLogChars -= (consoleLogRing.shift().length + 1);
+      }
+      try { schedulePersistConsoleLog(); } catch (e) {}
+    }
+
+    function getConsoleLogText() {
+      return consoleLogRing.join('\n');
+    }
+
+    function downloadConsoleLog() {
+      var text = getConsoleLogText();
+      if (!text) text = '(empty log)\n';
+      var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'cod2_console_' + new Date().toISOString().replace(/[:.]/g, '-') + '.log';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        URL.revokeObjectURL(url);
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 0);
+    }
+
+    var consoleLogPersistTimer = 0;
+    function persistConsoleLog() {
+      try {
+        localStorage.setItem('cod2_console_log', getConsoleLogText());
+      } catch (e) {}
+      try {
+        if (typeof FS !== 'undefined' && FS && FS.writeFile) {
+          FS.mkdirTree('/cod2home');
+          FS.writeFile('/cod2home/cod2_console.log', getConsoleLogText());
+        }
+      } catch (e) {}
+    }
+    function schedulePersistConsoleLog() {
+      if (consoleLogPersistTimer) return;
+      consoleLogPersistTimer = setTimeout(function () {
+        consoleLogPersistTimer = 0;
+        try { persistConsoleLog(); } catch (e) {}
+      }, 1500);
+    }
+
+    window.__cod2DownloadLog = downloadConsoleLog;
+    window.__cod2GetLog = getConsoleLogText;
+    window.__cod2ClearLog = function () {
+      consoleLogRing = [];
+      consoleLogChars = 0;
+      try { localStorage.removeItem('cod2_console_log'); } catch (e) {}
+    };
+
+    try {
+      var prev = localStorage.getItem('cod2_console_log');
+      if (prev) {
+        consoleLogRing = prev.split('\n');
+        consoleLogChars = prev.length;
+        appendBootLog('Restored previous console log (' + consoleLogRing.length + ' lines). Use Download log or __cod2DownloadLog().');
+      }
+    } catch (e) {}
+
+    window.addEventListener('error', function (ev) {
+      pushConsoleLog('window.onerror: ' + ((ev && ev.message) || String(ev)), true);
+      try { persistConsoleLog(); } catch (e) {}
+    });
+    window.addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      pushConsoleLog('unhandledrejection: ' + ((r && r.message) || String(r)), true);
+      try { persistConsoleLog(); } catch (e) {}
+    });
+
+    if (consoleDownloadBtn) {
+      consoleDownloadBtn.addEventListener('click', function () { downloadConsoleLog(); });
+    }
+
+    function showFatal(msg) {
+      fatalLatched = true;
+      overlayHiddenForGame = false;
+      started = false;
+      overlay.style.display = 'flex';
+      canvas.style.display = 'none';
+      canvas.style.opacity = '1';
+      setBusy(false);
+      setMsg(msg || 'Engine failed to start.', true);
+      appendBootLog(msg || 'fatal', true);
+      try { persistConsoleLog(); } catch (e) {}
+      beginBtn.disabled = false;
+      beginBtn.textContent = 'Retry';
+    }
+
+    function forceCanvasFullBleed() {
+      if (!canvas || !canvas.style) return;
+      canvas.style.setProperty('width', '100%', 'important');
+      canvas.style.setProperty('height', '100%', 'important');
+      canvas.style.setProperty('max-width', '100%', 'important');
+      canvas.style.setProperty('max-height', '100%', 'important');
+      canvas.style.setProperty('object-fit', 'contain', 'important');
+      canvas.style.setProperty('object-position', 'center', 'important');
+      canvas.style.setProperty('display', 'block', 'important');
+      canvas.style.setProperty('margin', '0', 'important');
+      canvas.style.setProperty('padding', '0', 'important');
+    }
+
+    function revealCanvas(reason) {
+      if (fatalLatched || overlayHiddenForGame) return;
+      overlayHiddenForGame = true;
+      overlay.style.display = 'none';
+      forceCanvasFullBleed();
+      canvas.style.opacity = '1';
+      canvas.focus();
+      appendBootLog('UI hidden (' + (reason || 'ready') + ') — log stays visible');
+    }
+
+    function maybeRevealCanvas(line) {
+      // Do NOT auto-hide on early lines like "Working directory" — that made the
+      // boot log vanish while the canvas was still black / crashing.
+      if (fatalLatched || overlayHiddenForGame) return;
+      var s = String(line || '');
+      if (/GL_VERSION=/i.test(s) || /Game window created/i.test(s)) sawGl = true;
+      if (/----- Client Initialization Complete -----/i.test(s)) sawClientInit = true;
+      if (sawGl && sawClientInit) {
+        revealCanvas('gl+client');
+      }
+    }
+
+    if (consoleToggleBtn) {
+      consoleToggleBtn.addEventListener('click', function () {
+        if (!bootLogEl) return;
+        bootLogVisible = !bootLogVisible;
+        bootLogEl.style.display = bootLogVisible ? 'block' : 'none';
+        consoleToggleBtn.textContent = bootLogVisible ? 'Hide console' : 'Show console';
+        if (bootLogVisible) bootLogEl.scrollTop = bootLogEl.scrollHeight;
+      });
+    }
+
+    function setBusy(b) {
+      busy = b;
+      beginBtn.disabled = b || !runtimeReady;
+      changeBtn.disabled = b || !runtimeReady;
+      clearBtn.disabled = b || !runtimeReady;
+    }
+
+    // ---- emscripten FS helpers ------------------------------------------
+
+    function mkdirTree(path) {
+      var parts = path.split('/').filter(Boolean);
+      var cur = '';
+      for (var i = 0; i < parts.length; i++) {
+        cur += '/' + parts[i];
+        try { FS.mkdir(cur); }
+        catch (e) { if (!FS.analyzePath(cur).exists) throw e; }
+      }
+    }
+
+    function isWasmfsBuild() {
+      return typeof Module._cod2_mount_opfs === 'function';
+    }
+    function isWorkerfsBuild() {
+      // Emscripten leaves a string stub when -lworkerfs.js is not linked:
+      //   WORKERFS = "WORKERFS is no longer included..."
+      // typeof !== 'undefined' is true for that stub — must check for a real FS.
+      return !!(typeof WORKERFS === 'object' && WORKERFS &&
+                typeof WORKERFS.mount === 'function');
+    }
+    function configureFsBackend() {
+      if (isWasmfsBuild()) {
+        // Prefer WASMFS over WORKERFS stub — OPFS assets live under /opfs/cod2.
+        FS_BASEPATH = '/opfs/cod2';
+        FS_HOMEPATH = '/opfs/home';
+        idbfsHome = false;
+      } else if (isWorkerfsBuild()) {
+        FS_BASEPATH = '/cod2';
+        FS_HOMEPATH = '/cod2home';
+        idbfsHome = false;
+      } else {
+        FS_BASEPATH = '/cod2';
+        FS_HOMEPATH = '/cod2home';
+        idbfsHome = (typeof IDBFS !== 'undefined');
+      }
+      buildArgs();
+      appendBootLog('FS backend: base=' + FS_BASEPATH +
+                    ' wasmfs=' + isWasmfsBuild() +
+                    ' workerfs=' + isWorkerfsBuild());
+    }
+
+    var homeSyncTimer = 0;
+    function flushIdbfsHome() {
+      if (!idbfsHome) return;
+      try { FS.syncfs(false, function () {}); } catch (e) {}
+    }
+
+    function setupIdbfsHome() {
+      if (!idbfsHome) return Promise.resolve();
+      mkdirTree(FS_HOMEPATH);
+      try { FS.mount(IDBFS, {}, FS_HOMEPATH); } catch (e) { if (e && e.errno !== undefined) {} }
+      return new Promise(function (resolve) {
+        FS.syncfs(true, function () {
+          if (!homeSyncTimer) {
+            homeSyncTimer = setInterval(flushIdbfsHome, 15000);
+            window.addEventListener('pagehide', flushIdbfsHome);
+            window.addEventListener('visibilitychange', function () {
+              if (document.visibilityState === 'hidden') flushIdbfsHome();
+            });
+          }
+          resolve();
+        });
+      });
+    }
+
+    async function setupWorkerfsHome() {
+      mkdirTree(FS_HOMEPATH);
+      if (!Cod2Fs.hasOpfs()) return;
+      try {
+        await mirrorOpfsHomeIn();
+        if (!homeSyncTimer) {
+          homeSyncTimer = setInterval(function () { mirrorOpfsHomeOut(); }, 15000);
+        }
+        window.addEventListener('pagehide', function () { mirrorOpfsHomeOut(); });
+      } catch (e) {}
+    }
+
+    async function mirrorOpfsHomeIn() {
+      var dir = await Cod2Fs.opfsHomeDir(true);
+      async function walk(handle, prefix) {
+        for await (var entry of handle.values()) {
+          var rel = prefix ? prefix + '/' + entry.name : entry.name;
+          if (entry.kind === 'directory') { mkdirTree(FS_HOMEPATH + '/' + rel); await walk(entry, rel); }
+          else {
+            var f = await entry.getFile();
+            FS.writeFile(FS_HOMEPATH + '/' + rel, new Uint8Array(await f.arrayBuffer()));
+          }
+        }
+      }
+      await walk(dir, '');
+    }
+
+    async function mirrorOpfsHomeOut() {
+      if (!Cod2Fs.hasOpfs()) return;
+      var dir = await Cod2Fs.opfsHomeDir(true);
+      function listFs(path, prefix, out) {
+        var ents;
+        try { ents = FS.readdir(path); } catch (e) { return; }
+        for (var i = 0; i < ents.length; i++) {
+          var n = ents[i]; if (n === '.' || n === '..') continue;
+          var p = path + '/' + n, rel = prefix ? prefix + '/' + n : n;
+          var st = FS.stat(p);
+          if (FS.isDir(st.mode)) listFs(p, rel, out);
+          else out.push({ rel: rel, data: FS.readFile(p) });
+        }
+      }
+      var files = [];
+      listFs(FS_HOMEPATH, '', files);
+      for (var i = 0; i < files.length; i++) {
+        var rel = files[i].rel, slash = rel.lastIndexOf('/');
+        var d = dir;
+        if (slash >= 0) {
+          var parts = rel.slice(0, slash).split('/');
+          for (var j = 0; j < parts.length; j++) d = await d.getDirectoryHandle(parts[j], { create: true });
+        }
+        var fh = await d.getFileHandle(rel.slice(slash + 1), { create: true });
+        var w = await fh.createWritable();
+        await w.write(files[i].data); await w.close();
+      }
+    }
+
+    async function mountDirect(install) {
+      mkdirTree(FS_BASEPATH);
+      var wf = install.files.map(function (rec) { return { name: rec.path, data: rec.file }; });
+      setMsg('Mounting ' + wf.length + ' files (read-only)…');
+      FS.mount(WORKERFS, { files: wf }, FS_BASEPATH);
+      await setupWorkerfsHome();
+    }
+
+    async function mountAssets(meta) {
+      if (isWasmfsBuild()) {
+        // OPFS bytes were written by Cod2Fs (JS). Mount happens inside C main()
+        // on the PROXY_TO_PTHREAD worker — cannot ccall wasmfs OPFS on the
+        // browser main thread without JSPI.
+        setMsg('OPFS ready — starting…');
+        return;
+      }
+      await setupIdbfsHome();
+      mkdirTree(FS_BASEPATH);
+      mkdirTree(FS_HOMEPATH);
+      var files = meta.files;
+      var total = 0, done = 0, i;
+      for (i = 0; i < files.length; i++) total += files[i].size;
+      showBar(true);
+      for (i = 0; i < files.length; i++) {
+        var rec = files[i];
+        var dst = FS_BASEPATH + '/' + rec.path;
+        var slash = dst.lastIndexOf('/');
+        if (slash >= 0) mkdirTree(dst.slice(0, slash));
+        var f = await Cod2Fs.readCached(rec.path);
+        var buf = new Uint8Array(await f.arrayBuffer());
+        FS.writeFile(dst, buf);
+        done += rec.size;
+        setMsg('Mounting ' + (i + 1) + '/' + files.length + ' (' + fmtMB(done) + ')');
+        setProgress(done, total);
+        if ((i & 7) === 0) await new Promise(function (r) { setTimeout(r, 0); });
+      }
+      showBar(false);
+    }
+
+    // ---- Game boot ------------------------------------------------------
+
+    function onProgress(p) {
+      if (p.phase === 'scan') { setMsg('Scanning install…'); showBar(false); return; }
+      if (p.phase === 'done') { showBar(false); return; }
+      if (p.phase === 'copy' || p.phase === 'skip' || p.phase === 'progress') {
+        showBar(true);
+        var done = (typeof p.finishedCount === 'number') ? p.finishedCount : p.fileIndex;
+        var verb = p.phase === 'skip' ? 'Cached' : (remoteCfg ? 'Downloading' : 'Copying');
+        var name = p.fileName ? String(p.fileName).replace(/^.*\//, '') : '';
+        var line = verb + ' ' + done + '/' + p.fileCount +
+                   ' (' + fmtMB(p.bytesDone) + ' / ' + fmtMB(p.bytesTotal) + ')';
+        if (name && p.phase !== 'skip') line += ' — ' + name;
+        setMsg(line);
+        setProgress(p.bytesDone, p.bytesTotal);
+      }
+    }
+
+    async function ingestRemoteAndBoot() {
+      if (!remoteCfg) throw new Error('No remote asset config.');
+      setBusy(true);
+      try {
+        var meta = await Cod2Fs.ingestRemote(remoteCfg, onProgress);
+        savedMeta = meta;
+        await bootFromCache(meta);
+      } catch (err) {
+        setBusy(false);
+        setMsg((err && err.message) ? err.message : String(err), true);
+      }
+    }
+
+    async function ingestAndBoot(handle) {
+      setBusy(true);
+      try {
+        if (isWorkerfsBuild()) {
+          setMsg('Reading install…'); showBar(false);
+          var install = await Cod2Fs.enumerateInstall(handle);
+          await mountDirect(install);
+          setMsg('Starting…');
+          startGame();
+          return;
+        }
+        var meta = await Cod2Fs.ingestHandle(handle, onProgress);
+        await bootFromCache(meta);
+      } catch (err) {
+        setBusy(false);
+        setMsg((err && err.message) ? err.message : String(err), true);
+      }
+    }
+
+    async function bootFromCache(meta) {
+      if (!meta) meta = await Cod2Fs.getCacheMeta();
+      if (!meta) { setMsg('No cached assets. Select your CoD2 folder.', true); setBusy(false); return; }
+      await mountAssets(meta);
+      setMsg('Starting…');
+      startGame();
+    }
+
+    function startGame() {
+      if (started) return;
+      started = true;
+      fatalLatched = false;
+      sawGl = false;
+      sawClientInit = false;
+      // Keep overlay + floating boot log. Canvas stays under the UI until ready.
+      canvas.style.display = 'block';
+      canvas.style.opacity = '0';
+      setMsg('Starting engine… (indexing IWDs can take a while)');
+      appendBootLog('callMain...');
+      try { Module.callMain(GAME_ARGS); }
+      catch (e) {
+        console.error(e);
+        canvas.style.opacity = '1';
+        showFatal((e && e.message) ? e.message : String(e));
+      }
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 500);
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 2000);
+    }
+
+    function onEngineLine(t, isErr) {
+      appendBootLog(t, isErr);
+      if (isErr) console.error(t); else console.log(t);
+      if (fatalLatched) return;
+      if (/Error during initialization|Couldn't load|Sys_Error:|OPFS mount failed|Aborted\(/i.test(String(t))) {
+        showFatal(String(t));
+        return;
+      }
+      if (/^Sys_Quit$/i.test(String(t).trim()) || /quitting\.\.\./i.test(String(t))) {
+        showFatal('Engine quit. See log below.');
+        return;
+      }
+      maybeRevealCanvas(t);
+    }
+
+    // ---- UI flow --------------------------------------------------------
+
+    async function pickAndBoot() {
+      if (!Cod2Fs.hasFsAccess()) { folderIn.click(); return; }
+      var handle = await Cod2Fs.pickDirectory();
+      savedHandle = handle; savedMeta = null; beginTarget = 'resume';
+      await ingestAndBoot(handle);
+    }
+
+    async function runBegin() {
+      if (busy || !runtimeReady) return;
+      setBusy(true);
+      try {
+        if (beginTarget === 'resume' && savedHandle) {
+          var perm = await Cod2Fs.queryHandlePermission(savedHandle);
+          if (perm === 'granted') { await ingestAndBoot(savedHandle); return; }
+          if (perm === 'prompt') {
+            perm = await Cod2Fs.requestHandlePermission(savedHandle);
+            if (perm === 'granted') { await ingestAndBoot(savedHandle); return; }
+          }
+        }
+        if (beginTarget === 'cache' && savedMeta) {
+          await bootFromCache(savedMeta);
+          return;
+        }
+        if (beginTarget === 'remote' && remoteCfg) {
+          await ingestRemoteAndBoot();
+          return;
+        }
+        await pickAndBoot();
+      } catch (err) {
+        setBusy(false);
+        setMsg((err && err.message) ? err.message : String(err), true);
+      }
+    }
+
+    beginBtn.addEventListener('click', runBegin);
+    changeBtn.addEventListener('click', function () {
+      if (busy || !runtimeReady) return;
+      pickAndBoot().catch(function (err) { setMsg((err && err.message) || String(err), true); });
+    });
+    clearBtn.addEventListener('click', async function () {
+      if (busy || !runtimeReady) return;
+      setBusy(true);
+      try { await Cod2Fs.clearCache(); await Cod2Fs.forgetHandle(); }
+      catch (e) { setMsg((e && e.message) || String(e), true); setBusy(false); return; }
+      savedHandle = null; savedMeta = null;
+      changeBtn.style.display = 'none';
+      dropzone.style.display = 'none';
+      clearBtn.style.display = remoteCfg ? 'inline-block' : 'none';
+      if (remoteCfg) {
+        beginTarget = 'remote';
+        beginBtn.textContent = 'Download & Play';
+        setMsg('Cache cleared. Click Download & Play to fetch assets again.');
+      } else {
+        beginTarget = 'pick';
+        beginBtn.textContent = 'Enter';
+        setMsg('Cache cleared. Click Enter to select your CoD2 folder.');
+      }
+      setBusy(false);
+    });
+
+    // ---- Fallback for non-Chromium browsers -----------------------------
+
+    folderIn.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(folderIn.files || []);
+      if (!files.length) return;
+      (async function () {
+        setBusy(true);
+        mkdirTree(FS_BASEPATH); mkdirTree(FS_HOMEPATH);
+        var wanted = files.filter(function (f) {
+          var rel = (f.webkitRelativePath || f.name).toLowerCase();
+          return /\.(iwd|cfg|dat|txt|menu|str|gsc|csc|arena|bik|roq)$/i.test(rel);
+        });
+        if (!wanted.length) { setMsg('No game assets found in that folder.', true); setBusy(false); return; }
+        var total = 0, done = 0;
+        wanted.forEach(function (f) { total += f.size; });
+        showBar(true);
+        for (var i = 0; i < wanted.length; i++) {
+          var f = wanted[i];
+          var parts = (f.webkitRelativePath || f.name).split('/');
+          if (parts.length > 1) parts.shift();
+          var rel = parts.join('/');
+          if (rel.toLowerCase().indexOf('main/') !== 0 && /\.iwd$/i.test(rel)) rel = 'main/' + rel;
+          var dst = FS_BASEPATH + '/' + rel;
+          var s = dst.lastIndexOf('/'); if (s >= 0) mkdirTree(dst.slice(0, s));
+          FS.writeFile(dst, new Uint8Array(await f.arrayBuffer()));
+          done += f.size;
+          setMsg('Loading ' + (i + 1) + '/' + wanted.length + ' (' + fmtMB(done) + ')');
+          setProgress(done, total);
+          if ((i & 7) === 0) await new Promise(function (r) { setTimeout(r, 0); });
+        }
+        showBar(false);
+        setMsg('Starting…');
+        startGame();
+      })().catch(function (err) { setBusy(false); setMsg((err && err.message) || String(err), true); });
+    });
+
+    // ---- Drag & drop ----------------------------------------------------
+
+    function readDirectory(dirEntry) {
+      return new Promise(function (resolve, reject) {
+        var reader = dirEntry.createReader();
+        var all = [];
+        function read() {
+          reader.readEntries(function (entries) {
+            if (entries.length === 0) resolve(all);
+            else { all.push.apply(all, entries); read(); }
+          }, reject);
+        }
+        read();
+      });
+    }
+    function getFile(fileEntry) {
+      return new Promise(function (resolve, reject) { fileEntry.file(resolve, reject); });
+    }
+    async function walkEntry(entry, prefix, out) {
+      var name = entry.name;
+      var rel = prefix ? prefix + '/' + name : name;
+      if (entry.isFile) {
+        if (!Cod2Fs.isWantedFile(name)) return;
+        var f = await getFile(entry);
+        out.push({ rel: rel, size: f.size, file: f });
+      } else if (entry.isDirectory) {
+        var children = await readDirectory(entry);
+        for (var i = 0; i < children.length; i++) await walkEntry(children[i], rel, out);
+      }
+    }
+    async function collectDropped(rootEntry, out) {
+      if (!rootEntry || !rootEntry.isDirectory) throw new Error('Please drop a folder.');
+      var children = await readDirectory(rootEntry);
+      var rootIsMain = rootEntry.name.toLowerCase() === 'main';
+      var hasMain = children.some(function (e) { return e.isDirectory && e.name.toLowerCase() === 'main'; });
+      if (rootIsMain) {
+        for (var i = 0; i < children.length; i++) await walkEntry(children[i], 'main', out);
+      } else if (hasMain) {
+        for (var i = 0; i < children.length; i++) await walkEntry(children[i], '', out);
+      } else {
+        for (var i = 0; i < children.length; i++) await walkEntry(children[i], 'main', out);
+      }
+    }
+    function looksLikeInstall(files) {
+      return files.some(function (f) { return /^main\/[^/]+\.iwd$/i.test(f.rel); });
+    }
+    async function bootFromFiles(files) {
+      if (!looksLikeInstall(files)) throw new Error('That folder does not look like a CoD2 install (no main/*.iwd found).');
+      setBusy(true);
+      if (isWorkerfsBuild()) {
+        var install = { name: 'dropped', files: files.map(function (f) { return { path: f.rel, file: f.file, size: f.size }; }) };
+        await mountDirect(install);
+        setMsg('Starting…');
+        startGame();
+        return;
+      }
+      var meta = await Cod2Fs.ingestFiles(files, onProgress);
+      await bootFromCache(meta);
+    }
+    async function onDrop(ev) {
+      ev.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (busy || !runtimeReady || started) return;
+      var items = ev.dataTransfer && ev.dataTransfer.items ? ev.dataTransfer.items : [];
+      if (!items.length) return;
+      var entry = null;
+      for (var i = 0; i < items.length; i++) {
+        var e = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+        if (e && e.isDirectory) { entry = e; break; }
+      }
+      if (!entry) { setMsg('Please drop a folder.', true); return; }
+      try {
+        var files = [];
+        await collectDropped(entry, files);
+        await bootFromFiles(files);
+      } catch (err) {
+        setBusy(false);
+        setMsg((err && err.message) ? err.message : String(err), true);
+      }
+    }
+
+    window.addEventListener('dragover', function (ev) { ev.preventDefault(); });
+    window.addEventListener('drop', onDrop);
+    dropzone.addEventListener('dragenter', function (ev) { ev.preventDefault(); this.classList.add('dragover'); });
+    dropzone.addEventListener('dragover', function (ev) { ev.preventDefault(); });
+    dropzone.addEventListener('dragleave', function (ev) { this.classList.remove('dragover'); });
+
+    // ---- Runtime hook ---------------------------------------------------
+
+    async function afterRuntime() {
+      runtimeReady = true;
+      configureFsBackend();
+      setBusy(false);
+
+      var fsa = Cod2Fs.hasFsAccess();
+      var opfs = Cod2Fs.hasOpfs();
+      var workerfs = isWorkerfsBuild();
+      var subline = document.getElementById('subline');
+
+      remoteCfg = null;
+      try { remoteCfg = await Cod2Fs.detectRemoteConfig(); } catch (e) { remoteCfg = null; }
+
+      var handle = fsa ? await Cod2Fs.getSavedHandle() : null;
+      var perm = handle ? await Cod2Fs.queryHandlePermission(handle) : 'denied';
+      var meta = (!workerfs && opfs) ? await Cod2Fs.getCacheMeta() : null;
+
+      /* Never show Change Folder / drop zone on the play shell. */
+      changeBtn.style.display = 'none';
+      clearBtn.style.display = 'none';
+      dropzone.style.display = 'none';
+
+      /*
+       * Remote/VPS deploy: keep the cleaner Play-from-cache UX.
+       * Local folder pick still works via Enter (hidden file input) when needed.
+       */
+      if (remoteCfg) {
+        savedHandle = null;
+        clearBtn.style.display = 'inline-block';
+        if (subline) subline.textContent = 'Loads game data from this server into browser cache.';
+        if (meta) {
+          savedMeta = meta; beginTarget = 'cache';
+          beginBtn.textContent = 'Play from cache';
+          setMsg('Cached install ready (' + meta.files.length + ' files).');
+        } else {
+          savedMeta = null; beginTarget = 'remote';
+          beginBtn.textContent = 'Download & Play';
+          setMsg('Server assets ready. First run downloads main/*.iwd (may take a while).');
+        }
+      } else if (handle && (perm === 'granted' || perm === 'prompt')) {
+        savedHandle = handle; beginTarget = 'resume';
+        beginBtn.textContent = 'Resume from "' + (handle.name || 'folder') + '"';
+        clearBtn.style.display = 'inline-block';
+        setMsg(perm === 'granted' ? 'Click Resume to continue.' : 'Click Resume to re-authorize your folder.');
+      } else if (meta) {
+        savedMeta = meta; beginTarget = 'cache';
+        beginBtn.textContent = 'Play from cache';
+        clearBtn.style.display = 'inline-block';
+        setMsg('Cached install ready (' + meta.files.length + ' files).');
+      } else {
+        savedHandle = null; savedMeta = null; beginTarget = 'pick';
+        beginBtn.textContent = 'Enter';
+        setMsg('Select your Call of Duty 2 folder to start.');
+      }
+    }
+
+    var ENGINE_ASSET_VER = 'o1-ping17-20260729';
+    var COD2_MASTER_DEFAULT = (typeof window.COD2_MASTER_URL === 'string' && window.COD2_MASTER_URL)
+      ? window.COD2_MASTER_URL
+      : '/play/api/masterlist/cod2/1.3';
+    window.COD2_MASTER_URL = COD2_MASTER_DEFAULT;
+    var COD2_RELAY_DEFAULT = (typeof window.COD2_RELAY_URL === 'string' && window.COD2_RELAY_URL)
+      ? window.COD2_RELAY_URL
+      : ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/play/api/gamews');
+    window.COD2_RELAY_URL = COD2_RELAY_DEFAULT;
+
+    window.Module = {
+      noInitialRun: true,
+      canvas: canvas,
+      arguments: GAME_ARGS,
+      /* Join Game HTTP masterlist (override via window.COD2_MASTER_URL / remote-config). */
+      COD2_MASTER_URL: COD2_MASTER_DEFAULT,
+      /* WebSocket↔UDP game connect relay (override via window.COD2_RELAY_URL / remote-config). */
+      COD2_RELAY_URL: COD2_RELAY_DEFAULT,
+      /* Bust HTTP/ServiceWorker caches of wasm/js/worker — Clear cache only clears OPFS. */
+      locateFile: function (path, prefix) {
+        return (prefix || '') + path + '?v=' + ENGINE_ASSET_VER;
+      },
+      print: function (t) { onEngineLine(t, false); },
+      printErr: function (t) { onEngineLine(t, true); },
+      onCod2Fatal: function (msg) { showFatal(msg); },
+      onCod2Quit: function () { showFatal('Engine quit.'); },
+      onRuntimeInitialized: function () {
+        appendBootLog('engine assets ' + ENGINE_ASSET_VER + ' (if missing this line, hard-refresh)');
+        afterRuntime().catch(function (err) {
+          console.warn(err);
+          setMsg((err && err.message) || String(err), true);
+          runtimeReady = true; setBusy(false); beginBtn.disabled = false;
+        });
+      }
+    };
+  })();
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

@@ -68,7 +68,7 @@ struct PrecacheEntry {
     scr_string_t filename;
     Bool include;
     unsigned int sourcePos;
-    int next;
+    struct PrecacheEntry *next;
 };
 
 struct SaveSourceBufferInfo {

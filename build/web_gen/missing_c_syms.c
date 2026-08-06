@@ -1,5 +1,8 @@
 void ZN14CAudioRecorderD1Ev(void) {}
 
+/* Empty-string literal placeholder referenced by reconstructed tables. */
+char str_002157b8[1] = {0};
+
 #include "common_types.h"
 #include <string.h>
 

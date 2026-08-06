@@ -75,7 +75,7 @@ extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
 extern int UI_TextWidth(const char *text, int maxChars, FontHandle font, float fontScale);
 extern int UI_TextHeight(FontHandle font, float fontScale);
 extern void UI_DrawText(const char *text, int maxChars, FontHandle font, float x, float y, int horzAlign, int vertAlign, float scale, const vec_t *color, int style);
-extern float UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
+extern void UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
 extern const char *SEH_StringEd_GetString(const char *pszReference);
 extern void Com_Error(errorParm_t code, const char *fmt, ...);
 extern void Com_Printf(const char *fmt, ...);

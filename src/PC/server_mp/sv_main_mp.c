@@ -4,6 +4,9 @@
 #include "pb_public.h"
 #include "PC/qcommon/net_hardening.h"
 #include <stdarg.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 extern void SV_DelayDropClient(client_t *drop, const char *reason);
 extern void MSG_WriteReliableCommandToBuffer(const char *pszCommand, char *pszBuffer, int iBufferSize);
 extern int I_strnicmp(const char *s0, const char *s1, size_t n);
@@ -11,7 +14,7 @@ extern Bool NET_OutOfBandPrint(netsrc_t sock, netadr_t adr, const char *data);
 
 extern void Scr_FreeValue(int value);
 extern void SV_ResetSkeletonCache(void);
-extern void G_RunFrame(int levelTime);
+extern int G_RunFrame(int levelTime);
 extern void LargeLocal_LargeLocal(LargeLocal *ll, int size);
 extern void *LargeLocal_GetBuf(LargeLocal *ll);
 extern void ZN10LargeLocalD1Ev(LargeLocal *ll);
@@ -1065,12 +1068,18 @@ void SV_Frame(int msec)
         SV_ResetSkeletonCache();
         G_RunFrame(svs.time);
         Scr_SetLoading(0);
+#ifdef __EMSCRIPTEN__
+        printf("SV_Frame: after Scr_SetLoading residual=%d frameMsec=%d\n", sv.timeResidual, frameMsec);
+#endif
 
         if (frameMsec <= sv.timeResidual) {
             SV_ArchiveSnapshot();
         }
     } while (frameMsec <= sv.timeResidual);
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_Frame: after frame loop, before client timeout\n");
+#endif
     timeout = svs.time - sv_timeout->current.integer * 1000;
     zombieTimeout = svs.time - sv_zombietime->current.integer * 1000;
 
@@ -1102,8 +1111,20 @@ void SV_Frame(int msec)
         cl->timeoutCount = 0;
     }
 
+#ifdef __EMSCRIPTEN__
+    printf("SV_Frame: before SendClientMessages\n");
+#endif
     SV_SendClientMessages();
+#ifdef __EMSCRIPTEN__
+    printf("SV_Frame: before final ArchiveSnapshot\n");
+#endif
     SV_ArchiveSnapshot();
+#ifdef __EMSCRIPTEN__
+    printf("SV_Frame: before MasterHeartbeat\n");
+#endif
     SV_MasterHeartbeat("COD-2");
+#ifdef __EMSCRIPTEN__
+    printf("SV_Frame: done\n");
+#endif
     return;
 }

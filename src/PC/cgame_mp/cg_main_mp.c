@@ -674,7 +674,8 @@ void CG_GetDObjOrientation(int dobjHandle, orientation_t *orient)
     AxisCopy((vec3_t *)&cg->viewModelAxis[0][0], orient->axis);
 }
 
-#ifndef __EMSCRIPTEN__
+/* Host/listen needs CG_Init and related; previously menu-only web build stubbed this. */
+#if 1 /* was: #ifndef __EMSCRIPTEN__ */
 static inline __attribute__((always_inline)) byte *CG_FindSmokeGrenadeEntityState(int minTime, int gametime)
 {
     byte *snap = (byte *)cg->nextSnap;
@@ -1192,4 +1193,4 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum)
 #    undef cgsBase
 }
 
-#endif
+#endif /* CG_Init host path */

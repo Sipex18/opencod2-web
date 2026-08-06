@@ -1,5 +1,6 @@
 #include "common_types.h"
 #include "imports.h"
+#include <string.h>
 
 extern byte *__DefaultRuneLocale;
 extern int ___maskrune(int ch, unsigned int mask);
@@ -19,7 +20,7 @@ extern void Scr_LoadAnimTreeAtIndex(int index, Alloc_t Alloc, int user);
 extern void Scr_InitOpcodeLookup(void);
 extern void Scr_ShutdownOpcodeLookup(void);
 extern void Scr_ClearErrorMessage(void);
-extern int Scr_EvalVariable(unsigned int varId);
+extern unsigned long long Scr_EvalVariable(unsigned int varId);
 
 extern void ScriptParse(sval_t *parseData, int flag);
 extern void ScriptCompile(sval_t parseData, unsigned int compiledObj, unsigned int scriptId);
@@ -73,6 +74,7 @@ extern void *Hunk_AllocInternal(int size);
 extern void Hunk_ClearToMark(int mark);
 extern int Hunk_SetMark(void);
 extern void Hunk_ConvertTempToPermLowInternal(void);
+extern unsigned char scrCompileGlob[];
 
 int Scr_IsInOpcodeMemory(const char *pos);
 Bool Scr_IsIdentifier(const char *token);
@@ -283,11 +285,16 @@ unsigned int Scr_LoadScript(const char *filename)
     scrCompPub->in_ptr = "+";
     scrCompPub->parseBuf = (const char *)sourceBuf;
 
+    Com_Printf("webdbg: Scr_LoadScript parse begin '%s'\n", extFilename);
     ScriptParse(&parseData, 0);
+    Com_Printf("webdbg: Scr_LoadScript parse done node=%p\n", (void *)(uintptr_t)parseData.node);
 
     compiledObj = GetArray(GetVariable(scrCompPub->scripts, fileId));
     DumpCompiledObject(extFilename, compiledObj);
+    Com_Printf("webdbg: Scr_LoadScript compile begin '%s' fileId=%u scriptId=%u\n",
+               extFilename, compiledObj, scriptId);
     ScriptCompile(parseData, compiledObj, scriptId);
+    Com_Printf("webdbg: Scr_LoadScript compile done '%s'\n", extFilename);
     DumpCompiledObject(extFilename, compiledObj);
 
     parserPub = (struct scrParserPub_t *)imp_scrParserPub;
@@ -335,12 +342,14 @@ void Scr_PrecacheAnimTrees(Alloc_t Alloc, int user)
 {
     struct scrAnimPub_t *scrAnimPub = (struct scrAnimPub_t *)imp_scrAnimPub;
     int i;
+    int num = scrAnimPub->xanim_num[user];
 
-    if (scrAnimPub->xanim_num[user] > 0) {
-        for (i = 1; i <= scrAnimPub->xanim_num[user]; i++) {
-            Scr_LoadAnimTreeAtIndex(i, Alloc, user);
-        }
+    Com_Printf("webdbg: Scr_PrecacheAnimTrees user=%d xanim_num=%d\n", user, num);
+    for (i = 1; i <= num; i++) {
+        Com_Printf("webdbg: Scr_PrecacheAnimTrees i=%d/%d\n", i, num);
+        Scr_LoadAnimTreeAtIndex(i, Alloc, user);
     }
+    Com_Printf("webdbg: Scr_PrecacheAnimTrees done\n");
 }
 
 void Scr_EndLoadAnimTrees(void)
@@ -405,34 +414,48 @@ scr_func_t Scr_GetFunctionHandle(const char *filename, const char *name)
     unsigned int codeVar;
     unsigned int codePos;
 
+    extern void Com_Printf(const char *fmt, ...);
+    Com_Printf("webdbg: Scr_GetFunctionHandle enter file='%s' name='%s'\n", filename, name);
     nameStr = Scr_CreateCanonicalFilename(filename);
+    Com_Printf("webdbg: Scr_GetFunctionHandle nameStr=%u scripts=%u\n", nameStr, scrCompPub->scripts);
     fileId = FindVariable(scrCompPub->scripts, nameStr);
+    Com_Printf("webdbg: Scr_GetFunctionHandle fileId=%u\n", fileId);
     SL_RemoveRefToString(nameStr);
 
     if (fileId == 0)
         return 0;
 
     fileObj = FindObject(fileId);
+    Com_Printf("webdbg: Scr_GetFunctionHandle fileObj=%u\n", fileObj);
     nameStr = SL_FindLowercaseString(name);
+    Com_Printf("webdbg: Scr_GetFunctionHandle funcNameStr=%u\n", nameStr);
     if (nameStr == 0)
         return 0;
 
     varId = FindVariable(fileObj, nameStr);
+    Com_Printf("webdbg: Scr_GetFunctionHandle varId=%u\n", varId);
     if (varId == 0)
         return 0;
 
-    if (GetVarType(varId) != 1)
+    if (GetVarType(varId) != 1) {
+        Com_Printf("webdbg: Scr_GetFunctionHandle varType=%d not func\n", GetVarType(varId));
         return 0;
+    }
 
     obj = FindObject(varId);
+    Com_Printf("webdbg: Scr_GetFunctionHandle obj=%u\n", obj);
     codeVar = FindVariable(obj, 1);
+    Com_Printf("webdbg: Scr_GetFunctionHandle codeVar=%u\n", codeVar);
     codePos = (unsigned int)Scr_EvalVariable(codeVar);
+    Com_Printf("webdbg: Scr_GetFunctionHandle codePos=%u\n", codePos);
 
     scrVarPub = (struct scrVarPub_t *)imp_scrVarPub;
     codePos -= (unsigned int)(size_t)scrVarPub->programBuffer;
+    Com_Printf("webdbg: Scr_GetFunctionHandle codePos-programBuffer=%u programLen=%u\n", codePos, scrCompPub->programLen);
     if (codePos >= (unsigned int)scrCompPub->programLen)
         return 0;
 
+    Com_Printf("webdbg: Scr_GetFunctionHandle done\n");
     return (scr_func_t)codePos;
 }
 
@@ -463,6 +486,8 @@ void Scr_BeginLoadScripts(void)
 
     Scr_ClearErrorMessage();
     scrCompPub->func_table_size = 0;
+    scrCompPub->opcodePos = NULL;
+    memset(scrCompileGlob, 0, sizeof(scrCompileGlob_t));
 
     Scr_BeginLoadAnimTrees_(1);
     TempMemoryReset();

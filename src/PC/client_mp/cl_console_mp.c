@@ -134,12 +134,10 @@ void Con_Bottom(void);
 static void Con_Dump_f(void);
 void Con_Shutdown(void);
 static void __attribute_regparm__(3) Con_UpdateMessageWindowLine(MessageWindow *msgwnd, qboolean linefeed, int duration);
-#ifndef __EMSCRIPTEN__
 static inline __attribute__((always_inline)) short Con_FillChar(void)
 {
     return (short)((ColorIndex(0x37) << 8) | 0x20);
 }
-#endif
 static void __attribute_regparm__(2) Con_Linefeed(print_msg_type_t type, int duration);
 static int CL_ConsolePrint_AddLine(print_msg_type_t type, const char *txt, int duration, int linewidth, int color);
 static void Con_UpdateMessageWindowLine_impl(MessageWindow *msgwnd, qboolean linefeed, int duration);
@@ -209,20 +207,22 @@ void Con_ToggleConsole_f(void)
 {
     char *field;
 
+#ifndef __EMSCRIPTEN__
     if (con_restricted->current.enabled) {
         if (*(int *)((char *)*(void **)imp_keys + 0x780))
             goto toggle;
-        if (!((*(clientActive_t **)imp_cl)->keyCatchers & 1))
+        if (!(Con_GetClientActive()->keyCatchers & 1))
             return;
     }
 toggle:
+#endif
     field = (char *)imp_g_consoleField;
     Field_Clear(field);
     ((field_t *)field)->widthInPixels = g_console_field_width;
     ((field_t *)field)->charHeight = g_console_char_height;
     ((field_t *)field)->fixedSize = 1;
     con.outputVisible = 0;
-    clients.keyCatchers ^= 1;
+    Con_GetClientActive()->keyCatchers ^= 1;
 }
 
 static void Con_ChatModePublic_f(void)
@@ -235,7 +235,7 @@ static void Con_ChatModePublic_f(void)
     (*field)->widthInPixels = 0x24c;
     (*field)->charHeight = 10.0f;
     (*field)->fixedSize = 0;
-    (*(clientActive_t **)imp_cl)->keyCatchers ^= 0x10;
+    Con_GetClientActive()->keyCatchers ^= 0x10;
 }
 
 static void Con_ChatModeTeam_f(void)
@@ -248,12 +248,44 @@ static void Con_ChatModeTeam_f(void)
     (*field)->widthInPixels = 0x21f;
     (*field)->charHeight = 10.0f;
     (*field)->fixedSize = 0;
-    (*(clientActive_t **)imp_cl)->keyCatchers ^= 0x10;
+    Con_GetClientActive()->keyCatchers ^= 0x10;
 }
 
 void Con_Bottom(void)
 {
     con.display = con.currentLine;
+}
+
+/* Console scroll / toggle helpers (must be linked on web — used by cl_keys). */
+void Con_ToggleConsoleOutput(void)
+{
+    con.outputVisible = (con.outputVisible == 0) ? 1 : 0;
+}
+
+void Con_PageUp(void)
+{
+    con.display -= 2;
+    if (con.currentLine - con.display >= con.totallines)
+        con.display = con.currentLine - con.totallines + 1;
+}
+
+void Con_PageDown(void)
+{
+    con.display += 2;
+    if (con.display > con.currentLine)
+        con.display = con.currentLine;
+}
+
+void Con_Top(void)
+{
+    con.display = con.totallines;
+    if (con.currentLine - con.totallines >= con.totallines)
+        con.display = con.currentLine - con.totallines + 1;
+}
+
+Bool Con_IsActive(void)
+{
+    return (Con_GetClientActive()->keyCatchers & 1) != 0;
 }
 
 static void Con_Dump_f(void)
@@ -332,7 +364,7 @@ static void Con_UpdateMessageWindowLine_impl(MessageWindow *msgwnd, qboolean lin
 
     line = &msgwnd->lines[msgwnd->current_line];
 
-    serverTime = (*(clientActive_t **)imp_cl)->serverTime;
+    serverTime = Con_GetClientActive()->serverTime;
     line->startTime = serverTime;
 
     line->endTime = duration + serverTime;
@@ -376,7 +408,6 @@ static void Con_UpdateMessageWindowLine_impl(MessageWindow *msgwnd, qboolean lin
         MessageLine *otherLine;
         int endTime;
         int fadeout;
-        char *cl_ptr;
         int curTime;
 
         lineIdx = (i + msgwnd->current_line) % msgwnd->count;
@@ -384,20 +415,18 @@ static void Con_UpdateMessageWindowLine_impl(MessageWindow *msgwnd, qboolean lin
 
         endTime = otherLine->endTime;
         fadeout = msgwnd->fadeout;
-        cl_ptr = (char *)*(void **)imp_cl;
-        curTime = ((clientActive_t *)cl_ptr)->serverTime;
+        curTime = Con_GetClientActive()->serverTime;
 
         if (endTime - fadeout > curTime) {
 
             int lineDuration = endTime - otherLine->startTime;
             otherLine->startTime = fadeout + (curTime - lineDuration);
 
-            otherLine->endTime = (*(clientActive_t **)imp_cl)->serverTime + msgwnd->fadeout;
+            otherLine->endTime = curTime + msgwnd->fadeout;
         }
     }
 }
 
-#ifndef __EMSCRIPTEN__
 static void __attribute_regparm__(3) Con_UpdateMessageWindowLine(MessageWindow *msgwnd, qboolean linefeed, int duration)
 {
     Con_UpdateMessageWindowLine_impl(msgwnd, linefeed, duration);
@@ -525,7 +554,7 @@ static void Con_DrawStringOnHUD(int x, int y, int charHeight, int horzAlign, int
 
 void Con_DrawSay(int y)
 {
-    clientActive_t *cl = *(clientActive_t **)imp_cl;
+    clientActive_t *cl = Con_GetClientActive();
     const dvar_t *hudSayPosition;
     const char *label;
     const char *string;
@@ -564,11 +593,6 @@ void Con_DrawSay(int y)
     field = *(field_t **)imp_chatField;
     Field_Draw(field, x + (int)((float)textWidth * normalizedScale), y,
                1, 1, 1);
-}
-
-void Con_ToggleConsoleOutput(void)
-{
-    con.outputVisible = (con.outputVisible == 0) ? 1 : 0;
 }
 
 static BM_NOINLINE void Con_DrawOuputWindow(void)
@@ -652,32 +676,6 @@ static BM_NOINLINE void Con_DrawOuputWindow(void)
     }
 }
 
-void Con_PageUp(void)
-{
-    con.display -= 2;
-    if (con.currentLine - con.display >= con.totallines)
-        con.display = con.currentLine - con.totallines + 1;
-}
-
-void Con_PageDown(void)
-{
-    con.display += 2;
-    if (con.display > con.currentLine)
-        con.display = con.currentLine;
-}
-
-void Con_Top(void)
-{
-    con.display = con.totallines;
-    if (con.currentLine - con.totallines >= con.totallines)
-        con.display = con.currentLine - con.totallines + 1;
-}
-
-Bool Con_IsActive(void)
-{
-    return (*(int *)((char *)*(void **)imp_cl + 4) & 1) != 0;
-}
-
 static void Con_Clear_f(void)
 {
     int i;
@@ -731,10 +729,7 @@ static MessageLine *Con_MessageLineForIndex(MessageWindow *msgwnd, int lineIndex
 
 static qboolean Con_MessageWindowVisible(void)
 {
-    clientActive_t *cl = *(clientActive_t **)imp_cl;
-
-    if (!cl)
-        return 0;
+    clientActive_t *cl = Con_GetClientActive();
 
     if (cl->snap.ps.pm_type == 5)
         return 1;
@@ -795,8 +790,8 @@ static qboolean Con_MessageLineAlpha(MessageWindow *msgwnd, MessageLine *line, i
 
 static void Con_DrawMessageWindowTopDown(MessageWindow *msgwnd, int x, int y, int charHeight, int horzAlign, int vertAlign, float alpha, float msgwndScale, qboolean reversed)
 {
-    clientActive_t *cl = *(clientActive_t **)imp_cl;
-    int serverTime = cl ? cl->serverTime : 0;
+    clientActive_t *cl = Con_GetClientActive();
+    int serverTime = cl->serverTime;
     int lineIndex;
     int endLine;
     int v;
@@ -847,8 +842,8 @@ static void Con_DrawMessageWindowTopDown(MessageWindow *msgwnd, int x, int y, in
 
 static void Con_DrawMessageWindowBottomUp(MessageWindow *msgwnd, int x, int y, int charHeight, int horzAlign, int vertAlign, float alpha, float msgwndScale, qboolean centered)
 {
-    clientActive_t *cl = *(clientActive_t **)imp_cl;
-    int serverTime = cl ? cl->serverTime : 0;
+    clientActive_t *cl = Con_GetClientActive();
+    int serverTime = cl->serverTime;
     int lineIndex;
     int lineHeight;
 
@@ -1353,7 +1348,7 @@ void Con_Close(void)
 
     Field_Clear(imp_g_consoleField);
     Con_ClearAllMessageWindows();
-    clients.keyCatchers &= ~1;
+    Con_GetClientActive()->keyCatchers &= ~1;
 }
 
 static inline __attribute__((always_inline)) void ConDrawInput_DrawText(const char *text, int maxChars, const vec_t *color)
@@ -1513,7 +1508,6 @@ static void ConDrawInput_DetailedCmdMatch(const char *str)
 
 static BM_NOINLINE void Con_DrawInput(void)
 {
-    clientActive_t *cl = *(clientActive_t **)imp_cl;
     field_t *consoleField = (field_t *)imp_g_consoleField;
     FontHandle font;
     const char *prompt;
@@ -1521,7 +1515,7 @@ static BM_NOINLINE void Con_DrawInput(void)
     int promptWidth;
     int matchCount;
 
-    if (!(cl->keyCatchers & 1))
+    if (!(Con_GetClientActive()->keyCatchers & 1))
         return;
     if (!Sys_IsMainThread())
         return;
@@ -1588,7 +1582,7 @@ static BM_NOINLINE void Con_DrawInput(void)
 void Con_DrawConsole(void)
 {
     Con_CheckResize();
-    if (!((*(clientActive_t **)imp_cl)->keyCatchers & 1))
+    if (!(Con_GetClientActive()->keyCatchers & 1))
         return;
     if (con.outputVisible)
         Con_DrawOuputWindow();
@@ -1754,442 +1748,6 @@ void CL_DeathMessagePrint(const char *attackerName, const vec_t *attackerColor, 
     Con_Linefeed(PMSG_GAME, duration);
     con.prevType = PMSG_GAME;
 }
-#else
-static short Con_FillChar(void)
-{
-    return (short)((ColorIndex(0x37) << 8) | 0x20);
-}
-
-static void Con_ClearMessageWindow(MessageWindow *wnd)
-{
-    if (!wnd)
-        return;
-    MsgWnd_Clear(wnd);
-}
-
-static void Con_CheckResize(void)
-{
-    short tbuf[65536];
-    int oldLinewidth;
-    int oldTotalLines;
-    int lineCount;
-    int charCount;
-    int i;
-    int j;
-    short fillChar;
-    int screenWidth;
-    int newLinewidth;
-
-    con.screenMin[0] = 4.0f;
-    con.screenMin[1] = 4.0f;
-    con.screenMax[0] = -4.0f;
-    con.screenMax[1] = -4.0f;
-
-    CalcScreenX(&con.screenMin[0], 1);
-    CalcScreenY(&con.screenMin[1], 1);
-    CalcScreenX(&con.screenMax[0], 3);
-    CalcScreenY(&con.screenMax[1], 3);
-
-    con.screenMin[0] = floorf(con.screenMin[0]);
-    con.screenMin[1] = floorf(con.screenMin[1]);
-    con.screenMax[0] = floorf(con.screenMax[0]);
-    con.screenMax[1] = floorf(con.screenMax[1]);
-
-    screenWidth = (int)(con.screenMax[0] - con.screenMin[0]);
-    if (screenWidth > 639)
-        screenWidth >>= 3;
-    else
-        screenWidth = 80;
-
-    newLinewidth = screenWidth - 2;
-    oldLinewidth = con.linewidth;
-    if (newLinewidth == oldLinewidth)
-        return;
-
-    fillChar = Con_FillChar();
-
-    if (newLinewidth <= 0) {
-        con.linewidth = 78;
-        con.totallines = 0x348;
-        for (i = 0; i < 65536; i++)
-            con.textBuffer[i] = fillChar;
-        con.currentLine = con.totallines - 1;
-        con.display = con.currentLine;
-        return;
-    }
-
-    con.linewidth = newLinewidth;
-    oldTotalLines = con.totallines;
-    lineCount = 65536 / newLinewidth;
-    con.totallines = lineCount;
-    if (oldTotalLines < lineCount)
-        lineCount = oldTotalLines;
-
-    charCount = oldLinewidth;
-    if (charCount > newLinewidth)
-        charCount = newLinewidth;
-
-    memcpy(tbuf, con.textBuffer, sizeof(tbuf));
-
-    for (i = 0; i < 65536; i++)
-        con.textBuffer[i] = fillChar;
-
-    if (lineCount > 0 && charCount > 0 && oldTotalLines > 0) {
-        for (i = 0; i < lineCount; i++) {
-            int destBase = (con.totallines - i - 1) * con.linewidth;
-            int srcLine = (con.currentLine - i + oldTotalLines) % oldTotalLines;
-            int srcBase = srcLine * oldLinewidth;
-
-            for (j = 0; j < charCount; j++)
-                con.textBuffer[destBase + j] = tbuf[srcBase + j];
-        }
-    }
-
-    if (con.messageBuffer) {
-        Con_ClearMessageWindow(&con.messageBuffer->gamemsg);
-        Con_ClearMessageWindow(&con.messageBuffer->boldgamemsg);
-        Con_ClearMessageWindow(&con.messageBuffer->minicon);
-        Con_ClearMessageWindow(&con.messageBuffer->subtitle);
-    }
-
-    con.currentLine = con.totallines - 1;
-    con.display = con.currentLine;
-}
-
-static void Con_UpdateMessageWindowLine(MessageWindow *msgwnd, qboolean linefeed, int duration)
-{
-    Con_UpdateMessageWindowLine_impl(msgwnd, linefeed, duration);
-}
-
-static void Con_Linefeed(print_msg_type_t type, int duration)
-{
-    int cursor;
-    short fillChar;
-
-    if (con.currentLine >= 0 && con.messageBuffer) {
-        switch (type) {
-        case PMSG_CONSOLE:
-            Con_UpdateMessageWindowLine(&con.messageBuffer->minicon, 1, duration);
-            break;
-        case PMSG_GAME:
-            Con_UpdateMessageWindowLine(&con.messageBuffer->gamemsg, 1, duration);
-            break;
-        case PMSG_BOLDGAME:
-            Con_UpdateMessageWindowLine(&con.messageBuffer->boldgamemsg, 1, duration);
-            break;
-        case PMSG_SUBTITLE:
-            Con_UpdateMessageWindowLine(&con.messageBuffer->subtitle, 1, duration);
-            break;
-        default:
-            break;
-        }
-    }
-
-    con.lineOffset = 0;
-    if (con.display == con.currentLine)
-        con.display++;
-    con.currentLine++;
-
-    if (con.linewidth <= 0 || con.totallines <= 0)
-        return;
-
-    fillChar = Con_FillChar();
-    for (cursor = 0; cursor < con.linewidth; cursor++) {
-        int textIndex = (con.currentLine % con.totallines) * con.linewidth + cursor;
-        con.textBuffer[textIndex] = fillChar;
-    }
-}
-
-static void Con_Clear_f(void)
-{
-    int i;
-    short fillChar = Con_FillChar();
-
-    for (i = 0; i < 65536; i++)
-        con.textBuffer[i] = fillChar;
-
-    con.display = con.currentLine;
-}
-
-static void Con_OneTimeInit(void)
-{
-    MessageBuffer *messageBuffer;
-
-    con_inputBoxColor = Dvar_RegisterVec4("con_inputBoxColor", 0.25f, 0.25f, 0.2f, 1.0f, 0.0f, 1.0f, 0x1001);
-    con_inputHintBoxColor = Dvar_RegisterVec4("con_inputHintBoxColor", 0.4f, 0.4f, 0.35f, 1.0f, 0.0f, 1.0f, 0x1001);
-    con_outputBarColor = Dvar_RegisterVec4("con_outputBarColor", 1.0f, 1.0f, 0.95f, 0.6f, 0.0f, 1.0f, 0x1001);
-    con_outputSliderColor = Dvar_RegisterVec4("con_outputSliderColor", 0.15f, 0.15f, 0.1f, 0.6f, 0.0f, 1.0f, 0x1001);
-    con_outputWindowColor = Dvar_RegisterVec4("con_outputWindowColor", 0.35f, 0.35f, 0.3f, 0.75f, 0.0f, 1.0f, 0x1001);
-
-    con_gamemessagetime = Dvar_RegisterFloat("con_gamemessagetime", 5.0f, 0.0f, 3.402823466e38f, 0x1000);
-    con_boldgamemessagetime = Dvar_RegisterFloat("con_boldgamemessagetime", 8.0f, 0.0f, 3.402823466e38f, 0x1000);
-    con_minicontime = Dvar_RegisterFloat("con_minicontime", 4.0f, 0.0f, 3.402823466e38f, 0x1001);
-    con_miniconlines = Dvar_RegisterInt("con_miniconlines", 5, 0, 100, 0x1001);
-
-    messageBuffer = con.messageBufferArray;
-    con.messageBuffer = messageBuffer;
-
-    messageBuffer->gamemsg.lines = messageBuffer->gamemsg_lines;
-    messageBuffer->gamemsg.current_line = 0;
-    messageBuffer->gamemsg.count = 8;
-    messageBuffer->gamemsg.padding = 3;
-    messageBuffer->gamemsg.scrolltime = 250;
-    messageBuffer->gamemsg.fadein = 250;
-    messageBuffer->gamemsg.fadeout = 500;
-
-    messageBuffer->boldgamemsg.lines = messageBuffer->boldgamemsg_lines;
-    messageBuffer->boldgamemsg.current_line = 0;
-    messageBuffer->boldgamemsg.count = 8;
-    messageBuffer->boldgamemsg.padding = 3;
-    messageBuffer->boldgamemsg.scrolltime = 250;
-    messageBuffer->boldgamemsg.fadein = 250;
-    messageBuffer->boldgamemsg.fadeout = 500;
-
-    messageBuffer->subtitle.lines = messageBuffer->subtitle_lines;
-    messageBuffer->subtitle.current_line = 0;
-    messageBuffer->subtitle.count = 8;
-    messageBuffer->subtitle.padding = 3;
-    messageBuffer->subtitle.scrolltime = 250;
-    messageBuffer->subtitle.fadein = 250;
-    messageBuffer->subtitle.fadeout = 500;
-
-    messageBuffer->minicon.lines = messageBuffer->minicon_lines;
-    messageBuffer->minicon.current_line = 0;
-    messageBuffer->minicon.count = con_miniconlines->current.integer;
-    messageBuffer->minicon.padding = 0;
-    messageBuffer->minicon.scrolltime = 0;
-    messageBuffer->minicon.fadein = 0;
-    messageBuffer->minicon.fadeout = 0;
-
-    memcpy(con.color, imp_colorWhite, sizeof(con.color));
-    con.linewidth = -1;
-    Con_CheckResize();
-    con.initialized = 1;
-}
-
-static int CL_ConsolePrint_AddLine(print_msg_type_t type, const char *txt, int duration, int linewidth, int color)
-{
-    const char *buf;
-    int targetLineWidth;
-    int lineBroken;
-
-    {
-        int clamp;
-
-        if (type == PMSG_CONSOLE || type == PMSG_LOGFILE)
-            clamp = con.linewidth;
-        else
-            clamp = (con.linewidth >= 78) ? 78 : con.linewidth;
-
-        if (linewidth <= 0 || clamp < linewidth)
-            linewidth = clamp;
-    }
-
-    if (type == PMSG_GAME || type == PMSG_BOLDGAME) {
-        int printLen = SEH_PrintStrlen(txt);
-        if (printLen > linewidth) {
-            float lines = ceilf((float)printLen / (float)linewidth);
-            targetLineWidth = (int)((float)printLen / lines);
-        } else {
-            targetLineWidth = linewidth;
-        }
-    } else {
-        targetLineWidth = linewidth;
-    }
-
-    if (con.prevType != type && con.lineOffset > 0)
-        Con_Linefeed(type, duration);
-
-    buf = txt;
-    lineBroken = 0;
-
-    while (*buf) {
-        unsigned char c = (unsigned char)*buf;
-
-        if (c == '^' && buf[1] != '\0' && buf[1] != '^' && (unsigned char)buf[1] > '/' && (unsigned char)buf[1] <= '9') {
-            color = ColorIndex((unsigned char)buf[1]);
-            buf += 2;
-            continue;
-        }
-
-        if (linewidth > 0) {
-            if (c > ' ') {
-                int wordLen = 0;
-                do {
-                    wordLen++;
-                    if (wordLen == linewidth)
-                        break;
-                } while ((unsigned char)buf[wordLen] > ' ');
-
-                if (wordLen != linewidth && con.lineOffset + wordLen > linewidth) {
-                    Con_Linefeed(type, duration);
-                    lineBroken = 1;
-                }
-            } else if (con.lineOffset > linewidth) {
-                Con_Linefeed(type, duration);
-                lineBroken = 1;
-            }
-        }
-
-        buf++;
-
-        if (c == '\n') {
-            Con_Linefeed(type, duration);
-            continue;
-        }
-
-        if (c == '\r') {
-            con.lineOffset = 0;
-            continue;
-        }
-
-        if (con.lineOffset == 0 && c == ' ' && lineBroken)
-            continue;
-
-        {
-            int textIndex = (con.currentLine % con.totallines) * con.linewidth + con.lineOffset;
-            con.textBuffer[textIndex] = (short)((color << 8) | c);
-            con.lineOffset++;
-        }
-
-        if (con.lineOffset >= linewidth || (con.lineOffset >= targetLineWidth && c == ' ')) {
-            Con_Linefeed(type, duration);
-            lineBroken = 1;
-        }
-    }
-
-    if (con.lineOffset > 0) {
-        if (type != PMSG_CONSOLE) {
-            Con_Linefeed(type, duration);
-        } else if (con.currentLine >= 0) {
-            Con_UpdateMessageWindowLine(&con.messageBuffer->minicon, 0, duration);
-        }
-    }
-
-    con.prevType = type;
-    return color;
-}
-
-void CL_ConsolePrint(print_msg_type_t type, const char *txt, int duration, int linewidth)
-{
-    const dvar_t *noPrint;
-    int color;
-
-    noPrint = *(const dvar_t **)imp_cl_noprint;
-    if (!noPrint)
-        return;
-    if (noPrint->current.enabled)
-        return;
-    if (type == PMSG_LOGFILE)
-        return;
-
-    if (!con.initialized)
-        Con_OneTimeInit();
-
-    if (!duration) {
-        switch (type) {
-        case PMSG_CONSOLE:
-            duration = (int)floorf(con_minicontime->current.value * 1000.0f + 0.5f);
-            break;
-        case PMSG_GAME:
-            duration = (int)floorf(con_gamemessagetime->current.value * 1000.0f + 0.5f);
-            break;
-        case PMSG_BOLDGAME:
-            duration = (int)floorf(con_boldgamemessagetime->current.value * 1000.0f + 0.5f);
-            break;
-        case PMSG_SUBTITLE:
-            duration = 5000;
-            break;
-        default:
-            duration = 0;
-            break;
-        }
-    }
-
-    if (duration < 0)
-        duration = 0;
-
-    color = ColorIndex(0x37);
-
-    if (type == PMSG_GAME || type == PMSG_BOLDGAME) {
-        const char *lineStart = txt;
-        const char *newline;
-        char lineText[0x1000];
-
-        while ((newline = strchr(lineStart, '\n')) != NULL) {
-            int charCount = (int)(newline - lineStart) + 1;
-            int copyCount = charCount;
-
-            if (copyCount > 0xfff)
-                copyCount = 0xfff;
-
-            memcpy(lineText, lineStart, copyCount);
-            lineText[copyCount] = '\0';
-            color = CL_ConsolePrint_AddLine(type, lineText, duration, linewidth, color);
-            lineStart = newline + 1;
-        }
-
-        CL_ConsolePrint_AddLine(type, lineStart, duration, linewidth, color);
-        return;
-    }
-
-    CL_ConsolePrint_AddLine(type, txt, duration, linewidth, color);
-}
-
-void CL_ConsoleFixPosition(void)
-{
-    CL_ConsolePrint(PMSG_CONSOLE, "\n", 0, 0);
-    con.display = con.currentLine - 1;
-}
-
-void Con_Init(void)
-{
-    field_t *consoleField;
-    field_t *history;
-    int i;
-
-    con_restricted = Dvar_RegisterBool_mac("con_restricted", 0, 0x1001);
-
-    consoleField = (field_t *)imp_g_consoleField;
-    Field_Clear(consoleField);
-    consoleField->widthInPixels = g_console_field_width;
-    consoleField->charHeight = g_console_char_height;
-    consoleField->fixedSize = 1;
-
-    history = (field_t *)imp_historyEditLines;
-    for (i = 0; i < 32; i++) {
-        Field_Clear(&history[i]);
-        history[i].widthInPixels = g_console_field_width;
-        history[i].charHeight = g_console_char_height;
-        history[i].fixedSize = 1;
-    }
-
-    Cmd_AddCommand("toggleconsole", Con_ToggleConsole_f);
-    Cmd_AddCommand("chatmodepublic", Con_ChatModePublic_f);
-    Cmd_AddCommand("chatmodeteam", Con_ChatModeTeam_f);
-    Cmd_AddCommand("clear", Con_Clear_f);
-    Cmd_AddCommand("condump", Con_Dump_f);
-
-    registeredIconMaterialCount = 0;
-    CL_RegisterHudMsgIconMaterial_core("killiconcrush");
-    CL_RegisterHudMsgIconMaterial_core("killicondied");
-    CL_RegisterHudMsgIconMaterial_core("killiconfalling");
-    CL_RegisterHudMsgIconMaterial_core("killiconheadshot");
-    CL_RegisterHudMsgIconMaterial_core("killiconmelee");
-    CL_RegisterHudMsgIconMaterial_core("killiconsuicide");
-}
-
-void Con_Close(void)
-{
-    int *legacyHacks = *(int **)imp_legacyHacks;
-    if (!legacyHacks[1])
-        return;
-
-    Field_Clear(imp_g_consoleField);
-    Con_ClearAllMessageWindows();
-    Con_GetClientActive()->keyCatchers &= ~1;
-}
-#endif
 
 const unsigned char _rd_con_versionColor[16] __asm__("con_versionColor") = { 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f };
 

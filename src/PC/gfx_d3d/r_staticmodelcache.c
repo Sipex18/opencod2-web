@@ -863,7 +863,7 @@ void R_SkinStaticModelCachedCmd(SkinStaticModelCachedCmd *skinCmd, SkinBuffers *
 
             do {
                 vtable = *(void ***)vb;
-                ((void(D3DVTCC *)(void *))vtable[0x30 / 4])(vb);
+                ((HRESULT(D3DVTCC *)(void *))vtable[0x30 / 4])(vb);
             } while (*(volatile int *)&alwaysfails != 0);
         }
     } else {
@@ -1010,7 +1010,7 @@ void R_SkinStaticModelCachedCmd(SkinStaticModelCachedCmd *skinCmd, SkinBuffers *
 
             do {
                 vtable = *(void ***)vb;
-                ((void(D3DVTCC *)(void *))vtable[0x30 / 4])(vb);
+                ((HRESULT(D3DVTCC *)(void *))vtable[0x30 / 4])(vb);
             } while (*(volatile int *)&alwaysfails != 0);
         }
     }

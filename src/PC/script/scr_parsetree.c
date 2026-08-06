@@ -32,6 +32,7 @@ uintptr_t node_pos(uintptr_t pos)
 uintptr_t node0(int type)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     return (uintptr_t)n;
 }
@@ -39,6 +40,7 @@ uintptr_t node0(int type)
 uintptr_t node1(int type, uintptr_t val1)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     return (uintptr_t)n;
@@ -47,6 +49,7 @@ uintptr_t node1(int type, uintptr_t val1)
 uintptr_t node2(int type, uintptr_t val1, uintptr_t val2)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(3 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -56,6 +59,7 @@ uintptr_t node2(int type, uintptr_t val1, uintptr_t val2)
 uintptr_t node2_(uintptr_t val1, uintptr_t val2)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = (intptr_t)val1;
     n[1] = (intptr_t)val2;
     return (uintptr_t)n;
@@ -64,6 +68,7 @@ uintptr_t node2_(uintptr_t val1, uintptr_t val2)
 uintptr_t node3(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(4 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -74,6 +79,7 @@ uintptr_t node3(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3)
 uintptr_t node4(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintptr_t val4)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(5 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -85,6 +91,7 @@ uintptr_t node4(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintpt
 uintptr_t node5(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintptr_t val4, uintptr_t val5)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(6 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -97,6 +104,7 @@ uintptr_t node5(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintpt
 uintptr_t node6(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintptr_t val4, uintptr_t val5, uintptr_t val6)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(7 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -110,6 +118,7 @@ uintptr_t node6(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintpt
 uintptr_t node7(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintptr_t val4, uintptr_t val5, uintptr_t val6, uintptr_t val7)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(8 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -124,6 +133,7 @@ uintptr_t node7(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintpt
 uintptr_t node8(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintptr_t val4, uintptr_t val5, uintptr_t val6, uintptr_t val7, uintptr_t val8)
 {
     intptr_t *n = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(9 * sizeof(intptr_t));
+    if (!n) return 0;
     n[0] = type;
     n[1] = (intptr_t)val1;
     n[2] = (intptr_t)val2;
@@ -139,9 +149,11 @@ uintptr_t node8(int type, uintptr_t val1, uintptr_t val2, uintptr_t val3, uintpt
 uintptr_t linked_list_end(uintptr_t val)
 {
     intptr_t *node = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!node) return 0;
     node[0] = (intptr_t)val;
     node[1] = 0;
     intptr_t *list = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!list) return 0;
     list[0] = (intptr_t)node;
     list[1] = (intptr_t)node;
     return (uintptr_t)list;
@@ -150,7 +162,11 @@ uintptr_t linked_list_end(uintptr_t val)
 uintptr_t prepend_node(uintptr_t val1, uintptr_t val2)
 {
     intptr_t *list = (intptr_t *)val2;
+    if (!list) {
+        return linked_list_end(val1);
+    }
     intptr_t *newNode = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!newNode) return val2;
     newNode[0] = (intptr_t)val1;
     newNode[1] = list[0];
     list[0] = (intptr_t)newNode;
@@ -160,11 +176,17 @@ uintptr_t prepend_node(uintptr_t val1, uintptr_t val2)
 uintptr_t append_node(uintptr_t val1, uintptr_t val2)
 {
     intptr_t *list = (intptr_t *)val1;
+    if (!list) {
+        return linked_list_end(val2);
+    }
     intptr_t *newNode = (intptr_t *)Hunk_AllocateTempMemoryHighInternal(2 * sizeof(intptr_t));
+    if (!newNode) return val1;
     newNode[0] = (intptr_t)val2;
     newNode[1] = 0;
     intptr_t *oldTail = (intptr_t *)list[1];
-    oldTail[1] = (intptr_t)newNode;
+    if (oldTail) {
+        oldTail[1] = (intptr_t)newNode;
+    }
     list[1] = (intptr_t)newNode;
     return val1;
 }

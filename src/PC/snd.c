@@ -21,7 +21,7 @@ void Com_Printf(const char *fmt, ...);
 void Com_DPrintf(const char *fmt, ...);
 void Z_FreeInternal(void *ptr);
 void AxisCopy(vec3_t *in, vec3_t *out);
-unsigned int Voice_Shutdown(void);
+extern void Voice_Shutdown(void);
 void Com_UnloadSoundAliases(snd_alias_system_t system);
 void SND_ShutdownDriver(void);
 void Cmd_RemoveCommand(const char *cmdName);
@@ -35,7 +35,7 @@ const dvar_t *Dvar_RegisterFloat(const char *name, float defaultValue, float min
 Bool SND_InitDriver(void);
 int Sys_Milliseconds(void);
 void Cmd_AddCommand(const char *cmdName, void (*function)(void));
-void Voice_Init(void);
+Bool Voice_Init(void);
 void CG_GetEntityOrientation(int entnum, vec_t *origin, vec3_t *axis);
 
 Bool SND_Is2DChannelFree(int index);
@@ -996,7 +996,17 @@ void SND_Init(void)
 
     Com_Printf("------- Sound Initialized -------\n");
 
+#ifdef __EMSCRIPTEN__
+    /* VOIP transport (win_voice.c -> record.c -> DSOUNDRecord_Init) is not
+     * wired for the web build and has a pre-existing extern signature
+     * mismatch with the Mac stub (DSOUNDRecord_Init: (i32,i32)->i32 vs
+     * ()->i32), which used to be unreachable while SND_InitDriver() always
+     * returned 0 on web. Skip it explicitly now that the driver succeeds,
+     * rather than inheriting that unrelated latent bug. VOIP is out of scope
+     * for the web sound driver (see web_snd_driver.c). */
+#else
     Voice_Init();
+#endif
 }
 
 static __attribute_regparm__(3) int SND_PlaySoundAlias_Internal(const snd_alias_t *pAlias0, const snd_alias_t *pAlias1, float lerp, int entnum, const vec_t *org, int *pChannel, int timeshift, int treatAsMaster, snd_alias_system_t system)

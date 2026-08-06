@@ -49,7 +49,7 @@ typedef struct {
 extern void MatrixInverse44(const float *mat, float *dst);
 extern void MatrixIdentity44(float (*out)[4]);
 extern void MatrixSet44(float (*out)[4], const vec_t *origin, vec3_t *axis, vec_t scale);
-extern void MacOpenGLUtils_GetSubPixelOffset(float *xOffset, float *yOffset);
+extern int MacOpenGLUtils_GetSubPixelOffset(float *xOffset, float *yOffset);
 extern void RB_SetCodeConstant(int constant, vec_t x, vec_t y, vec_t z, vec_t w);
 
 enum {
@@ -159,9 +159,17 @@ static inline __attribute__((always_inline)) void RB_SetViewportDx7(const D3DVIE
     void *device;
 
     device = dx.device;
+#ifdef __EMSCRIPTEN__
+    /* Direct call — SetViewport has float MinZ/MaxZ; vtable call_indirect is fragile on WASM. */
+    {
+        extern HRESULT CDirect3DDevice_SetViewport(const void *dev, const D3DVIEWPORT9 *vp);
+        CDirect3DDevice_SetViewport(device, viewport);
+    }
+#else
     do {
         ((SetViewportFn)VTABLE(device)[0xbc / 4])(device, viewport);
     } while (*(volatile int *)&alwaysfails != 0);
+#endif
 }
 
 static void RB_SetMaterialDx7(const D3DMATERIAL9 *material)
@@ -197,9 +205,16 @@ static void RB_SetTextureDx7(int samplerIndex, IDirect3DBaseTexture9 *texture)
     void *device;
 
     device = dx.device;
+#ifdef __EMSCRIPTEN__
+    {
+        extern HRESULT CDirect3DDevice_SetTexture(const void *dev, DWORD stage, void *tex);
+        CDirect3DDevice_SetTexture(device, (DWORD)samplerIndex, texture);
+    }
+#else
     do {
         ((SetTextureFn)VTABLE(device)[0x104 / 4])(device, samplerIndex, texture);
     } while (*(volatile int *)&alwaysfails != 0);
+#endif
 }
 
 static void RB_SetSamplerStateDx7(int samplerIndex, DWORD samplerState, DWORD value)

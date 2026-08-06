@@ -16,6 +16,7 @@ extern double atof(const char *s);
 extern int I_stricmp(const char *s1, const char *s2);
 extern int stricmp(const char *s1, const char *s2);
 extern void I_strncat(char *dest, int maxLen, const char *src);
+extern void I_strncpyz(char *dest, const char *src, int destsize);
 extern void Com_PrintMessage(print_msg_type_t type, const char *msg);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
 extern int Com_Filter(const char *filter, const char *name, int casesensitive);
@@ -488,6 +489,7 @@ void Dvar_SetFromDvar_f(void)
 {
     void *dvar;
     const char *value;
+    char valueCopy[1024];
     if (Cmd_Argc() != 3) {
         Com_Printf("USAGE: setfromdvar <dest_dvar> <source_dvar>\n");
         return;
@@ -497,8 +499,10 @@ void Dvar_SetFromDvar_f(void)
         Com_Printf("dvar '%s' doesn't exist\n", Cmd_Argv(2));
         return;
     }
+    /* DisplayableValue may return a va() buffer; copy before SetCommand uses va. */
     value = Dvar_DisplayableValue(dvar);
-    Dvar_SetCommand(Cmd_Argv(1), value);
+    I_strncpyz(valueCopy, value ? value : "", sizeof(valueCopy));
+    Dvar_SetCommand(Cmd_Argv(1), valueCopy);
 }
 
 void Dvar_Reset_f(void)

@@ -53,7 +53,7 @@ extern int Sys_MillisecondsRaw(void);
 extern void Com_DvarDump(int channel);
 extern void *G_GetSavePersist(void);
 extern int SV_ClipHandleForEntity(const gentity_t *gEnt);
-extern void CM_TransformedBoxTraceExternal(void *trace, const void *p1, const void *p2, const vec_t *mins, const vec_t *maxs, unsigned int model, int brushmask, const vec_t *origin, const vec_t *angles);
+extern int CM_TransformedBoxTraceExternal(void *trace, const void *p1, const void *p2, const vec_t *mins, const vec_t *maxs, unsigned int model, int brushmask, const vec_t *origin, const vec_t *angles);
 extern float Vec2DistanceSq(const float *p1, const float *p2);
 extern int CM_PointLeafnum(const vec_t *p);
 extern int CM_LeafCluster(int leafnum);
@@ -426,7 +426,26 @@ static void SV_InitGameVM(int restart, int savepersist)
     G_InitGame(svs.time, Sys_MillisecondsRaw(),
                restart, savepersist);
 
+    Com_Printf("webdbg: SV_InitGameVM after G_InitGame returned\n");
+#ifdef __EMSCRIPTEN__
+    puts("SYNC-DBG: SV_InitGameVM after G_InitGame");
     Sys_LoadingKeepAlive();
+    puts("SYNC-DBG: SV_InitGameVM after Sys_LoadingKeepAlive2");
+
+    for (i = 0; i < sv_maxclients->current.integer; i++) {
+        *(int *)((char *)&svs.clients[i] + 0x20c44) = 0;
+    }
+    puts("SYNC-DBG: SV_InitGameVM after client loop");
+
+    if (com_dedicated->current.integer) {
+        puts("SYNC-DBG: SV_InitGameVM before Com_DvarDump");
+        Com_DvarDump(4);
+        puts("SYNC-DBG: SV_InitGameVM after Com_DvarDump");
+    }
+    puts("SYNC-DBG: SV_InitGameVM done");
+#else
+    Sys_LoadingKeepAlive();
+    Com_Printf("webdbg: SV_InitGameVM after Sys_LoadingKeepAlive\n");
 
     for (i = 0; i < sv_maxclients->current.integer; i++) {
         *(int *)((char *)&svs.clients[i] + 0x20c44) = 0;
@@ -435,6 +454,7 @@ static void SV_InitGameVM(int restart, int savepersist)
     if (com_dedicated->current.integer) {
         Com_DvarDump(4);
     }
+#endif
 }
 
 void SV_RestartGameProgs(qboolean savepersist)

@@ -93,7 +93,8 @@ void R_FatalInitError(const char *msg)
 
 const char *R_ErrorDescription(HRESULT hr)
 {
-    return DXGetErrorDescription9A(hr);
+    const char *desc = DXGetErrorDescription9A(hr);
+    return desc ? desc : "unknown";
 }
 
 static void R_CreateParticleCloudBuffer(void)
@@ -150,7 +151,7 @@ static inline void R_SafeRelease(void **objPtr)
     if (*objPtr) {
         do {
             void *obj = *objPtr;
-            ((void (*)(void *))((*(void ***)obj)[2]))(obj);
+            ((ULONG (*)(void *))((*(void ***)obj)[2]))(obj);
             *objPtr = NULL;
         } while (*(int *)&alwaysfails);
     }
@@ -232,7 +233,8 @@ static HRESULT R_CreateDevice_impl(HWND hwnd, DWORD behavior, void *d3dpp)
 
     for (;;) {
 
-        ((void (*)(int, const char *))ri.Printf)(0, "Creating D3D device...\n");
+        /* Must use variadic type — non-variadic cast breaks wasm call_indirect. */
+        ((void (*)(int, const char *, ...))ri.Printf)(0, "Creating D3D device...\n");
 
         for (attempt = 0; attempt < 20; attempt++) {
 
@@ -727,6 +729,14 @@ static void R_BeginRegistration_impl(vidConfig_t *vidConfigOut)
             int d3dpp[14];
             int width = 640, height = 480;
 
+#ifdef __EMSCRIPTEN__
+            /* Match soft vid_restart: drive placement from real drawing buffer. */
+            {
+                extern void Web_GetDrawableSize(int *outW, int *outH);
+                Web_GetDrawableSize(&width, &height);
+            }
+#endif
+
             memset(d3dpp, 0, sizeof(d3dpp));
             d3dpp[0] = width;
             d3dpp[1] = height;
@@ -740,10 +750,35 @@ static void R_BeginRegistration_impl(vidConfig_t *vidConfigOut)
 
             vidConfig.width = width;
             vidConfig.height = height;
-            vidConfig.displayFrequency = 60;
+            {
+                extern const dvar_t *r_displayRefresh;
+                int freq = 60;
+                if (r_displayRefresh && r_displayRefresh->domain.enumeration.stringCount > 0) {
+                    int idx = r_displayRefresh->current.integer;
+                    if (idx >= 0 && idx < r_displayRefresh->domain.enumeration.stringCount) {
+                        freq = atoi(r_displayRefresh->domain.enumeration.strings[idx]);
+                    }
+                }
+                if (freq < 60)
+                    freq = 60;
+                vidConfig.displayFrequency = freq;
+            }
             vidConfig.isFullscreen = 0;
-            vidConfig.aspectRatioWindow = (float)width / (float)height;
-            vidConfig.aspectRatioPixel = (float)height * vidConfig.aspectRatioWindow / (float)width;
+            {
+                extern const dvar_t *r_aspectRatio;
+                float aspectWin = (float)width / (float)height;
+                if (r_aspectRatio && r_aspectRatio->current.integer > 0) {
+                    int aspect = r_aspectRatio->current.integer;
+                    if (aspect == 1)
+                        aspectWin = 4.0f / 3.0f;
+                    else if (aspect == 2)
+                        aspectWin = 16.0f / 10.0f;
+                    else if (aspect == 3)
+                        aspectWin = 16.0f / 9.0f;
+                }
+                vidConfig.aspectRatioWindow = aspectWin;
+                vidConfig.aspectRatioPixel = ((float)height * aspectWin) / (float)width;
+            }
 
         }
 #endif

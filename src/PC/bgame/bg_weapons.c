@@ -2532,7 +2532,9 @@ int BG_GetWeaponIndexForName(const char *name, BG_RegisterWeapon regWeap)
     if (weapIndex)
         return weapIndex;
 
+    Com_Printf("webdbg: BG_GetWeaponIndexForName loading '%s'\n", name);
     weapDef = BG_LoadWeaponDef("mp", name);
+    Com_Printf("webdbg: BG_GetWeaponIndexForName after LoadWeaponDef weapDef=%p\n", (void *)weapDef);
     if (weapDef)
         return BG_SetupWeaponDef(weapDef, (void (*)(int))regWeap);
 

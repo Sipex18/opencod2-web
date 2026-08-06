@@ -55,7 +55,7 @@ extern int sprintf(char *str, const char *format, ...);
 extern void *imp_fs_basepath;
 extern void *imp_fs_gamedir;
 extern void *imp_fs_homepath;
-extern char *FS_BuildOSPath(const char *base, const char *game, const char *qpath, char *ospath);
+extern void FS_BuildOSPath(const char *base, const char *game, const char *qpath, char *ospath);
 extern void *FS_FileOpen(const char *path, const char *mode);
 extern void FS_FileClose(void *stream);
 extern int FS_FileExists(const char *qpath);
@@ -276,7 +276,10 @@ front_exhausted:
     return result;
 }
 
-#ifndef __EMSCRIPTEN__
+/* Full sndalias loaders — required on web for CL_StartHunkUsers
+ * (Com_LoadVolumeFalloffCurve / Com_LoadSoundAliasFile / …).
+ * Previously stubbed under __EMSCRIPTEN__; that aborted at missing imports. */
+#if 1
 static snd_alias_build_t *COM_REGPARM3 Com_SortTempSoundAliases_r(snd_alias_build_t *pAliasList, int *piAliasCount, int (*test)(snd_alias_build_t *, snd_alias_build_t *), int isRemovingDups)
 {
     return Com_SortTempSoundAliases_r_impl(pAliasList, piAliasCount, test, isRemovingDups);
@@ -2075,7 +2078,9 @@ void Com_LoadSoundAliasFile(const char *loadspec, const char *loadspecCurGame, c
     }
 }
 
-#else
+#endif /* full sndalias loaders */
+
+#if 0 /* legacy EMSCRIPTEN stubs — kept for reference, unused */
 static snd_alias_build_t *Com_SortTempSoundAliases_r(snd_alias_build_t *pAliasList, int *piAliasCount, int (*test)(snd_alias_build_t *, snd_alias_build_t *), int isRemovingDups)
 {
     return Com_SortTempSoundAliases_r_impl(pAliasList, piAliasCount, test, isRemovingDups);

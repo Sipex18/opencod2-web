@@ -159,6 +159,20 @@ static int sdl_button_to_keynum(Uint8 button)
     }
 }
 
+extern void Com_Printf(const char *fmt, ...);
+
+/* Wheel scrolling had no visible effect in the browser; log the first few raw
+ * SDL deltas so the DOM->SDL->keynum chain can be verified from the console. */
+static void Web_LogWheelOnce(int rawY, float preciseY, int delta)
+{
+    static int logged;
+    if (logged >= 5)
+        return;
+    ++logged;
+    Com_Printf("wheeldbg: sdl y=%d preciseY=%.3f -> delta=%d\n", rawY,
+               (double)preciseY, delta);
+}
+
 static const CCallOfDutyEngine *get_engine(void)
 {
 
@@ -189,6 +203,8 @@ int SDL_PumpInputEvents(void)
         }
         case SDL_MOUSEBUTTONDOWN: {
             int k = sdl_button_to_keynum(ev.button.button);
+            /* Sync cursor before the click — motion may be stale/coalesced on web. */
+            CL_MouseEventAbsolute(ev.button.x, ev.button.y, 0, 0);
             if (k) {
                 Sys_QueEvent(0, SE_KEY, k, 1, 0, 0);
                 ++inputEventCount;
@@ -197,6 +213,7 @@ int SDL_PumpInputEvents(void)
         }
         case SDL_MOUSEBUTTONUP: {
             int k = sdl_button_to_keynum(ev.button.button);
+            CL_MouseEventAbsolute(ev.button.x, ev.button.y, 0, 0);
             if (k) {
                 Sys_QueEvent(0, SE_KEY, k, 0, 0, 0);
                 ++inputEventCount;
@@ -205,8 +222,25 @@ int SDL_PumpInputEvents(void)
         }
         case SDL_MOUSEWHEEL: {
             Point point = { 0, 0 };
-            CCallOfDutyEngine_DoMouseWheel(get_engine(), ev.wheel.y, point, 0);
-            ++inputEventCount;
+            /*
+             * SDL_SendMouseWheel only fills wheel.y once the accumulated float
+             * delta crosses +-1, so the Emscripten backend (which feeds it
+             * deltaY/100 for DOM_DELTA_PIXEL) emits a long run of y==0 events
+             * for trackpads and fine-grained wheels. Passing 0 straight through
+             * made DoMouseWheel take its "else" arm and fake a wheel-down.
+             */
+            int wheelDelta = ev.wheel.y;
+            if (wheelDelta == 0) {
+                if (ev.wheel.preciseY > 0.0f)
+                    wheelDelta = 1;
+                else if (ev.wheel.preciseY < 0.0f)
+                    wheelDelta = -1;
+            }
+            Web_LogWheelOnce(ev.wheel.y, ev.wheel.preciseY, wheelDelta);
+            if (wheelDelta != 0) {
+                CCallOfDutyEngine_DoMouseWheel(get_engine(), wheelDelta, point, 0);
+                ++inputEventCount;
+            }
             break;
         }
         case SDL_KEYDOWN: {
@@ -265,13 +299,27 @@ void IN_Frame(void)
         extern SDL_Window *sdl_gl_window;
         byte *cl = imp_cl ? *(byte **)imp_cl : NULL;
         int keyCatchers = cl ? *(int *)(cl + 4) : -1;
-        static int grabbed = -1;
+        static int grabbed = 0;
         int wantGrab = (cl && keyCatchers == 0) ? 1 : 0;
-        if (wantGrab != grabbed) {
+
+        if (wantGrab) {
+            /* On web, pointer lock can be lost asynchronously (Esc,
+             * tab switch, browser policy).  Poll SDL_GetRelativeMouseMode
+             * every frame; when lock is lost, retry the request — the
+             * browser will honour it on the next user-gesture frame. */
+            if (!SDL_GetRelativeMouseMode()) {
+                if (sdl_gl_window)
+                    SDL_SetWindowGrab(sdl_gl_window, SDL_TRUE);
+                if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0)
+                    grabbed = 1;
+            } else {
+                grabbed = 1;
+            }
+        } else if (grabbed) {
             if (sdl_gl_window)
-                SDL_SetWindowGrab(sdl_gl_window, wantGrab ? SDL_TRUE : SDL_FALSE);
-            SDL_SetRelativeMouseMode(wantGrab ? SDL_TRUE : SDL_FALSE);
-            grabbed = wantGrab;
+                SDL_SetWindowGrab(sdl_gl_window, SDL_FALSE);
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            grabbed = 0;
         }
     }
 

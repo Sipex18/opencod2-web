@@ -149,7 +149,7 @@ void CG_ParseCodinfo(void)
     }
 }
 
-#ifndef __EMSCRIPTEN__
+#if 1 /* was: #ifndef __EMSCRIPTEN__ — needed for listen/host (CloseScriptMenu, ParseFog, …) */
 static void __attribute_regparm__(1) CG_AddToTeamChat(const char *str)
 {
     int chatHeight;
@@ -1110,7 +1110,8 @@ void CG_ExecuteNewServerCommands(int latestSequence)
         }
     }
 }
-#else
+
+#if 0 /* was #else: web AddToTeamChat_impl only */
 static void CG_AddToTeamChat_impl(const char *str)
 {
     int chatHeight;
@@ -1248,4 +1249,5 @@ zero_out:
     cgs->teamChatPos = 0;
 }
 
-#endif
+#endif /* #if 0 web teamchat */
+#endif /* cg_servercmds host path */

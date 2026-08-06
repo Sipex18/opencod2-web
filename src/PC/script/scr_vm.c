@@ -282,7 +282,7 @@ extern struct XAnim_s *Scr_GetAnims(int index);
 extern XAnim *XAnimGetAnims(const struct XAnimTree_s *tree);
 extern const char *XAnimGetAnimTreeDebugName(const XAnim *anims);
 extern const char *XAnimGetAnimDebugName(const XAnim *anims, unsigned int animIndex);
-extern unsigned int Scr_CompileShutdown(void);
+extern void Scr_CompileShutdown(void);
 extern void Scr_FreeEntityList(void);
 extern void Scr_FreeGameVariable(int bComplete);
 extern void ClearObject(unsigned int parentId);
@@ -792,9 +792,34 @@ void Scr_FreeThread(int handle)
 
 void Scr_InitSystem(void)
 {
-    unsigned int timeArrayId = AllocObject();
     struct scrVarPub_t *p = (struct scrVarPub_t *)imp_scrVarPub;
+    unsigned int timeArrayId;
+#ifdef __EMSCRIPTEN__
+    extern unsigned char scrVarGlob[];
+    extern void Var_Init(void);
+    unsigned int freeHead;
 
+    freeHead = *(unsigned short *)((unsigned char *)scrVarGlob + 4); /* VG_U16(0) */
+    Com_Printf("Scr_InitSystem: freeHead=%u freeEnt=%u temp=%u bInited=%d\n",
+               freeHead, p ? p->freeEntList : 0u, p ? p->tempVariable : 0u,
+               p ? (int)p->bInited : -1);
+    if (freeHead == 0) {
+        Com_Printf("Scr_InitSystem: empty freelist — Var_Init recover\n");
+        Var_Init();
+        if (p) {
+            p->tempVariable = AllocValue();
+            p->timeArrayId = 0;
+            p->pauseArrayId = 0;
+            p->levelId = 0;
+            p->gameId = 0;
+            p->animId = 0;
+            p->freeEntList = 0;
+            p->bInited = 1;
+        }
+    }
+#endif
+
+    timeArrayId = AllocObject();
     p->timeArrayId = timeArrayId;
     p->pauseArrayId = Scr_AllocArray();
     p->levelId = AllocObject();
@@ -805,6 +830,10 @@ void Scr_InitSystem(void)
 
 #if COD2_FEATURE_SCRIPT_DEBUGGER
     Scr_InitDebuggerSystem();
+#endif
+#ifdef __EMSCRIPTEN__
+    Com_Printf("Scr_InitSystem: ok timeArray=%u level=%u anim=%u\n",
+               p->timeArrayId, p->levelId, p->animId);
 #endif
 }
 
@@ -6404,11 +6433,29 @@ static void VM_CandidateCompleteCall(const char **pos, VariableValue **top)
     }
 }
 
+static const char *VM_LookupBuiltinName(void *func)
+{
+    extern BuiltinFunctionDef functions[145];
+    extern BuiltinMethodDef methods[59];
+    int i;
+
+    for (i = 0; i < 145; i++) {
+        if ((void *)(uintptr_t)functions[i].actionFunc == func)
+            return functions[i].actionString ? functions[i].actionString : "?";
+    }
+    for (i = 0; i < 59; i++) {
+        if ((void *)(uintptr_t)methods[i].actionFunc == func)
+            return methods[i].actionString ? methods[i].actionString : "?";
+    }
+    return "?";
+}
+
 static void VM_CandidateCallBuiltin(const char **pos, VariableValue **top, unsigned int paramCount)
 {
     struct scrCompilePub_t *compilePub = (struct scrCompilePub_t *)imp_scrCompilePub;
     unsigned int builtinIndex = VM_ReadU16(pos);
     BuiltinFunction func;
+    const char *name;
 
     scrVmPub.outparamcount = paramCount;
     scrVmPub.top = *top;
@@ -6424,7 +6471,11 @@ static void VM_CandidateCallBuiltin(const char **pos, VariableValue **top, unsig
     }
 
     func = (BuiltinFunction)(uintptr_t)compilePub->func_table[builtinIndex];
+    name = VM_LookupBuiltinName((void *)(uintptr_t)func);
+    Com_Printf("VM_CallBuiltin: idx=%u name=%s func=%p params=%u\n",
+               builtinIndex, name, (void *)(uintptr_t)func, paramCount);
     func();
+    Com_Printf("VM_CallBuiltin: done name=%s\n", name);
     VM_CandidateCompleteCall(pos, top);
 }
 
@@ -6464,7 +6515,11 @@ static void VM_CandidateCallBuiltinMethod(const char **pos, VariableValue **top,
     }
 
     method = (BuiltinMethod)(uintptr_t)compilePub->func_table[builtinIndex];
-    ((void (*)(scr_entref_t))method)(entref);
+    Com_Printf("VM_CallMethod: idx=%u name=%s ent=%u class=%u params=%u\n",
+               builtinIndex, VM_LookupBuiltinName((void *)(uintptr_t)method),
+               (unsigned)entref.entnum, (unsigned)entref.classnum, paramCount);
+    ((void (*)(scr_entref_t))(uintptr_t)method)(entref);
+    Com_Printf("VM_CallMethod: done idx=%u\n", builtinIndex);
     VM_CandidateCompleteCall(pos, top);
 }
 
@@ -8031,6 +8086,9 @@ __attribute__((noinline)) unsigned int __attribute_regparm__(3)
     unsigned int oldInParamCount;
     unsigned int result;
 
+    Com_Printf("VM_ExecuteExtCall: thread=%u pos=%p params=%u\n",
+               threadId, (void *)pos, paramcount);
+
     while (scrVmPub.outparamcount) {
         RemoveRefToValue(scrVmPub.top->type, scrVmPub.top->u);
         --scrVmPub.top;
@@ -8137,15 +8195,29 @@ scr_thread_t Scr_ExecThread(scr_func_t handle, unsigned int numArgs)
     extern unsigned int AllocThread(unsigned int self);
 
     struct scrVarPub_t *pub = (struct scrVarPub_t *)imp_scrVarPub;
-    const char *pos = pub->programBuffer + handle;
+    const char *pos;
     unsigned int threadId;
     unsigned int result;
     VariableValue *value;
 
+    if (!handle || !pub || !pub->programBuffer) {
+        Com_Printf("Scr_ExecThread: invalid handle=%u programBuffer=%p — skipped\n",
+                   (unsigned)handle, pub ? (void *)pub->programBuffer : NULL);
+        return 0;
+    }
+
+    pos = pub->programBuffer + handle;
+
     if (!scrVmPub.function_count)
         Scr_ResetTimeout_core();
 
-    Scr_IsInOpcodeMemory(pos);
+    if (!Scr_IsInOpcodeMemory(pos)) {
+        Com_Printf("Scr_ExecThread: handle=%u not in opcode memory — skipped\n", (unsigned)handle);
+        return 0;
+    }
+
+    Com_Printf("Scr_ExecThread: handle=%u levelId=%u args=%u\n",
+               (unsigned)handle, pub->levelId, numArgs);
     AddRefToObject(pub->levelId);
     threadId = AllocThread(pub->levelId);
 

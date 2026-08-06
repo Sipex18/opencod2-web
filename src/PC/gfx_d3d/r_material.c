@@ -117,7 +117,9 @@ static qboolean Material_IsUiLikeName(const char *name)
            strncmp(name, "ui_", 3) == 0 ||
            strncmp(name, "menu/", 5) == 0 ||
            strncmp(name, "levelshots/", 11) == 0 ||
-           stricmp(name, "$levelbriefing") == 0;
+           strncmp(name, "loadscreen_", 11) == 0 ||
+           stricmp(name, "$levelbriefing") == 0 ||
+           stricmp(name, "fadebox") == 0;
 }
 
 static qboolean Material_HasImageExtension(const char *name)
@@ -334,7 +336,7 @@ void Material_ReleaseAll(void)
                 do {
                     void *obj = *pObj;
                     void **vtable = *(void ***)obj;
-                    ((void (*)(void *))vtable[2])(obj);
+                    ((ULONG (*)(void *))vtable[2])(obj);
                     *pObj = NULL;
                 } while (*(int *)&alwaysfails);
             }
@@ -349,7 +351,7 @@ void Material_ReleaseAll(void)
             if (shader) {
                 void *obj = *(void **)((char *)shader + 0xc);
                 void **vtable = *(void ***)obj;
-                ((void (*)(void *))vtable[2])(obj);
+                ((ULONG (*)(void *))vtable[2])(obj);
             }
         }
     }
@@ -625,7 +627,7 @@ void Material_Shutdown(void)
                 do {
                     void *obj = *pObj;
                     void **vtable = *(void ***)obj;
-                    ((void (*)(void *))vtable[2])(obj);
+                    ((ULONG (*)(void *))vtable[2])(obj);
                     *pObj = NULL;
                 } while (*(int *)&alwaysfails);
             }
@@ -646,7 +648,7 @@ void Material_Shutdown(void)
         if (shader) {
             void *obj = *(void **)((char *)shader + 0xc);
             void **vtable = *(void ***)obj;
-            ((void (*)(void *))vtable[2])(obj);
+            ((ULONG (*)(void *))vtable[2])(obj);
         }
 #endif
     }
@@ -1063,11 +1065,31 @@ MaterialHandle Material_Register(const char *name, int imageTrack)
 
     material = Material_Load(name, imageTrack);
     if (!material) {
-        r_global_permanent_t *rgpPtr = (r_global_permanent_t *)imp_rgp;
-        if (!rgpPtr->defaultMaterial)
-            R_Error(0, "couldn't load material '$default'");
-        Com_Printf("^3WARNING: Could not find material '%s'\n", name);
-        return Material_Duplicate(rgpPtr->defaultMaterial, name);
+        MaterialHandle aliased;
+
+        /* Menus often use Quake-style "ui/assets/foo.tga" while CoD2 materials
+         * omit the extension (e.g. materials/ui/assets/gradientbar2). */
+        aliased = Material_TryAliasWithoutExtension(name, imageTrack);
+        if (aliased)
+            return aliased;
+
+        {
+            r_global_permanent_t *rgpPtr = (r_global_permanent_t *)imp_rgp;
+            MaterialHandle fallback;
+
+            if (!rgpPtr->defaultMaterial)
+                R_Error(0, "couldn't load material '$default'");
+
+            /* Runtime/UI placeholders ($levelbriefing, fadebox, …) are not always
+             * shipped as materials; white+vertex color is the correct overlay. */
+            if (Material_IsUiLikeName(name) || name[0] == '$') {
+                fallback = rgpPtr->whiteMaterial ? rgpPtr->whiteMaterial : rgpPtr->defaultMaterial;
+                return Material_Duplicate(fallback, name);
+            }
+
+            Com_Printf("^3WARNING: Could not find material '%s'\n", name);
+            return Material_Duplicate(rgpPtr->defaultMaterial, name);
+        }
     }
 
     r_global_permanent_t *rgpPtr = (r_global_permanent_t *)imp_rgp;

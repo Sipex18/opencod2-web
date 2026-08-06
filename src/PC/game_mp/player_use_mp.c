@@ -5,7 +5,7 @@
 extern level_locals_t level;
 
 extern qboolean Scr_IsSystemActive(int localClientNum);
-extern unsigned int Scr_AddEntity(gentity_t *ent);
+extern void Scr_AddEntity(gentity_t *ent);
 extern void Scr_Notify(gentity_t *ent, int stringValue, unsigned int paramcount);
 extern void G_GetPlayerViewOrigin(gentity_t *ent, vec3_t origin);
 extern void G_GetPlayerViewDirection(gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up);
@@ -15,7 +15,7 @@ extern qboolean SV_EntityContact(vec3_t mins, vec3_t maxs, gentity_t *ent);
 extern qboolean G_IsTurretUsable(gentity_t *turret, gentity_t *player);
 extern qboolean BG_CanItemBeGrabbed(const entityState_t *ent, const playerState_t *ps, qboolean bTouched);
 extern int G_TraceCapsuleComplete(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int passEntityNum, int contentMask);
-extern void G_DObjGetWorldTagPos(gentity_t *ent, unsigned int tagName, vec_t *pos);
+extern int G_DObjGetWorldTagPos(gentity_t *ent, unsigned int tagName, vec_t *pos);
 extern void G_LocationalTrace(trace_t *trace, vec3_t start, vec3_t end, int passEntityNum, int contentMask, unsigned char *priorityMap);
 extern float SV_FX_GetVisibility(vec3_t start, vec3_t end);
 extern void G_Trigger(gentity_t *self, gentity_t *other);
