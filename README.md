@@ -1,37 +1,48 @@
 # opencod2
 
-> A reconstruction of the **Call of Duty 2** engine
+**A source-level reconstruction of the Call of Duty 2 multiplayer engine.**
+
+Built from scratch to be portable: runs natively on Linux and Windows,
+and experimentally **in the browser** via WebAssembly.
 
 > [!WARNING]
-> **Work in progress — this does not fully work yet.** It is an early, incomplete
-> reconstruction: it builds and boots, but expect crashes, missing functionality,
-> and broken features. It is shared for the curious and for collaboration, not as
-> a finished or playable port. No stability, no support, and the code may change
-> shape at any time.
+> **Work in progress.** The engine boots, connects, and loads maps — but expect
+> crashes, missing features, and rough edges. Shared for collaboration and the
+> curious, not as a finished product.
 
 > [!IMPORTANT]
-> **No game content is included — bring your own data.** This repository is
-> *source code only*: no executables, archives, maps, models, textures, sounds,
-> or scripts. To run anything you must supply data files from a copy of the game
-> that **you legally own**.
+> **No game content is included.** This is source code only. You must supply
+> IWD/map/asset files from a copy of the game that **you legally own**.
+
+---
+
+## Features
+
+- Full multiplayer server and client in a single codebase
+- Script VM (GSC) with compiler, virtual machine, and built-in function tables
+- Collision detection, entity system, weapons, animation, and game logic
+- OpenGL / WebGL2 renderer with material system, lightmaps, and shader pipeline
+- UI menu system with HUD, scoreboard, and server browser
+- Network layer with netchan, loopback, and WebSocket relay for web builds
+- Sound system abstraction (native ALSA/DirectSound; stubbed for web)
 
 ## Platforms
 
 | Target | Status | Notes |
 |--------|--------|-------|
-| Linux x86 (client + dedicated) | Primary | 32-bit multilib required |
-| Windows (MinGW cross-compile)  | Supported | Dedicated server; client with `-DCOD2_WIN32_CLIENT=ON` |
-| **Web (Emscripten / WebAssembly)** | **Experimental** | Runs in browser via WebGL2; server + client in single WASM binary |
+| **Linux x86** | Primary | 32-bit multilib; client + dedicated server |
+| **Windows** (MinGW) | Supported | Cross-compiled; dedicated + optional client |
+| **Web / WASM** | Experimental | Full engine in a single `.wasm`; WebGL2 renderer |
+
+---
 
 ## Building
 
-All targets are driven by **CMake (≥ 3.16)**, each an out-of-source build into
-its own directory.
+All targets use **CMake ≥ 3.16** with out-of-source builds.
 
-### Linux (primary)
+### Linux
 
-The engine is a 32-bit x86 binary; you need a multilib toolchain and 32-bit libs
-(Debian/Ubuntu names shown):
+Requires a 32-bit multilib toolchain:
 
 ```sh
 sudo apt install build-essential gcc-multilib g++-multilib cmake \
@@ -42,104 +53,121 @@ sudo apt install build-essential gcc-multilib g++-multilib cmake \
 ```sh
 cmake -S . -B build-native
 cmake --build build-native -j
-# -> build-native/cod2_linux    (client)
-# -> build-native/cod2_lnxded   (dedicated server)
 ```
+
+Produces `build-native/cod2_linux` (client) and `build-native/cod2_lnxded` (dedicated).
 
 ### Windows (MinGW cross-compile)
 
 ```sh
 cmake -S . -B build-win32 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw32.cmake
 cmake --build build-win32 -j
-# -> build-win32/cod2_win32_ded.exe   (dedicated server)
 ```
 
-Add `-DCOD2_WIN32_CLIENT=ON` for the SDL2/GL client (supply SDL2 dev libs under
-`src/win32/sdl2/lib/`; the dedicated server needs none).
+Produces `build-win32/cod2_win32_ded.exe`. Add `-DCOD2_WIN32_CLIENT=ON` for the
+SDL2/GL client (supply SDL2 dev libs under `src/win32/sdl2/lib/`).
 
-#### Swap-in renderer DLL (optional, experimental)
+<details>
+<summary>Swap-in renderer DLL (optional)</summary>
 
-The renderer can be built as a separate swap-in DLL — it exports `GetRefAPI`
-and talks to the engine only through the `ri`/`re` tables. With the client
-configured, run the `gfxdll` target:
+The renderer can be built as a standalone DLL that exports `GetRefAPI`:
 
 ```sh
 cmake --build build-win32 --target gfxdll
-# -> build-win32/gfx_d3d_mp_x86_s.dll   (renderer DLL)
-# -> build-win32/cod2_win32_gfxdll.exe  (engine that loads it at runtime)
+# -> gfx_d3d_mp_x86_s.dll + cod2_win32_gfxdll.exe
 ```
 
-The renderer↔engine bridge is pre-generated and committed under `build/gfxdll/`;
-the build is pure compile+link. Experimental — not exhaustively tested.
+The renderer↔engine bridge is pre-generated under `build/gfxdll/`.
+</details>
 
-### Web / Emscripten (experimental)
+### Web / Emscripten
 
-Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html).
+Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html):
 
 ```sh
 source ~/emsdk/emsdk_env.sh
 emcmake cmake -S . -B build/web
 emmake make -C build/web -j$(nproc)
-# -> build/web/cod2.html, cod2.js, cod2.wasm
 ```
 
-The web build compiles the full engine (server + client) into a single
-WebAssembly binary that runs in the browser using WebGL2.
-Game assets must be served from a web server alongside the WASM files.
+Produces `build/web/cod2.html`, `cod2.js`, and `cod2.wasm` — the full engine
+compiled to WebAssembly. Serve alongside game assets from any HTTPS-capable
+web server.
 
-**Optimizations applied:** `-O2`, WASM SIMD (`-msimd128`), `emmalloc` allocator.
-Pre-compress `cod2.wasm` with `gzip -9` and serve with `gzip_static on` in Nginx
-for best load times.
+**Build optimizations:** `-O2`, WASM SIMD (`-msimd128`), `emmalloc` allocator.
 
-Deploy to a VPS:
+**Deployment:**
 
 ```sh
 bash tools/deploy_web_to_vps.sh user@host build/web [version-tag]
 ```
 
+The deploy script pre-compresses the `.wasm` with gzip and configures Nginx
+with `gzip_static` for optimal transfer sizes.
+
+---
+
 ## Running
 
-This reconstructs the engine, not the content. Point it at data from a copy of
-the game you legally own:
+Point the engine at your legally-obtained game data:
 
 ```sh
-./build-native/cod2_linux +set fs_basepath /path/to/your/game
+./build-native/cod2_linux +set fs_basepath /path/to/your/cod2
 ```
 
-Without legally-obtained data the build runs but has nothing to load.
+For the web build, game assets (IWDs, maps) are fetched from the web server at
+runtime. See `tools/deploy_web_to_vps.sh` and `src/web/remote-config.js` for
+the asset serving configuration.
+
+---
+
+## Project Structure
+
+```
+src/
+├── PC/                  # Platform-specific engine code
+│   ├── client_mp/       # Client: networking, parsing, input, screen
+│   ├── server_mp/       # Server: game VM, snapshots, netchan
+│   ├── game_mp/         # Game logic: entities, weapons, spawning
+│   ├── cgame_mp/        # Client-side game: prediction, effects, HUD
+│   ├── script/          # GSC script compiler and virtual machine
+│   ├── gfx_d3d/         # Renderer: materials, shaders, BSP, images
+│   ├── qcommon/         # Shared: collision, networking, filesystem
+│   ├── bgame/           # Shared client/server: physics, animation
+│   ├── ui_mp/           # UI menu system
+│   └── xanim/           # Animation system
+├── web/                 # Emscripten/browser: WebGL, networking, audio, FS
+├── headers/             # Type definitions and function declarations
+├── stubs/               # Platform stubs and compatibility shims
+└── blobs/               # BSS segment and import pointer tables
+tools/                   # Build, deploy, and diagnostic scripts
+build/web_gen/           # Auto-generated WASM glue (data, stubs, BSS)
+```
+
+---
 
 ## Security
 
-Older Call of Duty titles and game engines from this era have a history of
-security-sensitive bugs, especially around networking, file parsing,
-content-loading paths, and memory safety. This project should not currently be
-treated as a hardened or production-safe engine.
+Game engines from this era were not built with modern security in mind.
+Networking, file parsing, and content loading paths may have exploitable bugs.
+Do not expose test servers to untrusted networks.
 
-One long-term goal of the reconstruction is to make those risks easier to audit
-and fix: preserve compatibility where practical, but replace unsafe behavior and
-close vulnerabilities as they are found. Until then, run it only with data you
-trust and avoid exposing test servers to untrusted networks.
+A long-term goal is to audit and harden these paths while preserving
+compatibility with the original game.
+
+---
 
 ## Notice
 
-This is an independent, source-level reconstruction of the Call of Duty
-2 engine. It is not affiliated with, authorized by, sponsored by, or endorsed by
-Activision Publishing, Inc., Infinity Ward, or any of their affiliates.
+This is an independent reconstruction. It is not affiliated with, authorized by,
+or endorsed by Activision Publishing, Inc. or Infinity Ward.
 
-"Call of Duty" and "Call of Duty 2" are trademarks of Activision Publishing,
-Inc. They are used in this repository only for identification and
-interoperability, to describe what the code reconstructs. No claim is made to
-those marks.
+"Call of Duty" and "Call of Duty 2" are trademarks of Activision Publishing, Inc.,
+used here only for identification and interoperability.
 
-This project does not provide or help obtain copyrighted game data. To use it
-with real game content, you must supply data files from a copy of Call of Duty 2
-that you legally own.
+No copyrighted game data is included or distributed. You must supply your own
+legally-obtained copy of the game.
 
-The reconstructed engine source is a derivative work created for the purposes of
-preservation, interoperability, research, and education. It is provided as-is,
-without warranty of any kind, express or implied. The original port, build
-system, and platform glue are separable original work.
-
-If you are a rights holder and believe something here should not be distributed,
-please open an issue or contact the maintainer and it will be addressed
-promptly.
+The reconstructed source is a derivative work for preservation, interoperability,
+research, and education — provided as-is without warranty. If you are a rights
+holder with concerns, please open an issue.
