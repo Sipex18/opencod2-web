@@ -13,7 +13,13 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+  <!-- Loaded non-blocking: a plain rel=stylesheet here blocks first paint on
+       the whole DNS+TLS+CSS round trip, which a hard refresh (cache bypassed)
+       pays in full before the launcher shows anything. media=print keeps it
+       off the critical path; onload flips it to all and the swap is done by
+       display=swap. The font stacks below fall back to system faces. -->
+  <link rel="stylesheet" media="print" onload="this.media='all'"
+        href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Oswald:wght@500;600;700&display=swap">
   <style>
     :root {
       --bg0: #0b0c09;
