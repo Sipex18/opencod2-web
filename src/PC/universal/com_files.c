@@ -2950,7 +2950,7 @@ static qboolean FS_WebTryLoadIwdIndex(webIwd_t *iwd, const char *iwdPath, long i
         return 0;
     }
 
-    if (!fgets(line, sizeof(line), fp) || strncmp(line, "C2WI2", 5) != 0) {
+    if (!fgets(line, sizeof(line), fp) || strncmp(line, "C2WI3", 5) != 0) {
         fclose(fp);
         return 0;
     }
@@ -3052,7 +3052,7 @@ static void FS_WebSaveIwdIndex(webIwd_t *iwd, long iwdSize, int fileCount)
         order[--i] = file;
     }
 
-    fprintf(fp, "C2WI2\n%ld\n%d\n", iwdSize, fileCount);
+    fprintf(fp, "C2WI3\n%ld\n%d\n", iwdSize, fileCount);
     for (i = 0; i < fileCount; i++) {
         fprintf(fp, "%s\t%lu\t%d\n", order[i]->name, order[i]->pos, order[i]->size);
     }
@@ -3174,13 +3174,16 @@ static int FS_WebIndexIwdFast(webIwd_t *iwd, const char *path)
             Com_Memset(file, 0, sizeof(*file));
             I_strncpyz(file->name, filename, sizeof(file->name));
             /*
-             * pos is the offset of this entry's *central directory* record,
-             * not its local header: the reader hands it to
-             * unzSetCurrentFileInfoPosition, which seeks there and parses a
-             * 0x02014b50 record. unzGetCurrentFileInfoPosition returns
-             * s->pos_in_central_dir, so the minizip path stores the same thing.
+             * pos is the ABSOLUTE file offset of this entry's central
+             * directory record. The reader hands it to
+             * unzSetCurrentFileInfoPosition, which seeks to
+             * pos_in_central_dir + byte_before_the_zipfile and parses a
+             * 0x02014b50 record there; unzGoToFirstFile seeds that field from
+             * offset_central_dir (absolute, straight out of the EOCD). Storing
+             * the offset relative to the directory start - or the local header
+             * offset - seeks into the middle of some other member's data.
              */
-            file->pos = (long unsigned int)off;
+            file->pos = (long unsigned int)(cdOffset + off);
             file->size = uncompressedSize;
             file->iwd = iwd;
             file->next = iwd->files;
