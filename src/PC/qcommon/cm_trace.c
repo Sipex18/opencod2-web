@@ -405,8 +405,22 @@ static void CM_TraceLeaf(const traceWork_t *tw, cLeaf_t *leaf, trace_t *trace)
  *
  * Leaf encoding matches CM_BoxLeafnums_r: a negative nodenum is leaf ~nodenum.
  */
+/*
+ * The tree is assumed well-formed, and CM_BoxLeafnums_r already carries a
+ * guard for the case where it is not ("Corrupt/incomplete clip node"). This
+ * descent needs the same defence for a different reason: it is recursive, and
+ * a node whose children form a cycle - or a plane whose type is garbage, which
+ * makes every comparison false and sends both halves down the same path -
+ * recurses until the 5 MB wasm stack is gone and the frame aborts on the stack
+ * cookie. CoD2's BSP depth is a few dozen, so this bound is far above anything
+ * a real map reaches; hitting it means the node was bad and the trace should
+ * stop rather than take the process down.
+ */
+#define CM_MAX_TREE_DEPTH 128
+
 static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, float p2f,
-                                  const vec_t *p1, const vec_t *p2, trace_t *trace)
+                                  const vec_t *p1, const vec_t *p2, trace_t *trace,
+                                  int depth)
 {
     cNode_t *node;
     cplane_t *plane;
@@ -414,6 +428,17 @@ static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, flo
     float frac, frac2, idist, midf;
     vec3_t mid;
     int side, i;
+
+    if (depth > CM_MAX_TREE_DEPTH) {
+        static int warned;
+        if (!warned) {
+            warned = 1;
+            Com_Printf("CM_TraceThroughTree: node depth exceeded %d (bad node "
+                       "index or cyclic children) - trace truncated\n",
+                       CM_MAX_TREE_DEPTH);
+        }
+        return;
+    }
 
     if (trace->fraction <= p1f)
         return; /* something nearer was already hit */
@@ -424,6 +449,9 @@ static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, flo
             CM_TraceLeaf(tw, &cm.leafs[leafNum], trace);
         return;
     }
+
+    if (num >= cm.numNodes)
+        return; /* out of range: a bad child index, not a node */
 
     node = &cm.nodes[num];
     plane = node->plane;
@@ -444,12 +472,17 @@ static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, flo
                  tw->size[2] * CM_AbsFloat(plane->normal[2]);
     }
 
+    /* A NaN plane or size makes every comparison below false, which would send
+     * both halves of the segment down the same child forever. */
+    if (!(t1 == t1) || !(t2 == t2) || !(offset == offset))
+        return;
+
     if (t1 >= offset && t2 >= offset) {
-        CM_TraceThroughTree_r(tw, node->children[0], p1f, p2f, p1, p2, trace);
+        CM_TraceThroughTree_r(tw, node->children[0], p1f, p2f, p1, p2, trace, depth + 1);
         return;
     }
     if (t1 < -offset && t2 < -offset) {
-        CM_TraceThroughTree_r(tw, node->children[1], p1f, p2f, p1, p2, trace);
+        CM_TraceThroughTree_r(tw, node->children[1], p1f, p2f, p1, p2, trace, depth + 1);
         return;
     }
 
@@ -478,7 +511,7 @@ static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, flo
     for (i = 0; i < 3; i++)
         mid[i] = p1[i] + frac * (p2[i] - p1[i]);
 
-    CM_TraceThroughTree_r(tw, node->children[side], p1f, midf, p1, mid, trace);
+    CM_TraceThroughTree_r(tw, node->children[side], p1f, midf, p1, mid, trace, depth + 1);
 
     if (frac2 < 0.0f)
         frac2 = 0.0f;
@@ -489,7 +522,7 @@ static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, flo
     for (i = 0; i < 3; i++)
         mid[i] = p1[i] + frac2 * (p2[i] - p1[i]);
 
-    CM_TraceThroughTree_r(tw, node->children[side ^ 1], midf, p2f, mid, p2, trace);
+    CM_TraceThroughTree_r(tw, node->children[side ^ 1], midf, p2f, mid, p2, trace, depth + 1);
 }
 
 #if defined(__EMSCRIPTEN__)
@@ -519,7 +552,8 @@ static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *star
     }
 
     if (cm.nodes && cm.numNodes > 0 && tw.extents.start && tw.extents.end)
-        CM_TraceThroughTree_r(&tw, 0, 0.0f, 1.0f, tw.extents.start, tw.extents.end, results);
+        CM_TraceThroughTree_r(&tw, 0, 0.0f, 1.0f, tw.extents.start, tw.extents.end,
+                              results, 0);
 
     return 0;
 }
