@@ -99,7 +99,7 @@ static inline __attribute__((always_inline)) int SV_KickClientInternal(client_t 
 
     guid = cl->guid;
     SV_DropClient(cl, "EXE_PLAYERKICKED");
-    cl->lastPacketTime = svs.time;
+    cl->lastPacketTime = ((serverStatic_t *)imp_svs)->time;
     return guid;
 }
 
@@ -153,7 +153,7 @@ static client_t *SV_GetPlayerByName(void)
     }
 
     s = SV_Cmd_Argv(1);
-    cl = svs.clients;
+    cl = ((serverStatic_t *)imp_svs)->clients;
 
     for (i = 0; i < sv_maxclients->current.integer; i++, cl++) {
         if (!cl->state)
@@ -201,12 +201,12 @@ static client_t *SV_GetPlayerByNum(void)
         return NULL;
     }
 
-    if (!svs.clients[idnum].state) {
+    if (!((serverStatic_t *)imp_svs)->clients[idnum].state) {
         Com_Printf("Client %i is not active\n", idnum);
         return NULL;
     }
 
-    return &svs.clients[idnum];
+    return &((serverStatic_t *)imp_svs)->clients[idnum];
 }
 
 const char *SV_GetMapBaseName(const char *mapname)
@@ -492,7 +492,7 @@ static void SV_ConTell_f(void)
     if (clientNum < 0 || clientNum >= sv_maxclients->current.integer)
         return;
 
-    cl = svs.clients + clientNum;
+    cl = ((serverStatic_t *)imp_svs)->clients + clientNum;
     if (cl->state != 4)
         return;
 
@@ -509,7 +509,7 @@ static void SV_ConTell_f(void)
 
 void SV_Heartbeat_f(void)
 {
-    svs.nextHeartbeatTime = (int)0x80000000;
+    ((serverStatic_t *)imp_svs)->nextHeartbeatTime = (int)0x80000000;
 }
 
 static void SV_Serverinfo_f(void)

@@ -3609,6 +3609,37 @@ void UI_RunMenuScript(const char **args)
         } else {
             Dvar_SetStringByName("ui_cdkeyvalid", UI_SafeTranslateString("EXE_CDKEYINVALID"));
         }
+        /*
+         * The popup only says "not valid"; it does not say why, and the key is
+         * only persisted when it validates, so a rejected key silently fails to
+         * save. Print what the four fields actually produced - length, the
+         * assembled key, and the checksum the CRC of that key would need -
+         * so a failed entry is diagnosable from the console log.
+         */
+        {
+            unsigned int crc = 0;
+            int i, j;
+            char expected[8];
+
+            for (i = 1; i <= 16; i++) {
+                int ch = (signed char)buff[i - 1];
+                crc ^= (unsigned int)ch;
+                for (j = 8; j != 0; j--) {
+                    if (crc & 1) {
+                        crc >>= 1;
+                        crc ^= 0xa001;
+                    } else {
+                        crc >>= 1;
+                    }
+                }
+            }
+            sprintf(expected, "%04x", crc);
+            Com_Printf("[cdkey] fields=\"%s\"+\"%s\" len=%d/%d checksum=\"%s\" "
+                       "needed=\"%s\" -> %s\n",
+                       buff, buff2, (int)strlen(buff), (int)strlen(buff2),
+                       buff2, expected,
+                       CL_CDKeyValidate(buff, buff2) ? "VALID" : "INVALID");
+        }
         return;
     }
 
