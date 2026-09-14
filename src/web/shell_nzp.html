@@ -264,6 +264,43 @@
     }
     #beginBtn:disabled { animation: none; }
     #extra { margin-top: 2px; }
+    #helpBox {
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: left;
+      max-width: var(--panel-w);
+    }
+    #helpBox summary {
+      cursor: pointer;
+      color: var(--ink);
+      font-family: Oswald, Impact, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      list-style: none;
+      text-align: center;
+    }
+    #helpBox summary::-webkit-details-marker { display: none; }
+    #helpBox summary::before { content: "▸ "; color: var(--brass-dim); }
+    #helpBox[open] summary::before { content: "▾ "; }
+    .help-body {
+      margin-top: 10px;
+      padding: 14px 16px;
+      border: 1px solid rgba(216, 210, 192, 0.14);
+      background: rgba(0, 0, 0, 0.22);
+      line-height: 1.6;
+    }
+    .help-body p { margin: 0 0 10px; }
+    .help-body p:last-child { margin-bottom: 0; }
+    .help-body code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      color: var(--brass);
+    }
+    .help-body a { color: var(--brass); text-decoration: none; border-bottom: 1px solid var(--brass-dim); }
+    .help-body a:hover { color: var(--ink); }
     #dropzone {
       border: 1px dashed rgba(216, 210, 192, 0.2);
       color: var(--faint);
@@ -347,17 +384,20 @@
         <button id="clearBtn" type="button" style="display:none">Clear cache</button>
         <button id="fsBtn" type="button" style="display:none">Fullscreen</button>
       </div>
-      <div id="srcRow" style="display:none;margin-top:10px;font-size:13px;color:var(--muted)">
-        <span>Source:</span>
-        <button id="srcLocalBtn" type="button">Local folder</button>
-        <button id="srcCacheBtn" type="button">Cache</button>
-        <button id="srcRemoteBtn" type="button">Remote</button>
-      </div>
       <div id="diag" style="margin-top:12px;font-size:12px;color:var(--faint);white-space:pre-wrap"></div>
       <div id="mpStatus" style="margin-top:8px;font-size:12px;color:var(--faint)"></div>
-      <details id="helpBox" style="margin-top:12px;font-size:13px;color:var(--muted);text-align:left">
-        <summary style="cursor:pointer;color:var(--ink)">Controls &amp; help</summary>
-        <div>WASD move, mouse look (click canvas for pointer lock), LMB fire, R reload, E use, Shift sprint, Space jump, Esc menu. Audio starts on first click (browser autoplay policy).</div>
+      <details id="helpBox">
+        <summary>Help</summary>
+        <div class="help-body">
+          <p>Point this at the folder that holds <code>main/</code> from a Call of Duty 2
+             install you own. The files are copied into browser storage and never uploaded.</p>
+          <p><strong>Controls</strong><br>
+             WASD move &middot; mouse look (click the canvas to grab it) &middot; LMB fire &middot;
+             R reload &middot; E use &middot; Shift sprint &middot; Space jump &middot; Esc menu.
+             Sound starts on the first click.</p>
+          <p><a href="https://github.com/Sipex18/opencod2-web" target="_blank" rel="noopener">
+             github.com/Sipex18/opencod2-web</a></p>
+        </div>
       </details>
       <div id="dropzone" style="display:none" aria-hidden="true"></div>
       <div id="pickFallback"><input id="folderIn" type="file" webkitdirectory multiple></div>
@@ -391,10 +431,6 @@
     var changeBtn = document.getElementById('changeBtn');
     var clearBtn = document.getElementById('clearBtn');
     var fsBtn = document.getElementById('fsBtn');
-    var srcRow = document.getElementById('srcRow');
-    var srcLocalBtn = document.getElementById('srcLocalBtn');
-    var srcCacheBtn = document.getElementById('srcCacheBtn');
-    var srcRemoteBtn = document.getElementById('srcRemoteBtn');
     var diagEl = document.getElementById('diag');
     var dropzone = document.getElementById('dropzone');
     var folderIn = document.getElementById('folderIn');
@@ -775,9 +811,6 @@
         armFatalRetry();
         changeBtn.disabled = true;
         clearBtn.disabled = true;
-        if (srcLocalBtn) srcLocalBtn.disabled = true;
-        if (srcCacheBtn) srcCacheBtn.disabled = true;
-        if (srcRemoteBtn) srcRemoteBtn.disabled = true;
         return;
       }
       beginBtn.disabled = b || !runtimeReady;
@@ -1050,13 +1083,6 @@
 
     // ---- UI flow --------------------------------------------------------
 
-    function setSource(target, label) {
-      if (fatalLatched || busy || !runtimeReady || started) return;
-      beginTarget = target;
-      beginBtn.textContent = label;
-      updateDiagnostics();
-    }
-
     async function pickAndBoot() {
       if (!Cod2Fs.hasFsAccess()) {
         // Reset busy so a cancelled fallback picker does not wedge the UI.
@@ -1071,7 +1097,7 @@
         // User dismissed the picker: stay idle instead of wedging on busy.
         setBusy(false);
         if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
-          setMsg('Folder selection cancelled. Pick a folder or use cache/remote.', false);
+          setMsg('Folder selection cancelled.', false);
           return;
         }
         throw err;
@@ -1118,15 +1144,6 @@
       } catch (e) { setMsg('Fullscreen blocked: ' + (e && e.message || e), true); }
       try { canvas.focus(); } catch (e) {}
     });
-    if (srcLocalBtn) srcLocalBtn.addEventListener('click', function () { setSource('pick', 'Enter — Local folder'); });
-    if (srcCacheBtn) srcCacheBtn.addEventListener('click', function () {
-      if (savedMeta) setSource('cache', 'Play from cache');
-      else setMsg('No cached assets yet. Pick a folder or use remote first.', true);
-    });
-    if (srcRemoteBtn) srcRemoteBtn.addEventListener('click', function () {
-      if (remoteCfg) setSource('remote', 'Download & Play');
-      else setMsg('No remote asset config on this server. Use a local folder.', true);
-    });
     // Keyboard: Enter activates the primary action when idle.
     document.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter' && !started && !busy && runtimeReady &&
@@ -1160,7 +1177,6 @@
         setMsg('Cache cleared. Click Enter to select your CoD2 folder.');
       }
       setBusy(false);
-      if (srcCacheBtn) srcCacheBtn.disabled = true;
       updateDiagnostics();
     });
 
@@ -1295,8 +1311,7 @@
 
     function showLauncherChrome() {
       if (fsBtn) fsBtn.style.display = 'inline-block';
-      if (srcRow) srcRow.style.display = 'block';
-      /* Local folder stays available even on remote/VPS (source row + Change). */
+      /* Local folder stays available even on remote/VPS (Change folder). */
       changeBtn.style.display = 'inline-block';
       changeBtn.removeAttribute('aria-hidden');
       if (!Cod2Fs.hasFsAccess()) {
@@ -1331,10 +1346,10 @@
       var meta = (!workerfs && opfs) ? await Cod2Fs.getCacheMeta() : null;
 
       showLauncherChrome();
-      if (srcLocalBtn) srcLocalBtn.disabled = false;
 
       /*
-       * Remote/VPS: default to cache/download, but keep Change folder + Local.
+       * Remote/VPS: default to cache/download, but keep Change folder so a
+       * local install is still reachable.
        */
       if (remoteCfg) {
         savedHandle = null;
@@ -1364,9 +1379,6 @@
         beginBtn.textContent = 'Enter';
         setMsg('Select your Call of Duty 2 folder to start.');
       }
-      if (srcLocalBtn) srcLocalBtn.disabled = false;
-      if (srcCacheBtn) srcCacheBtn.disabled = !savedMeta;
-      if (srcRemoteBtn) srcRemoteBtn.disabled = !remoteCfg;
       updateDiagnostics();
     }
 
