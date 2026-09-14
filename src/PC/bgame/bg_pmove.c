@@ -389,10 +389,28 @@ static void PM_DropTimers(playerState_t *ps, int msec)
         }
     }
 
+    if (ps->weaponTime > 0) {
+        ps->weaponTime -= msec;
+        if (ps->weaponTime < 0)
+            ps->weaponTime = 0;
+    }
+
+    if (ps->weaponDelay > 0) {
+        ps->weaponDelay -= msec;
+        if (ps->weaponDelay < 0)
+            ps->weaponDelay = 0;
+    }
+
     if (ps->grenadeTimeLeft > 0) {
         ps->grenadeTimeLeft -= msec;
         if (ps->grenadeTimeLeft < 0)
             ps->grenadeTimeLeft = 0;
+    }
+
+    if (ps->weaponRestrictKickTime > 0) {
+        ps->weaponRestrictKickTime -= msec;
+        if (ps->weaponRestrictKickTime < 0)
+            ps->weaponRestrictKickTime = 0;
     }
 
     if (ps->foliageSoundTime > 0) {
@@ -413,6 +431,11 @@ static void PM_DropTimers(playerState_t *ps, int msec)
             ps->damageDuration = 0;
     }
 
+    if (ps->holdBreathTimer > 0) {
+        ps->holdBreathTimer -= msec;
+        if (ps->holdBreathTimer < 0)
+            ps->holdBreathTimer = 0;
+    }
 }
 
 void PM_UpdateLean(playerState_t *ps, float msec, usercmd_t *cmd, void (*capsuleTrace)())
