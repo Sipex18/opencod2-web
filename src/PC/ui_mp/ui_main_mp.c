@@ -926,16 +926,25 @@ static int UI_FillServerStatusTextFromMaster(const char *serverAddress, char *ou
     char info_buf[0x400];
     int selected;
     int disp;
-    const char *hostname;
-    const char *mapname;
-    const char *gametype;
-    const char *maxc;
-    const char *pure;
-    const char *pswrd;
-    const char *voice;
-    const char *game;
-    const char *clients;
-    const char *mod;
+    /*
+     * Info_ValueForKey hands back a pointer into a two-slot rotating static
+     * buffer, so holding more than one result across another call aliases
+     * them. Collecting all ten and formatting afterwards meant eight of them
+     * held whichever value had been read last: the popup showed "1" for
+     * Game Name / Map / Max Clients / Mod and "5" for Game Type, because
+     * "mod" is 1 and "clients" was 5 on the selected server. Copy each one
+     * out before the next lookup.
+     */
+    char hostname[256];
+    char mapname[128];
+    char gametype[64];
+    char maxc[32];
+    char pure[16];
+    char pswrd[16];
+    char voice[16];
+    char game[64];
+    char clients[16];
+    char mod[16];
     const char *fsGame;
 
     if (!out || outSize <= 0)
@@ -949,35 +958,35 @@ static int UI_FillServerStatusTextFromMaster(const char *serverAddress, char *ou
     disp = sharedUiInfo.serverStatus.displayServers[selected];
     LAN_GetServerInfo((ui_netSource)->current.integer, disp, info_buf, sizeof(info_buf));
 
-    hostname = Info_ValueForKey(info_buf, "hostname");
-    mapname = Info_ValueForKey(info_buf, "mapname");
-    gametype = Info_ValueForKey(info_buf, "gametype");
-    maxc = Info_ValueForKey(info_buf, "sv_maxclients");
-    pure = Info_ValueForKey(info_buf, "pure");
-    pswrd = Info_ValueForKey(info_buf, "pswrd");
-    voice = Info_ValueForKey(info_buf, "voice");
-    game = Info_ValueForKey(info_buf, "game");
-    clients = Info_ValueForKey(info_buf, "clients");
-    mod = Info_ValueForKey(info_buf, "mod");
+    I_strncpyz(hostname, Info_ValueForKey(info_buf, "hostname"), sizeof(hostname));
+    I_strncpyz(mapname, Info_ValueForKey(info_buf, "mapname"), sizeof(mapname));
+    I_strncpyz(gametype, Info_ValueForKey(info_buf, "gametype"), sizeof(gametype));
+    I_strncpyz(maxc, Info_ValueForKey(info_buf, "sv_maxclients"), sizeof(maxc));
+    I_strncpyz(pure, Info_ValueForKey(info_buf, "pure"), sizeof(pure));
+    I_strncpyz(pswrd, Info_ValueForKey(info_buf, "pswrd"), sizeof(pswrd));
+    I_strncpyz(voice, Info_ValueForKey(info_buf, "voice"), sizeof(voice));
+    I_strncpyz(game, Info_ValueForKey(info_buf, "game"), sizeof(game));
+    I_strncpyz(clients, Info_ValueForKey(info_buf, "clients"), sizeof(clients));
+    I_strncpyz(mod, Info_ValueForKey(info_buf, "mod"), sizeof(mod));
 
     /* Master "game" is often "cod2"; real fs_game only arrives via getstatus. */
     fsGame = "";
-    if (mod && mod[0] && atoi(mod) != 0 && game && game[0] && I_stricmp(game, "cod2") != 0)
+    if (mod[0] && atoi(mod) != 0 && game[0] && I_stricmp(game, "cod2") != 0)
         fsGame = game;
 
     Com_sprintf(out, outSize,
                 "\\sv_hostname\\%s\\mapname\\%s\\g_gametype\\%s\\sv_maxclients\\%s"
                 "\\sv_pure\\%s\\pswrd\\%s\\sv_voice\\%s\\gamename\\%s\\clients\\%s"
                 "\\fs_game\\%s\\protocol\\118\\shortversion\\1.3",
-                hostname && hostname[0] ? hostname : "?",
-                mapname && mapname[0] ? mapname : "?",
-                gametype && gametype[0] ? gametype : "?",
-                maxc && maxc[0] ? maxc : "?",
-                pure && pure[0] ? pure : "0",
-                pswrd && pswrd[0] ? pswrd : "0",
-                voice && voice[0] ? voice : "0",
-                game && game[0] ? game : "Call of Duty 2",
-                clients && clients[0] ? clients : "0",
+                hostname[0] ? hostname : "?",
+                mapname[0] ? mapname : "?",
+                gametype[0] ? gametype : "?",
+                maxc[0] ? maxc : "?",
+                pure[0] ? pure : "0",
+                pswrd[0] ? pswrd : "0",
+                voice[0] ? voice : "0",
+                game[0] ? game : "Call of Duty 2",
+                clients[0] ? clients : "0",
                 fsGame);
 
     (void)serverAddress;
