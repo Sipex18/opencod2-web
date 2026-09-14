@@ -2950,7 +2950,7 @@ static qboolean FS_WebTryLoadIwdIndex(webIwd_t *iwd, const char *iwdPath, long i
         return 0;
     }
 
-    if (!fgets(line, sizeof(line), fp) || strncmp(line, "C2WI1", 5) != 0) {
+    if (!fgets(line, sizeof(line), fp) || strncmp(line, "C2WI2", 5) != 0) {
         fclose(fp);
         return 0;
     }
@@ -3052,7 +3052,7 @@ static void FS_WebSaveIwdIndex(webIwd_t *iwd, long iwdSize, int fileCount)
         order[--i] = file;
     }
 
-    fprintf(fp, "C2WI1\n%ld\n%d\n", iwdSize, fileCount);
+    fprintf(fp, "C2WI2\n%ld\n%d\n", iwdSize, fileCount);
     for (i = 0; i < fileCount; i++) {
         fprintf(fp, "%s\t%lu\t%d\n", order[i]->name, order[i]->pos, order[i]->size);
     }
@@ -3146,7 +3146,6 @@ static int FS_WebIndexIwdFast(webIwd_t *iwd, const char *path)
         int extraLen;
         int commentLen;
         int uncompressedSize;
-        long unsigned int localOffset;
         int len;
         char filename[256];
         webIwdFile_t *file;
@@ -3160,8 +3159,6 @@ static int FS_WebIndexIwdFast(webIwd_t *iwd, const char *path)
         nameLen = buf[off + 28] | (buf[off + 29] << 8);
         extraLen = buf[off + 30] | (buf[off + 31] << 8);
         commentLen = buf[off + 32] | (buf[off + 33] << 8);
-        localOffset = (long unsigned int)(buf[off + 42] | (buf[off + 43] << 8) |
-                                          (buf[off + 44] << 16) | ((long)buf[off + 45] << 24));
 
         if (off + 46 + nameLen > cdSize)
             break;
@@ -3176,7 +3173,14 @@ static int FS_WebIndexIwdFast(webIwd_t *iwd, const char *path)
             file = (webIwdFile_t *)Z_MallocInternal(sizeof(*file));
             Com_Memset(file, 0, sizeof(*file));
             I_strncpyz(file->name, filename, sizeof(file->name));
-            file->pos = localOffset;
+            /*
+             * pos is the offset of this entry's *central directory* record,
+             * not its local header: the reader hands it to
+             * unzSetCurrentFileInfoPosition, which seeks there and parses a
+             * 0x02014b50 record. unzGetCurrentFileInfoPosition returns
+             * s->pos_in_central_dir, so the minizip path stores the same thing.
+             */
+            file->pos = (long unsigned int)off;
             file->size = uncompressedSize;
             file->iwd = iwd;
             file->next = iwd->files;
