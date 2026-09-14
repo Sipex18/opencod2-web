@@ -1256,6 +1256,7 @@ void Com_ShutdownInternal(char *finalmsg)
     extern void CL_ShutdownAll(void);
     extern void CL_ShutdownDemo(void);
     extern void SV_Shutdown(const char *msg);
+    extern void SV_AddOperatorCommands(void);
 
     CL_SwitchToLocalClient(0);
     CL_Disconnect();
@@ -1263,6 +1264,15 @@ void Com_ShutdownInternal(char *finalmsg)
     CL_ShutdownAll();
     CL_ShutdownDemo();
     SV_Shutdown(finalmsg);
+    /*
+     * SV_Shutdown drops the operator commands - map, devmap, status and the
+     * rest - and only SV_Init puts them back, which runs once from Com_Init.
+     * Returning from an error therefore left the console without `map`, and
+     * the menu's "Start Server" (it queues "wait ; wait ; map <name>") printed
+     * Unknown command and did nothing. The process is still running here, so
+     * restore the commands rather than leaving the engine half-torn-down.
+     */
+    SV_AddOperatorCommands();
     Com_Restart();
 }
 
