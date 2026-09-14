@@ -24,6 +24,78 @@ extern void UI_WebMaster_NotifyServersReady(int source);
 
 static int s_webMasterBusy;
 
+/*
+ * Player rosters from the master snapshot, keyed by server address. The UI
+ * rebuilds and re-sorts the server list on every refresh, so an index into it
+ * would go stale; the address does not. Slots are recycled round-robin.
+ */
+#define WEB_MASTER_PLAYER_SLOTS 128
+#define WEB_MASTER_PLAYER_BYTES 768
+
+static byte s_playerKey[WEB_MASTER_PLAYER_SLOTS][6]; /* ip[4] + net-order port */
+static byte s_playerUsed[WEB_MASTER_PLAYER_SLOTS];
+static char s_playerText[WEB_MASTER_PLAYER_SLOTS][WEB_MASTER_PLAYER_BYTES];
+static int s_playerNext;
+
+static int CL_WebMaster_PlayerSlot(const byte ip[4], unsigned short netPort, int create)
+{
+    int i;
+    int slot = -1;
+
+    for (i = 0; i < WEB_MASTER_PLAYER_SLOTS; i++) {
+        if (!s_playerUsed[i])
+            continue;
+        if (s_playerKey[i][0] == ip[0] && s_playerKey[i][1] == ip[1] &&
+            s_playerKey[i][2] == ip[2] && s_playerKey[i][3] == ip[3] &&
+            s_playerKey[i][4] == (byte)(netPort & 0xff) &&
+            s_playerKey[i][5] == (byte)(netPort >> 8))
+            return i;
+    }
+
+    if (!create)
+        return -1;
+
+    slot = s_playerNext;
+    s_playerNext = (s_playerNext + 1) % WEB_MASTER_PLAYER_SLOTS;
+    s_playerUsed[slot] = 1;
+    s_playerKey[slot][0] = ip[0];
+    s_playerKey[slot][1] = ip[1];
+    s_playerKey[slot][2] = ip[2];
+    s_playerKey[slot][3] = ip[3];
+    s_playerKey[slot][4] = (byte)(netPort & 0xff);
+    s_playerKey[slot][5] = (byte)(netPort >> 8);
+    s_playerText[slot][0] = '\0';
+    return slot;
+}
+
+/*
+ * The Server Info popup needs the roster of the server the player selected.
+ * It has a display index, not an address, so resolve it here.
+ */
+const char *CL_WebMaster_GetPlayersForServer(int source, int index)
+{
+    clientStatic_t *cls = (clientStatic_t *)imp_cls;
+    serverInfo_t *srv;
+    int slot;
+
+    if (!cls)
+        return "";
+    if (source == 1) {
+        if (index < 0 || index >= cls->numglobalservers)
+            return "";
+        srv = &cls->globalServers[index];
+    } else if (source == 0) {
+        if (index < 0 || index >= cls->numlocalservers)
+            return "";
+        srv = &cls->localServers[index];
+    } else {
+        return "";
+    }
+
+    slot = CL_WebMaster_PlayerSlot(srv->adr.ip, srv->adr.port, 0);
+    return slot < 0 ? "" : s_playerText[slot];
+}
+
 static int CL_WebMaster_ParseIPv4(const char *ip, byte out[4])
 {
     unsigned a, b, c, d;
@@ -163,13 +235,14 @@ void CL_WebMaster_AddServer(int source, const char *ip, int hostPort,
                             const char *hostname, const char *mapname,
                             const char *gametype, const char *game,
                             int clients, int maxClients, int pswrd, int pure,
-                            int ping, int hardware, int mod)
+                            int ping, int hardware, int mod, const char *players)
 {
     clientStatic_t *cls = (clientStatic_t *)imp_cls;
     serverInfo_t *srv;
     netadr_t adr;
     char info[1024];
     int usePing;
+    int slot;
 
     if (!ip || hostPort <= 0 || hostPort > 65535)
         return;
@@ -179,6 +252,12 @@ void CL_WebMaster_AddServer(int source, const char *ip, int hostPort,
     if (!CL_WebMaster_ParseIPv4(ip, adr.ip))
         return;
     adr.port = CL_WebMaster_HostPortToNet(hostPort);
+
+    if (players && players[0]) {
+        slot = CL_WebMaster_PlayerSlot(adr.ip, adr.port, 1);
+        if (slot >= 0)
+            I_strncpyz(s_playerText[slot], players, WEB_MASTER_PLAYER_BYTES);
+    }
 
     /* Must be > 0 so UI_BuildServerDisplayList does not skip the row. */
     usePing = ping;

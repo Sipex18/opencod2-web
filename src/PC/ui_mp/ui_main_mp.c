@@ -915,6 +915,8 @@ static void UI_AddServerStatusDvarRows(serverStatusInfo_t *info)
 }
 
 #ifdef __EMSCRIPTEN__
+#include "web/web_master.h"
+
 /*
  * Native Server Info sends UDP getstatus; the browser has no UDP path, so the
  * popup stayed black (the previous EMSCRIPTEN ServerStatus stub cleared
@@ -988,6 +990,28 @@ static int UI_FillServerStatusTextFromMaster(const char *serverAddress, char *ou
                 game[0] ? game : "Call of Duty 2",
                 clients[0] ? clients : "0",
                 fsGame);
+
+    /*
+     * Append the roster. The reader walks the rules until it sees an empty
+     * \key\value pair, then reads "score ping \"name\"" triples separated by
+     * backslashes - which is exactly the shape the master snapshot is turned
+     * into on the JS side. Without this the player list stayed empty, because
+     * a browser cannot send the UDP getstatus the native path relies on.
+     */
+    {
+        const char *roster = CL_WebMaster_GetPlayersForServer(
+            (ui_netSource)->current.integer, disp);
+        if (roster && roster[0]) {
+            int len = (int)strlen(out);
+            int room = outSize - len - 1;
+            if (room > 3) {
+                out[len++] = '\\';
+                out[len++] = '\\';
+                out[len] = '\0';
+                strncat(out, roster, (size_t)(outSize - len - 1));
+            }
+        }
+    }
 
     (void)serverAddress;
     return out[0] != '\0';

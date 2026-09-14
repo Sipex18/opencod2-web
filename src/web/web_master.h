@@ -16,9 +16,13 @@ void CL_WebMaster_AddServer(int source, const char *ip, int hostPort,
                             const char *hostname, const char *mapname,
                             const char *gametype, const char *game,
                             int clients, int maxClients, int pswrd, int pure,
-                            int ping, int hardware, int mod);
+                            int ping, int hardware, int mod, const char *players);
 void CL_WebMaster_UpdatePing(int source, int ipPacked, int hostPort, int ping);
 void CL_WebMaster_End(int source, int ok);
+
+/* getstatus-style roster ("score ping \"name\"", backslash separated) for the
+ * server at (source, index), or "" when the snapshot had none. */
+const char *CL_WebMaster_GetPlayersForServer(int source, int index);
 
 #endif /* __EMSCRIPTEN__ */
 

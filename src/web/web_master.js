@@ -121,6 +121,33 @@
     throw new Error('wasm export missing: ' + name);
   }
 
+  /*
+   * The Server Info popup walks the getstatus player section: "score ping
+   * \"name\"" triples separated by backslashes, after the empty \key\value
+   * pair that closes the rules. A browser cannot send the UDP getstatus, but
+   * the master snapshot already carries playerinfo, so build that block here
+   * rather than leaving the player list empty. Backslashes and quotes are
+   * stripped because they would desync the parser.
+   */
+  function playerBlock(s) {
+    var list = s.playerinfo;
+    if (!list || !list.length) return '';
+    var parts = [];
+    /* The rules take ~270 bytes of the reader's 1024-byte status text, so the
+     * roster has to stay well under that or the tail is cut mid-entry. 32
+     * players is ~700 bytes. */
+    for (var i = 0; i < list.length && i < 32; i++) {
+      var p = list[i] || {};
+      var score = parseInt(p.score, 10);
+      var ping = parseInt(p.ping, 10);
+      if (isNaN(score) || score < 0) score = 0;
+      if (isNaN(ping) || ping < 0) ping = 0;
+      var name = String(p.name == null ? '' : p.name).replace(/[\\"]/g, '');
+      parts.push(score + ' ' + ping + ' "' + name + '"');
+    }
+    return parts.join('\\');
+  }
+
   function addOne(source, s) {
     if (!s || !s.ip || !s.port) return;
     var hostname = s.sv_hostname || s.hostname || '';
@@ -138,9 +165,10 @@
       'CL_WebMaster_AddServer',
       null,
       ['number', 'string', 'number', 'string', 'string', 'string', 'string',
-       'number', 'number', 'number', 'number', 'number', 'number', 'number'],
+       'number', 'number', 'number', 'number', 'number', 'number', 'number',
+       'string'],
       [source, String(s.ip), s.port | 0, hostname, mapname, gametype, game,
-       clients, maxClients, pswrd, pure, ping, hardware, mod]
+       clients, maxClients, pswrd, pure, ping, hardware, mod, playerBlock(s)]
     );
   }
 
