@@ -10,7 +10,10 @@ The relay runs as a standalone asyncio server (default :20712) behind
 nginx, which upgrades /play/api/gamews to this backend.
 
 Security:
-  - Only CoD2 server ports 28960-28970 (configurable) are allowed.
+  - Targets are checked against the master list the master proxy serves, so
+    the relay only forwards to servers a player could already see there.
+    Set COD2_RELAY_ALLOW_ANY=1 to skip that and fall back to the port range.
+  - COD2_PORT_MIN/COD2_PORT_MAX bound the fallback range.
   - Each WS session is pinned to exactly one (host, port) pair.
   - Maximum datagram size matches CoD2 MAX_MSGLEN (16384).
 
@@ -22,12 +25,17 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
-import struct
+import socket
 import sys
+import threading
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 try:
     import websockets
@@ -39,8 +47,16 @@ except ImportError:
 RELAY_PORT = int(os.environ.get("RELAY_PORT", "20712"))
 RELAY_HOST = os.environ.get("RELAY_HOST", "127.0.0.1")
 
-PORT_MIN = int(os.environ.get("COD2_PORT_MIN", "28960"))
-PORT_MAX = int(os.environ.get("COD2_PORT_MAX", "29970"))
+PORT_MIN = int(os.environ.get("COD2_PORT_MIN", "1024"))
+PORT_MAX = int(os.environ.get("COD2_PORT_MAX", "65535"))
+
+# CoD2 servers sit on 28960-28970 mostly, but the live master list also carries
+# 28885, 23000, 4009, ... so a narrow port range would silently refuse a fifth
+# of the servers a player can see. The real control is the master list below.
+MASTERLIST_URL = os.environ.get(
+    "COD2_RELAY_MASTERLIST", "http://127.0.0.1:20711/masterlist/cod2/1.3")
+ALLOW_ANY = os.environ.get("COD2_RELAY_ALLOW_ANY", "") not in ("", "0", "no")
+ALLOWLIST_REFRESH = float(os.environ.get("COD2_RELAY_ALLOWLIST_REFRESH", "120"))
 
 MAX_DGRAM = 16384
 UDP_RECV_TIMEOUT = 0.05
@@ -61,6 +77,63 @@ def _ws_path_and_headers(ws) -> tuple[str, object]:
     return path, headers
 
 
+class AllowList:
+    """The (ip, port) pairs the master proxy is currently advertising.
+
+    Without this the relay is an open UDP proxy - anyone could point it at any
+    address. Refreshing the set from the master proxy keeps forwarding to
+    servers a player could already see in the browser, which is a tighter
+    control than the narrow port range that used to refuse legitimate servers.
+
+    An empty set rejects everything: a relay that silently forwards anywhere
+    because the master proxy is down is worse than one that refuses.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._targets: set[tuple[str, int]] = set()
+
+    def _refresh(self) -> None:
+        try:
+            with urllib.request.urlopen(MASTERLIST_URL, timeout=10) as res:
+                data = json.load(res)
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            log.warning("allowlist refresh failed (%s); keeping %d entries",
+                        exc, len(self._targets))
+            return
+        targets: set[tuple[str, int]] = set()
+        for srv in data.get("servers") or []:
+            ip = srv.get("ip")
+            try:
+                port = int(srv.get("port"))
+            except (TypeError, ValueError):
+                continue
+            if ip and 0 < port < 65536:
+                targets.add((str(ip), port))
+        if targets:
+            with self._lock:
+                self._targets = targets
+            log.info("allowlist: %d servers", len(targets))
+
+    def start(self) -> None:
+        """Refresh once up front, then keep it fresh on a background thread."""
+        self._refresh()
+
+        def loop() -> None:
+            while True:
+                time.sleep(ALLOWLIST_REFRESH)
+                self._refresh()
+
+        threading.Thread(target=loop, name="allowlist", daemon=True).start()
+
+    def allows(self, host: str, port: int) -> bool:
+        with self._lock:
+            return (host, port) in self._targets
+
+
+_allowlist = AllowList()
+
+
 def parse_target(path: str, headers) -> tuple[str, int]:
     """Extract host= and port= from the WS request URI query string."""
     qs = urllib.parse.urlparse(path).query
@@ -73,11 +146,15 @@ def parse_target(path: str, headers) -> tuple[str, int]:
     port = int(port_list[0])
     if not host:
         raise ValueError("empty host")
-    if port < PORT_MIN or port > PORT_MAX:
-        raise ValueError(f"port {port} outside allowed range {PORT_MIN}-{PORT_MAX}")
     parts = host.split(".")
     if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
         raise ValueError(f"invalid IPv4: {host}")
+    if port < PORT_MIN or port > PORT_MAX:
+        raise ValueError(f"port {port} outside allowed range {PORT_MIN}-{PORT_MAX}")
+    if not ALLOW_ANY and not _allowlist.allows(host, port):
+        raise ValueError(
+            f"{host}:{port} is not in the master list "
+            f"(set COD2_RELAY_ALLOW_ANY=1 to skip the check)")
     return host, port
 
 
@@ -101,25 +178,32 @@ async def relay_handler(ws):
 
     class UdpRelay(asyncio.DatagramProtocol):
         def connection_made(self, transport):
-            pass
+            log.debug("udp socket bound to %s", transport.get_extra_info("sockname"))
 
         def datagram_received(self, data: bytes, addr: tuple):
             if addr[0] != target[0] or addr[1] != target[1]:
+                log.debug("udp rx from %s dropped: does not match %s", addr, target)
                 return
             try:
                 asyncio.ensure_future(ws.send(data))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("udp->ws forward failed: %s", exc)
 
         def error_received(self, exc):
-            log.debug("udp error: %s", exc)
+            log.warning("udp error: %s", exc)
 
     try:
+        # AF_INET and an explicit local_addr: with family=0 asyncio cannot pick
+        # a family and every session died with "unexpected address family"; with
+        # only a family and no local_addr Windows handed back an unbound socket
+        # (sockname None) whose sendto failed with WSAEINVAL (10022).
+        # parse_target only accepts IPv4, so the family is known.
         udp_transport, udp_protocol = await loop.create_datagram_endpoint(
-            UdpRelay, family=0)
+            UdpRelay, local_addr=("0.0.0.0", 0), family=socket.AF_INET)
 
         async for message in ws:
             if not isinstance(message, (bytes, bytearray)):
+                log.debug("ws rx non-binary frame (%s)", type(message).__name__)
                 continue
             if len(message) > MAX_DGRAM:
                 log.warning("oversized ws frame %d from %s", len(message),
@@ -146,6 +230,9 @@ async def main():
         except NotImplementedError:
             pass
 
+    if not ALLOW_ANY:
+        _allowlist.start()
+
     async with websockets.server.serve(
         relay_handler,
         RELAY_HOST,
@@ -155,8 +242,9 @@ async def main():
         ping_interval=20,
         ping_timeout=30,
     ):
-        log.info("cod2 game relay on ws://%s:%d/  (ports %d-%d)",
-                 RELAY_HOST, RELAY_PORT, PORT_MIN, PORT_MAX)
+        log.info("cod2 game relay on ws://%s:%d/  (ports %d-%d, allowlist=%s)",
+                 RELAY_HOST, RELAY_PORT, PORT_MIN, PORT_MAX,
+                 "off" if ALLOW_ANY else MASTERLIST_URL)
         try:
             await stop
         except asyncio.CancelledError:
