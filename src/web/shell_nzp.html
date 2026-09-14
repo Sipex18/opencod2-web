@@ -974,6 +974,12 @@
         // OPFS bytes were written by Cod2Fs (JS). Mount happens inside C main()
         // on the PROXY_TO_PTHREAD worker — cannot ccall wasmfs OPFS on the
         // browser main thread without JSPI.
+        //
+        // Create the OPFS home/ tree here so /opfs/home exists before the
+        // engine starts: MacPreferences writes .cod2/preferences (the CD key
+        // among it) under fs_homepath, and it can only persist if that
+        // directory is really there.
+        try { await Cod2Fs.opfsHomeDir(true); } catch (e) {}
         setMsg('OPFS ready — starting…');
         return;
       }

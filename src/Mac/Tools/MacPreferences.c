@@ -18,7 +18,28 @@ static void ensure_prefs_path(void)
     const char *home;
     if (prefs_path[0])
         return;
+
+#ifdef __EMSCRIPTEN__
+    /*
+     * Emscripten's default HOME is /home/web_user, which lives in MEMFS - the
+     * file is gone after a reload, so an entered CD key never survived and
+     * every connect attempt failed CL_CDKeyValidate. The shell's fs_homepath
+     * is the persistent one: /opfs/home on the WASMFS build, /cod2home on the
+     * MEMFS and WORKERFS ones. Prefer whichever of those is actually mounted.
+     */
+    home = NULL;
+    {
+        struct stat st;
+        if (stat("/opfs/home", &st) == 0 && S_ISDIR(st.st_mode))
+            home = "/opfs/home";
+        else if (stat("/cod2home", &st) == 0 && S_ISDIR(st.st_mode))
+            home = "/cod2home";
+    }
+    if (!home)
+        home = getenv("HOME");
+#else
     home = getenv("HOME");
+#endif
     if (!home)
         home = ".";
     snprintf(prefs_path, sizeof(prefs_path), "%s/%s", home, PREFS_FILE);
