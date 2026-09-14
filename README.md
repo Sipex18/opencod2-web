@@ -33,6 +33,12 @@
 written in C. The goal is a portable, auditable engine that can run the
 original game content on modern platforms — including the browser.
 
+This repository is a derivative of [opencod2/opencod2](https://github.com/opencod2/opencod2),
+which reconstructs the engine for native Linux and Windows. The work here adds
+the Emscripten/WebAssembly target and the browser plumbing around it: a WebGL2
+compatibility layer, Web Audio, an OPFS-backed filesystem, and a WebSocket↔UDP
+relay so a browser client can reach real servers.
+
 The entire server + client compiles into a single binary (or `.wasm` for web),
 with no external game logic DLLs.
 
@@ -136,6 +142,15 @@ Point the engine at your legally-obtained game data:
 For the web build, assets are fetched from the web server at runtime.
 See `src/web/remote-config.js` for the asset path configuration.
 
+Local browser client + Join Game (HTTP masterlist + WebSocket↔UDP relay), no VPS:
+
+```sh
+pip install websockets
+python tools/serve_web_local.py
+# http://127.0.0.1:8080/cod2.html
+# optional: --coop  (COOP/COEP for pthread / WASMFS / WORKERFS only)
+```
+
 ---
 
 ## Project structure
@@ -171,6 +186,18 @@ bugs. **Do not expose test servers to untrusted networks.**
 
 A long-term goal is to audit and harden these paths while preserving
 compatibility with the original game.
+
+---
+
+## Credits
+
+The engine reconstruction itself comes from
+[opencod2/opencod2](https://github.com/opencod2/opencod2) — the native Linux
+and Windows port this web target is built on top of. Thanks to its authors and
+contributors.
+
+The browser layer, the WASM ABI work, and the web tooling live in this
+repository; see the changelog for what each one covers.
 
 ---
 

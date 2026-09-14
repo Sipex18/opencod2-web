@@ -27,6 +27,15 @@ curl -sS https://HOST/play/api/masterlist/cod2/1.3 | head -c 200
 
 ## Local dev
 
+Preferred (static web + master + WS relay, same-origin `/play/api/`):
+
+```bash
+python tools/serve_web_local.py
+# open http://127.0.0.1:8080/cod2.html
+```
+
+Standalone:
+
 ```bash
 python3 tools/master_proxy/server.py
 # point Module.COD2_MASTER_URL at http://127.0.0.1:20711/masterlist/cod2/1.3

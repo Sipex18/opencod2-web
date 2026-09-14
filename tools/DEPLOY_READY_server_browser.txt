@@ -1,0 +1,16 @@
+DEPLOY_READY
+feature: browser Join Game HTTP master discovery
+build: build-web-wsl (COD2_WEB_WASMFS=ON)
+tag: o1-serverbrowser-20260729
+sibling: menufix8 (o1-menufix8-20260729) — unify build+deploy
+date: 2026-07-29
+
+VPS prerequisite (must be up before Join Game lists servers):
+  1) Install/run tools/master_proxy/server.py on 127.0.0.1:20711
+  2) nginx location /play/api/ → proxy_pass http://127.0.0.1:20711/
+     (see tools/nginx-cod2-web.conf or tools/master_proxy/nginx-play-api.conf.snippet)
+  3) curl -sS https://HOST/play/api/masterlist/cod2/1.3 | head
+
+Unified deploy target:
+  root@YOUR_HOST:/var/www/cod2-web/r3
+  URL: /play/r3/cod2.html

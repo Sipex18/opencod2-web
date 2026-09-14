@@ -6,10 +6,11 @@
 # remote-config.js for the FS loader.
 # ────────────────────────────────────────────────────────────────────────────
 # Usage (from repo root, after build-web-wsl succeeds):
-#   bash tools/deploy_web_to_vps.sh root@87.121.85.236 [build-dir] [version-tag]
+#   bash tools/deploy_web_to_vps.sh root@YOUR_HOST [build-dir] [version-tag]
 set -eu
 set -o pipefail
 HOST="${1:?usage: $0 user@host}"
+HOSTONLY="${HOST#*@}"
 SRC="${2:-build-web-wsl}"
 VER="${3:-o1-vidhz-$(date +%Y%m%d%H%M)}"
 DST="/var/www/cod2-web"
@@ -144,7 +145,7 @@ cat > "$DST/cod2.html" <<HTML
 HTML
 ls -lah "$DST/r3"
 md5sum "$DST/r3/cod2.wasm"
-echo "OPEN https://87.121.85.236/play/r3/cod2.html?v=${VER}"
+echo "OPEN https://${HOSTONLY}/play/r3/cod2.html?v=${VER}"
 EOF
 
 echo "Deployed. Open https://HOST/play/r3/cod2.html?v=${VER}"

@@ -18,6 +18,18 @@ Automation helper:
 ### Removed
 
 ### Fixed
+- Aligned 27 `extern` declarations with their real definitions to clear the wasm-ld "function signature mismatch" warnings in live (non-Mac) code. Passing arguments under the wrong prototype corrupts the caller/callee contract, so these were silent misbehaviour, not just noise. Affected: MSG_ReadDeltaClient/MSG_ReadDeltaArchivedEntity (snapshot deltas), MSG_WriteBigString, NET_IsLocalAddress (was called with 3 scalars against a `netadr_t` parameter), NET_SendPacket, CL_Netchan_SendOOBPacket (5 scalars vs. `netadr_t`), CL_ServerStatusResponse/CL_ServersResponsePacket/CL_ServerInfoPacket, SVC_Status/SVC_GameCompleteStatus, FS_CreatePath, FS_FileClose, FS_ListFilteredFiles (6 args vs. 7, which shifted `numfiles` onto the wrong parameter), PM_ExitAimDownSight, Jump_ActivateSlowdown, Scr_GetAnim, Scr_VoteCalled, CG_SaveShellShockDvars, CG_ScrollScoreboardUp/Down, CG_DrawTeamBackground, CL_Popup, CL_MutePlayer, XSurfaceTransferDx7, Sys_StreamedRead, Cloud_Cloud, jpeg_finish_decompress, speex_encoder_destroy/speex_decoder_destroy/speex_encoder_ctl, Encode_Shutdown, Decode_Init, Client_SendVoiceData.
+- Scr_GetAnim returns a 4-byte `scr_anim_t` by hidden pointer (sret); the GSC builtins read it back through a packed `unsigned int`. Added `Scr_GetAnimPacked` so the callers keep working without aliasing the return type.
+- `tools/patch_web_proxy_receive.py` no longer misses its target: the regex assumed the receive function ended right after the thread bookkeeping, but current Emscripten leaves a comment and an assert in between. The POST_BUILD guard now applies, so a missing ASM_CONSTS entry logs instead of aborting boot.
+- `tools/serve_web_local.py` answers HEAD requests. `cod2_fs.js` probes for a sibling `assets.json` with HEAD, and the 501 response meant remote assets were never auto-detected on the local server.
+- `tools/serve_web_local.py` serves content symlinked/junctioned inside the webroot (the usual way to expose a CoD2 install without copying the iwds) while still rejecting `../` traversal.
+- `tools/serve_web_local.py` streams static files instead of reading them whole; six concurrent ~700 MB iwd downloads previously needed ~4 GB of RAM.
+- Web build copies `cod2-icon.png`, `favicon.png`, and `apple-touch-icon.png` next to `cod2.html`; the shell referenced all three but only `cod2_fs.js` and `remote-config.js` were copied, so they 404'd.
+- `src/web/README.md` documented a `make web` / `make web-serve` workflow and a `WEB_PRELOAD` option that do not exist in this CMake-only tree; rewrote it around the real build, filesystem backends, and `tools/serve_web_local.py`.
+- Replaced the deploy-script host literals with placeholders, and made `tools/deploy_web_to_vps.sh` print the host it was actually given instead of a hardcoded address.
+- `tools/fix_web_link_sigs.sh` derives the repo root from its own path instead of a hardcoded `/mnt/c/...` checkout.
+- Removed dead `src/web/shell.html` (the build uses `shell_nzp.html`) and `src/web/gl_proxied_frame_buffer.js` (referenced nowhere).
+- `.gitignore` now covers the out-of-source web build dirs, build logs, and the `tools/_*` scratch helpers.
 - Replaced unbounded sprintf with snprintf in CL_GlobalServers_f to prevent command[1024] overflow from long server query arguments.
 - Replaced unbounded sprintf with snprintf in CL_DrawDemoRecording to prevent buf[1024] overflow from long demo name.
 - Replaced unbounded strcpy with I_strncpyz in G_ShaderIndex to prevent shaderName[64] buffer overflow from long shader names.

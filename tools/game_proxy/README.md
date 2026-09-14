@@ -48,6 +48,16 @@ websocat "ws://127.0.0.1:20712/?host=1.2.3.4&port=28960" --binary
 
 ## Local dev
 
+Preferred (static web + master + this relay, same-origin `/play/api/gamews`):
+
+```bash
+pip install websockets
+python tools/serve_web_local.py
+# open http://127.0.0.1:8080/cod2.html
+```
+
+Standalone:
+
 ```bash
 pip install websockets
 python3 tools/game_proxy/relay.py

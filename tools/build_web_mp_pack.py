@@ -85,7 +85,15 @@ def should_keep(path: str) -> bool:
         return False
 
     # SP mission .str / leftover SP-named assets in localized packs.
-    if _has_sp_token(p):
+    #
+    # images/ is exempt: textures (skyboxes especially) are frequently reused
+    # across SP missions and MP bonus maps that share the same setting (e.g.
+    # mp_burgundy's skybox is images/rhine_ft.iwi, borrowed from the SP
+    # "rhine" mission — the token match below would otherwise strip it and
+    # break mp_burgundy with "ERROR: image 'images/rhine_ft.iwi' is missing").
+    # Textures are cheap (a few KB-MB each); the token filter's real payoff
+    # is on bulkier localized VO/string content, not images.
+    if not p.startswith("images/") and _has_sp_token(p):
         return False
 
     return True

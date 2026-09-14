@@ -3,7 +3,7 @@ set -euo pipefail
 source "$HOME/emsdk/emsdk_env.sh"
 export EM_CACHE="${EM_CACHE:-$HOME/emscripten_cache}"
 export TMPDIR=/tmp
-cd /mnt/c/Users/sipex/Desktop/opencod2-main
+cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
 which emcc
 emcc -v 2>&1 | head -3

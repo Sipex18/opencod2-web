@@ -49,6 +49,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("cod2-relay")
 
 
+def _ws_path_and_headers(ws) -> tuple[str, object]:
+    """websockets 10-12: ws.path / ws.request_headers; 13+: ws.request.path."""
+    req = getattr(ws, "request", None)
+    if req is not None:
+        return req.path, req.headers
+    path = getattr(ws, "path", None)
+    headers = getattr(ws, "request_headers", None)
+    if not path:
+        raise ValueError("missing request path")
+    return path, headers
+
+
 def parse_target(path: str, headers) -> tuple[str, int]:
     """Extract host= and port= from the WS request URI query string."""
     qs = urllib.parse.urlparse(path).query
@@ -72,7 +84,8 @@ def parse_target(path: str, headers) -> tuple[str, int]:
 async def relay_handler(ws):
     """Handle one browser client → one CoD2 server session."""
     try:
-        host, port = parse_target(ws.request.path, ws.request.headers)
+        path, headers = _ws_path_and_headers(ws)
+        host, port = parse_target(path, headers)
     except Exception as exc:
         log.warning("bad handshake: %s", exc)
         await ws.close(4400, str(exc))
