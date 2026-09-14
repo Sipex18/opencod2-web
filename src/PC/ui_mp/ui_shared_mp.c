@@ -646,29 +646,38 @@ void Script_Play(displayContextDef_t *dc, itemDef_t *item, const char **args)
 void Script_ScriptMenuResponse(displayContextDef_t *dc, itemDef_t *item, const char **args)
 {
     char val[0x400];
-    byte *it = (byte *)item;
     int iIndex;
+    int allow;
+    int sid;
+    LegacyHacks *hacks;
+    const char *menuName;
+    static int traceCount;
     (void)dc;
 
-    if (!(*(LegacyHacks **)imp_legacyHacks)->ui_scriptMenuAllowResponse)
-        return;
+    hacks = *(LegacyHacks **)imp_legacyHacks;
+    allow = hacks ? hacks->ui_scriptMenuAllowResponse : 0;
+    menuName = (item && item->parent) ? item->parent->window.name : "";
 
     if (!String_Parse(args, val, 0x400))
         return;
 
     iIndex = -1;
-    for (int i = 0; i < 0x20; i++) {
-        const char *cs = CL_GetConfigString(0x4de + i);
-        if (cs[0] == '\0')
-            continue;
-        const char *menuName = item->parent->window.name;
-        if (I_stricmp(menuName, cs) == 0) {
-            iIndex = i;
-            break;
+    if (item && item->parent && item->parent->window.name) {
+        for (int i = 0; i < 0x20; i++) {
+            const char *cs = CL_GetConfigString(0x4de + i);
+            if (cs[0] == '\0')
+                continue;
+            if (I_stricmp(item->parent->window.name, cs) == 0) {
+                iIndex = i;
+                break;
+            }
         }
     }
+    if (iIndex < 0 && hacks && (unsigned)hacks->ui_scriptMenuIndex <= 0x1f)
+        iIndex = hacks->ui_scriptMenuIndex;
 
-    Cbuf_ExecuteText(2, va("cmd mr %i %i %s\n", Dvar_GetInt("sv_serverId"), iIndex, val));
+    sid = Dvar_GetInt("sv_serverId");
+    Cbuf_ExecuteText(2, va("cmd mr %i %i %s\n", sid, iIndex, val));
 }
 
 void Item_RunScript(displayContextDef_t *dc, itemDef_t *item, const char *s)
@@ -5096,8 +5105,9 @@ void Menu_HandleKey(displayContextDef_t *dc, menuDef_t *menu, int key, qboolean 
     }
 
     if (key == 0xc8) {
-        if (!focusedItem)
+        if (!focusedItem) {
             return;
+        }
 
         int itemType = ((itemDef_s *)focusedItem)->type;
         if (itemType == 0) {
@@ -5147,8 +5157,9 @@ void Menu_HandleKey(displayContextDef_t *dc, menuDef_t *menu, int key, qboolean 
             }
         }
 
-        if (((itemDef_s *)focusedItem)->action)
+        if (((itemDef_s *)focusedItem)->action) {
             Item_RunScript(dc, (itemDef_t *)focusedItem, ((itemDef_s *)focusedItem)->action);
+        }
         return;
     }
 
@@ -5636,21 +5647,44 @@ void Menu_PaintAll(displayContextDef_t *dc)
 
 #ifdef __EMSCRIPTEN__
     /*
-     * Stack membership implies the menu should paint.  OOB/script paths that
-     * only cleared WINDOW_VISIBLE (0x4) without removing the menu from the
-     * stack left open entries invisible → full black until ESC.
-     *
-     * Restore WINDOW_VISIBLE only when the menu is NOT mid–fade-out (0x10):
-     * Window_Paint clears flag 4 at the end of a fade-out cycle, and forcing
-     * it back would create a "sticky menu" that never finishes fading.
-     * Menus_Close always removes from the stack, so properly closed menus are
-     * never reached here.
+     * 1) Force-hide boot/profile leftovers that still have WINDOW_VISIBLE after
+     *    leaving the stack — Menu_PaintAll paints non-open menus too, which is
+     *    how the profile "Name" listbox ghosted over team select.
+     * 2) Restore WINDOW_VISIBLE only for the top stack entry / *popmenu* when
+     *    something cleared flag 4 (needed for graphics Apply confirm).
      */
-    for (i = 0; i < openCount; i++) {
-        void *om = *(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) + i * 4);
-        if (om && !(((menuDef_t *)om)->window.dynamicFlags[0] & 4)
-              && !(((menuDef_t *)om)->window.dynamicFlags[0] & 0x10))
-            Window_AddDynamicFlags(om, 4);
+    for (i = 0; i < menuCount; i++) {
+        void *menu = *(void **)(((char *)d + offsetof(displayContextDef_t, Menus[0])) + i * 4);
+        const char *nm;
+        int onStack = 0;
+        if (!menu)
+            continue;
+        nm = ((menuDef_t *)menu)->window.name;
+        if (!nm)
+            continue;
+        if (I_stricmp(nm, "player_profile") && I_stricmp(nm, "main") &&
+            I_stricmp(nm, "connect") && I_stricmp(nm, "main_text"))
+            continue;
+        for (j = openCount - 1; j >= 0; j--) {
+            if (*(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) + j * 4) == menu) {
+                onStack = 1;
+                break;
+            }
+        }
+        if (!onStack)
+            Window_RemoveDynamicFlags(menu, 0x6);
+    }
+
+    if (openCount > 0) {
+        void *top = *(void **)(((char *)d + offsetof(displayContextDef_t, menuStack[0])) +
+                               (openCount - 1) * 4);
+        if (top) {
+            int fl = ((menuDef_t *)top)->window.dynamicFlags[0];
+            const char *tn = ((menuDef_t *)top)->window.name;
+            if (!(fl & 4) && !(fl & 0x10) &&
+                tn && (strstr(tn, "popmenu") || strstr(tn, "options_")))
+                Window_AddDynamicFlags(top, 4);
+        }
     }
 #endif
 

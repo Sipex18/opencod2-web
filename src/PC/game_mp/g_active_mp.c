@@ -883,12 +883,36 @@ void ClientThink_real(gentity_t *ent, usercmd_t *ucmd)
         ucmd->serverTime = level.time - 1000;
 
     msec = ucmd->serverTime - client->ps.commandTime;
-    if (msec <= 0) {
-        if ((int)(ent - g_entities) == client->ps.clientNum)
-            goto done;
+#ifdef __EMSCRIPTEN__
+    /*
+     * Listen-server web: spawn sets ps.commandTime = level.time, while
+     * usercmd.serverTime is cls.realtime + serverTimeDelta and often lags
+     * after load/hitches. Skipping Pmove here freezes the authoritative
+     * player (prediction still walks) and leaves weapon scripts on a stale
+     * command. Rebase the cmd onto this server frame so physics and fire
+     * stay in lockstep.
+     */
+    if (msec <= 0 && (int)(ent - g_entities) == client->ps.clientNum) {
+        ucmd->serverTime = level.time;
+        msec = ucmd->serverTime - client->ps.commandTime;
+        if (msec <= 0) {
+            ucmd->serverTime = client->ps.commandTime + 1;
+            msec = 1;
+        } else if (msec > 200) {
+            msec = 200;
+        }
     } else if (msec > 200) {
         msec = 200;
     }
+#else
+    if (msec <= 0) {
+        if ((int)(ent - g_entities) == client->ps.clientNum) {
+            goto done;
+        }
+    } else if (msec > 200) {
+        msec = 200;
+    }
+#endif
 
     if (client->bFrozen)
         client->ps.pm_flags |= 0x8000;

@@ -269,12 +269,7 @@ void Com_LoadSoundAliases(const char *loadspec, const char *loadspecCurGame, snd
 after_load:
 
     if ((int)system <= 1) {
-#if defined(__x86_64__)
         if (g_sa.initialized[0] == 0 && g_sa.initialized[1] == 0) {
-#else
-        if (*(short *)((byte *)&g_sa) == 0) {
-#endif
-
             Cmd_AddCommand("snd_list", (void (*)(void))Com_SoundList_f);
         }
     }
@@ -282,11 +277,18 @@ after_load:
     g_sa.initialized[system] = 1;
 
     if ((int)system <= 1) {
-
-#if defined(__x86_64__)
+#ifdef __EMSCRIPTEN__
+        Com_Printf("Com_LoadSoundAliases: loading sounds system=%d count=%d\n",
+                   (int)system, g_sa.soundFileInfo[system].count);
+#endif
+#if defined(__x86_64__) || defined(__EMSCRIPTEN__)
         int missCount = Com_LoadSoundAliasSounds((void *)&g_sa.soundFileInfo[system]);
 #else
         int missCount = Com_LoadSoundAliasSounds((void *)((byte *)&g_sa + 4152 + (int)system * 8));
+#endif
+#ifdef __EMSCRIPTEN__
+        Com_Printf("Com_LoadSoundAliases: sounds done system=%d missing=%d\n",
+                   (int)system, missCount);
 #endif
 
         if (missCount != 0) {

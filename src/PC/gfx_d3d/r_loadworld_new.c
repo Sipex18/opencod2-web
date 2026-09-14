@@ -4,6 +4,9 @@ extern dvar_t *r_rendererInUse;
 
 #include <math.h>
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 extern GfxWorld s_world;
 extern struct r_globals_load_t rgl;
@@ -31,18 +34,22 @@ extern void R_LoadSun(const char *name, sunflare_t *sun);
 extern void R_RegisterOutdoorImage(GfxWorld *world);
 
 extern void __attribute_regparm__(1) R_LoadSurfaces(GfxBspLoad *load);
-extern void R_LoadCullGroups(void);
-extern void R_LoadPortalVerts(void);
-extern void R_LoadOccluders(void);
-extern void R_LoadAabbTrees(void);
-extern void R_LoadCells(GfxBspLoad *load);
-extern void R_LoadPortals(void);
-extern void R_LoadNodesAndLeafs(void);
+extern void __attribute_regparm__(1) R_LoadCullGroups(const int *load);
+extern void __attribute_regparm__(1) R_LoadPortalVerts(const int *load);
+extern void __attribute_regparm__(1) R_LoadOccluders(const byte *loadState);
+extern void __attribute_regparm__(1) R_LoadAabbTrees(const int *load);
+extern void __attribute_regparm__(1) R_LoadCells(const int *load);
+extern void __attribute_regparm__(1) R_LoadPortals(const int *load);
+extern void __attribute_regparm__(1) R_LoadNodesAndLeafs(const byte *loadState);
 extern void __attribute_regparm__(1) R_LoadEntities(GfxBspLoad *load);
 
+#ifdef __EMSCRIPTEN__
+#define CALL_LOADER_EAX(func, arg) (func)((void *)(arg))
+#else
 typedef void (*loader_regparm_fn)(void *) __attribute_regparm__(1);
 #define CALL_LOADER_EAX(func, arg) \
     ((loader_regparm_fn)(func))((void *)(arg))
+#endif
 
 #define LIGHTMAP_NONE 31
 #define MAX_LIGHTMAPS 31
@@ -52,8 +59,11 @@ typedef void (*loader_regparm_fn)(void *) __attribute_regparm__(1);
 
 static void R_PrintLoadProgress(const char *what)
 {
-    ri.Printf(0, "Loading %s...\n", what);
-    ri.Cbuf_ExecuteText(0, "updatescreen\n");
+    /* WASM call_indirect needs exact signatures; void(*)() traps / OOB. */
+    typedef void (*ri_Printf_fn)(int, const char *, ...);
+    typedef void (*ri_Cbuf_fn)(int, const char *);
+    ((ri_Printf_fn)ri.Printf)(0, "Loading %s...\n", what);
+    ((ri_Cbuf_fn)ri.Cbuf_ExecuteText)(0, "updatescreen\n");
 }
 
 static int R_ValidateLumpRaw(const byte *header, const byte *fileBase, int fileSize,
@@ -165,7 +175,6 @@ GfxWorld *R_LoadWorldInternal(const char *name)
 
     R_PrintLoadProgress("sun settings");
     {
-
         int entityOfs = *(int *)(header + LUMP_OFS_ENTITIES + 4);
         const char *entityString = (const char *)(fileBase + entityOfs);
         R_ParseSunLight(&s_world.sunParse, entityString);
@@ -177,6 +186,12 @@ GfxWorld *R_LoadWorldInternal(const char *name)
     float sunR = s_world.sunLight.color[0];
     float sunG = s_world.sunLight.color[1];
     float sunB = s_world.sunLight.color[2];
+    if (sunR == 0.0f && sunG == 0.0f && sunB == 0.0f) {
+        /* Interpret failed or worldspawn had no suncolor — still bake shadowmap. */
+        sunR = s_world.sunParse.sunColor[0];
+        sunG = s_world.sunParse.sunColor[1];
+        sunB = s_world.sunParse.sunColor[2];
+    }
 
     load.lmapMergeInfo[LIGHTMAP_NONE].index = LIGHTMAP_NONE;
     load.lmapMergeInfo[LIGHTMAP_NONE].shift[0] = 0.0f;
@@ -457,13 +472,24 @@ GfxWorld *R_LoadWorldInternal(const char *name)
                 }
 
                 int rendererInUse = r_rendererInUse->current.integer;
+#ifdef __EMSCRIPTEN__
+                (void)rendererInUse;
+#endif
 
 #ifdef GFX_REAL_D3D9
 
                 if (0) {
 
 #else
-                if (rendererInUse != 2) {
+                /* DX7 (renderer==2) packs RGB planes + shadow*sun into lightmaps[i][0]
+                 * (referencia/cod2-main R_LoadWorldInternal + d3dbsp generate_fix).
+                 * Web FF DIP only samples [0], so always pack — DX9's 4-plane split
+                 * needs HLSL samplers we do not run. */
+#ifdef __EMSCRIPTEN__
+                if (1) {
+#else
+                if (rendererInUse == 2) {
+#endif
 
 #endif
                     int grpOffset = groupIdx * (int)sizeof(GfxLightmapArray);
@@ -528,6 +554,21 @@ GfxWorld *R_LoadWorldInternal(const char *name)
                         }
                     }
 
+#ifdef __EMSCRIPTEN__
+                    {
+                        unsigned char maxSh = 0;
+                        int yy;
+                        for (yy = 0; yy < pixHeight; yy++) {
+                            byte *sp = hiResBase + yy * pixWidth * 4;
+                            int xx;
+                            for (xx = 0; xx < pixWidth; xx++) {
+                                if (sp[0] > maxSh)
+                                    maxSh = sp[0];
+                                sp += 2;
+                            }
+                        }
+                    }
+#endif
                     Image_Generate2D(
                         ((GfxImage **)((byte *)s_world.lightmaps + grpOffset))[0],
                         loResBase1,

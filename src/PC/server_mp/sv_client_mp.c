@@ -92,7 +92,7 @@ extern int FS_SV_FOpenFileRead(const char *filename, fileHandle_t *fp);
 extern int FS_Read(void *buffer, int len, fileHandle_t f);
 extern void *Z_MallocInternal(int size);
 extern void Dvar_SetInt(const dvar_t *dvar, int value);
-extern void MSG_WriteBigString(msg_t *sb, const char *s, msg_t *msg, int key, int oldV, int bits);
+extern void MSG_WriteBigString(msg_t *sb, const char *s);
 extern void MSG_WriteDeltaEntity(msg_t *msg, entityState_t *from, entityState_t *to, qboolean force);
 extern void SV_UpdateServerCommandsToClient(client_t *client, msg_t *msg);
 extern void SV_SendMessageToClient(msg_t *msg, client_t *client);
@@ -580,8 +580,13 @@ void SV_SendClientGameState(client_t *client)
             SV_Netchan_TransmitNextFragment(nc);
     }
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("SV_SendClientGameState() for %s\n", client->name);
+    Com_Printf("Going from CS_CONNECTED to CS_PRIMED for %s\n", client->name);
+#else
     Com_DPrintf("SV_SendClientGameState() for %s\n", client->name);
     Com_DPrintf("Going from CS_CONNECTED to CS_PRIMED for %s\n", client->name);
+#endif
 
     client->state = 3;
     client->pureAuthentic = 0;
@@ -599,7 +604,7 @@ void SV_SendClientGameState(client_t *client)
             if (svcfg->configstrings[i][0]) {
                 MSG_WriteByte(&msg, 2);
                 MSG_WriteShort(&msg, i);
-                MSG_WriteBigString(&msg, svcfg->configstrings[i], NULL, 0, 0, 0);
+                MSG_WriteBigString(&msg, svcfg->configstrings[i]);
             }
         }
     }
@@ -624,7 +629,12 @@ void SV_SendClientGameState(client_t *client)
     MSG_WriteLong(&msg, sv->checksumFeed);
     MSG_WriteByte(&msg, 7);
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("Sending %i bytes in gamestate to client: %i (overflowed=%d)\n",
+               msg.cursize, clientNum, msg.overflowed);
+#else
     Com_DPrintf("Sending %i bytes in gamestate to client: %i\n", msg.cursize, clientNum);
+#endif
     SV_SendMessageToClient(&msg, client);
 
     ZN10LargeLocalD1Ev(&msgBuffer_large_local);
@@ -635,7 +645,11 @@ void SV_ClientEnterWorld(client_t *client, const dvar_t *(*cmd)[4])
     int clientNum;
     gentity_t *ent;
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name);
+#else
     Com_DPrintf("Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name);
+#endif
     client->state = 4;
 
     clientNum = client - svs.clients;
@@ -1388,6 +1402,16 @@ setup_client:
 
     NET_OutOfBandPrint((netsrc_t)1, from, "connectResponse");
     cl->deltaMessage = -1;
+    /* CoD2rev: first client packet sees serverId mismatch and
+     * messageAcknowledge (0) > gamestateMessageNum (-1) → send gamestate.
+     * Leaving this at 0 (memset) blocks forever on CS_CONNECTED.
+     * On web listen, SV_SendClientMessages also sends when still CS_CONNECTED
+     * (do NOT parse/init cgame from inside this stack — that freezes the UI). */
+    cl->gamestateMessageNum = -1;
+#ifdef __EMSCRIPTEN__
+    if (from.type == NA_LOOPBACK)
+        Com_Printf("SV_DirectConnect: loopback connected, gamestate deferred\n");
+#endif
 
     connectedClients = 0;
     for (clientNum = 0, cl = svs->clients; clientNum < maxClients; ++clientNum, ++cl) {
@@ -1602,13 +1626,21 @@ void SV_ExecuteClientMessage(client_t *cl, msg_t *msg)
         }
 
         if (cl->messageAcknowledge <= cl->gamestateMessageNum) {
+#ifdef __EMSCRIPTEN__
+            Com_Printf("SV: skip gamestate resend ack=%d gsMsg=%d state=%d\n",
+                       cl->messageAcknowledge, cl->gamestateMessageNum, cl->state);
+#endif
             return;
         }
         if (cl->netchan.unsentFragments || cl->state == 3) {
             return;
         }
 
+#ifdef __EMSCRIPTEN__
+        Com_Printf("%s : dropped gamestate, resending\n", cl->name);
+#else
         Com_DPrintf("%s : dropped gamestate, resending\n", cl->name);
+#endif
         SV_SendClientGameState(cl);
 
         if (!(*(const dvar_t **)imp_net_lanauthorize)->current.enabled &&

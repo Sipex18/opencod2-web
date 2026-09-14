@@ -745,9 +745,9 @@ void RB_DrawSun(int viewIndex)
                 if (sunFlare->hitNum != 0) {
                     sunFlare->lastVisibility = 0.0f;
                     savedVisibility = 0.0f;
-                } else {
-                    savedVisibility = 0.0f;
                 }
+                /* miss: keep savedVisibility. Vanilla source.c 174157 zeros lastVisibility
+                 * only on hit; the else branch assigned an unrelated xmm, not visibility. */
             }
 
             goto after_sun_trace;

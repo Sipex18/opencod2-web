@@ -80,7 +80,7 @@ extern float AngleNormalize360Accurate(float a);
 extern void VectorAngleMultiply(float *trans, float yaw);
 extern void BG_AddPredictableEventToPlayerstate(int event, int param, playerState_t *ps);
 extern int BG_AnimScriptAnimation(playerState_t *ps, int anim, int moveType, int force);
-extern void BG_AnimScriptEvent(playerState_t *ps, int anim, int p3, int p4);
+extern int BG_AnimScriptEvent(playerState_t *ps, int anim, int p3, int p4);
 extern void PM_trace(pmove_t *pm, void *trace, float *start, float *mins, float *maxs, float *end, int entityNum, int contentMask);
 extern const char *va(const char *fmt, ...);
 extern float Vec3Normalize(float *v);

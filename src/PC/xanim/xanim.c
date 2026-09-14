@@ -60,9 +60,15 @@ static inline __attribute__((always_inline)) XAnimInfo *XAnimAllocInfoForTree(XA
     unsigned int infoIndex = g_xAnimInfo[0].next;
 
     if (!infoIndex) {
+#ifdef __EMSCRIPTEN__
+        /* Com_Error → longjmp often surfaces as wasm unreachable in the worker. */
+        Com_Printf("XAnimAllocInfoForTree: exceeded maximum number of anim info\n");
+        return &g_xAnimInfo[0];
+#else
         Com_Error(1, "\x15"
                      "exceeded maximum number of anim info");
         return &g_xAnimInfo[0];
+#endif
     }
 
     g_xAnimInfo[0].next = g_xAnimInfo[infoIndex].next;
@@ -2114,12 +2120,29 @@ static Bool XAnimClearTreeGoalWeightInfo(XAnimTree *tree, unsigned int animIndex
     return 1;
 }
 
+#ifdef __EMSCRIPTEN__
+static int s_xanimClearDepth = 0;
+#endif
+
 void XAnimClearTreeGoalWeights(XAnimTree *tree, unsigned int animIndex, float blendTime)
 {
     const XAnimEntry *anim;
     unsigned int i;
 
+#ifdef __EMSCRIPTEN__
+    /* Safety net against stack overflow on pathological/corrupt anim trees. */
+    s_xanimClearDepth++;
+    if (s_xanimClearDepth > 1000) {
+        Com_Printf("WARNING: XAnimClearTreeGoalWeights recursion depth exceeded, aborting animIndex=%u\n", animIndex);
+        s_xanimClearDepth--;
+        return;
+    }
+#endif
+
     if (!XAnimClearTreeGoalWeightInfo(tree, animIndex, blendTime)) {
+#ifdef __EMSCRIPTEN__
+        s_xanimClearDepth--;
+#endif
         return;
     }
 
@@ -2127,6 +2150,9 @@ void XAnimClearTreeGoalWeights(XAnimTree *tree, unsigned int animIndex, float bl
     for (i = 0; i < anim->numAnims; ++i) {
         XAnimClearTreeGoalWeights(tree, anim->u.s.children + i, blendTime);
     }
+#ifdef __EMSCRIPTEN__
+    s_xanimClearDepth--;
+#endif
 }
 
 void XAnimClearTreeGoalWeightsStrict(XAnimTree *tree, unsigned int animIndex, float blendTime)

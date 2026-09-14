@@ -4,6 +4,7 @@
 #include <string.h>
 
 extern void I_strncpyz(char *dest, const char *src, int destsize);
+extern void Com_Printf(const char *fmt, ...);
 
 static int lastNumber;
 static vec3_t cubemapShotAxis[7][3];
@@ -174,7 +175,7 @@ static Bool R_GetFrontBufferData(int width, int height, int bytesPerPixel, byte 
     glReadPixels(width / 2, height / 2, 1, 1, 0x1908, 0x1401, centerBack);
     glReadBuffer(0x0404);
     glReadPixels(width / 2, height / 2, 1, 1, 0x1908, 0x1401, centerFront);
-    ri.Printf(0, "[screenshot-trace] readback pre screen=%dx%d request=%dx%d viewport=(%d,%d,%d,%d) rb=0x%x db=0x%x centerBack=(%u,%u,%u,%u) centerFront=(%u,%u,%u,%u)\n",
+    Com_Printf("[screenshot-trace] readback pre screen=%dx%d request=%dx%d viewport=(%d,%d,%d,%d) rb=0x%x db=0x%x centerBack=(%u,%u,%u,%u) centerFront=(%u,%u,%u,%u)\n",
               ScreenWidth, ScreenHeight, width, height,
               viewport[0], viewport[1], viewport[2], viewport[3],
               readBuffer, drawBuffer,
@@ -199,7 +200,7 @@ static Bool R_GetFrontBufferData(int width, int height, int bytesPerPixel, byte 
         if (altErr != 0) {
             readErr = altErr;
         } else if (R_ReadbackIsAllBlack(tempBuffer, width, height)) {
-            ri.Printf(0, "R_GetFrontBufferData: both GL_BACK and GL_FRONT read back black\n");
+            Com_Printf("R_GetFrontBufferData: both GL_BACK and GL_FRONT read back black\n");
         }
     }
 
@@ -207,7 +208,7 @@ static Bool R_GetFrontBufferData(int width, int height, int bytesPerPixel, byte 
     glPopAttrib();
 
     if (readErr != 0) {
-        ri.Printf(0, "R_GetFrontBufferData: glReadPixels failed err=0x%x screen=%dx%d request=%dx%d bpp=%d\n",
+        Com_Printf("R_GetFrontBufferData: glReadPixels failed err=0x%x screen=%dx%d request=%dx%d bpp=%d\n",
                   readErr, ScreenWidth, ScreenHeight, width, height, bytesPerPixel);
         free(tempBuffer);
         return 0;
@@ -500,7 +501,7 @@ void R_LevelShot(void)
 
         ri.FS_WriteFile(checkname, buffer, 0xC012);
         ri.Z_FreeInternal(buffer);
-        ri.Printf(0, "Wrote %s\n", checkname);
+        Com_Printf("Wrote %s\n", checkname);
     }
 }
 
@@ -787,14 +788,14 @@ static void R_CaptureScreenshotNow(GfxScreenshotType type, const char *filename,
         height = vidConfig.height;
 
         buffer = (byte *)ri.Z_MallocInternal(width * height * 3);
-        ri.Printf(0, "[screenshot-trace] jpg filename='%s' size=%dx%d buffer=%p\n",
+        Com_Printf("[screenshot-trace] jpg filename='%s' size=%dx%d buffer=%p\n",
                   filename, width, height, buffer);
         if (R_GetFrontBufferData(width, height, 3, buffer)) {
-            ri.Printf(0, "[screenshot-trace] readback ok, saving '%s'\n", filename);
+            Com_Printf("[screenshot-trace] readback ok, saving '%s'\n", filename);
             R_SaveJpg(filename, 90, width, height, buffer);
-            ri.Printf(0, "[screenshot-trace] save requested '%s'\n", filename);
+            Com_Printf("[screenshot-trace] save requested '%s'\n", filename);
         } else {
-            ri.Printf(0, "[screenshot-trace] readback failed '%s'\n", filename);
+            Com_Printf("[screenshot-trace] readback failed '%s'\n", filename);
         }
         ri.Z_FreeInternal(buffer);
     } else if (type == 1) {
@@ -824,7 +825,7 @@ static void R_CaptureScreenshotNow(GfxScreenshotType type, const char *filename,
     }
 
     if (!silent) {
-        ri.Printf(0, "Wrote %s\n", filename);
+        Com_Printf("Wrote %s\n", filename);
     }
 }
 
@@ -838,7 +839,7 @@ void R_CapturePendingScreenshotBeforePresent(void)
         return;
 
     if (pendingScreenshotDelayFrames > 0) {
-        ri.Printf(0, "[screenshot-trace] pending delay before present frames=%d file='%s'\n",
+        Com_Printf("[screenshot-trace] pending delay before present frames=%d file='%s'\n",
                   pendingScreenshotDelayFrames, pendingScreenshotFilename);
         --pendingScreenshotDelayFrames;
         return;
@@ -862,6 +863,12 @@ int R_HasPendingScreenshot(void)
 
 void R_ScreenshotCommand(GfxScreenshotType type)
 {
+#ifdef __EMSCRIPTEN__
+    /* Web: variadic ri.Printf and empty-prototype ri.Cmd_Argv/FS_* are
+     * WASM call_indirect signature traps. In-browser screenshots are unused. */
+    Com_Printf("[o1-shotfix] screenshot skipped on web type=%d\n", (int)type);
+    return;
+#else
     char filename[256];
     char jpgFilename[256];
     const char *extension;
@@ -878,7 +885,7 @@ void R_ScreenshotCommand(GfxScreenshotType type)
         return;
     }
 
-    ri.Printf(0, "[screenshot-trace] command type=%d argc=%d arg1='%s'\n",
+    Com_Printf("[screenshot-trace] command type=%d argc=%d arg1='%s'\n",
               type, ri.Cmd_Argc(), ri.Cmd_Argv(1));
 
     arg = ri.Cmd_Argv(1);
@@ -927,7 +934,7 @@ void R_ScreenshotCommand(GfxScreenshotType type)
         }
 
         if (lastNumber > 9998) {
-            ri.Printf(0, "ScreenShot: Couldn't create a file\n");
+            Com_Printf("ScreenShot: Couldn't create a file\n");
             return;
         }
         lastNumber++;
@@ -937,5 +944,7 @@ void R_ScreenshotCommand(GfxScreenshotType type)
     pendingScreenshotSilent = silent;
     pendingScreenshotDelayFrames = 2;
     I_strncpyz(pendingScreenshotFilename, filename, sizeof(pendingScreenshotFilename));
-    ri.Printf(0, "[screenshot-trace] queued '%s' type=%d\n", filename, type);
+    Com_Printf("[screenshot-trace] queued '%s' type=%d\n", filename, type);
+    (void)buffer;
+#endif
 }

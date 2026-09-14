@@ -141,11 +141,7 @@ int SV_SightTrace(int *hitNum, const vec_t *start, const vec_t *mins, const vec_
 
 void SV_Trace(trace_t *results, const vec_t *start, const vec_t *mins, const vec_t *maxs, const vec_t *end, int passEntityNum, int contentmask, qboolean locational, unsigned char *priorityMap, qboolean staticmodels)
 {
-    extern void Com_Printf(const char *fmt, ...);
-
-    Com_Printf("SV_Trace: enter loc=%d static=%d\n", (int)locational, (int)staticmodels);
     CM_BoxTrace(results, start, end, mins, maxs, 0, contentmask);
-    Com_Printf("SV_Trace: after CM_BoxTrace frac=%.3f\n", results->fraction);
 
     {
         int isOne = (results->fraction == 1.0f) ? 1 : 0;

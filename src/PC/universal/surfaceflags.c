@@ -5,7 +5,6 @@ extern void CDirect3DDevice_CreateAndSetFixedFunctionVAO();
 extern void CDirect3DVertexDeclaration_GetShaderDeclaration();
 extern void MacBuilder_SetControlFontStyle();
 extern void XAnimSetCompleteGoalWeightKnobAll();
-extern char __mh_execute_header[];
 extern char s_debugFrameGlob[];
 extern infoParm_t infoParms[54];
 
@@ -60,8 +59,8 @@ infoParm_t infoParms[54] = {
     { (char *)&str_00220140, 0x0, 0x1600000, 0x0, 0x0 },
     { (char *)&str_00220148, 0x0, (int)((char *)&s_debugFrameGlob + 1106304), 0x0, 0x0 },
     { (char *)&str_00220154, 0x1, 0x0, 0x80, 0x0 },
-    { (char *)&str_00220160, 0x1, 0x0, (int)&__mh_execute_header, 0x0 },
-    { (char *)&str_0022016c, 0x1, 0x0, (int)((char *)&__mh_execute_header + 4096), 0x0 },
+    { (char *)&str_00220160, 0x1, 0x0, COD2_MH_EXECUTE_HEADER, 0x0 },
+    { (char *)&str_0022016c, 0x1, 0x0, (COD2_MH_EXECUTE_HEADER + 4096), 0x0 },
     { (char *)&str_00220178, 0x1, 0x0, (void *)((char *)&CDirect3DDevice_CreateAndSetFixedFunctionVAO + 1116), 0x0 },
     { (char *)&str_00220184, 0x1, 0x0, (void *)((char *)&CDirect3DVertexDeclaration_GetShaderDeclaration + 82), 0x0 },
     { (char *)&str_00220190, 0x1, 0x0, 0x200, 0x0 },
@@ -83,7 +82,7 @@ infoParm_t infoParms[54] = {
     { (char *)&str_0022022c, 0x0, 0x1, 0x0, 0x0 },
     { (char *)&str_00220238, 0x0, 0x2000000, 0x1000000, 0x0 },
     { (char *)&str_00220244, 0x0, 0x4000000, 0x1000000, 0x0 },
-    { (char *)&str_00220250, 0x0, (int)((char *)&__mh_execute_header + 4096), 0x0, 0x0 },
+    { (char *)&str_00220250, 0x0, (COD2_MH_EXECUTE_HEADER + 4096), 0x0, 0x0 },
     { (char *)&str_00220258, 0x0, 0x80, 0x0, 0x0 },
     { (char *)&str_00220260, 0x0, 0x800, 0x0, 0x0 },
     { (char *)&str_0022026c, 0x0, 0x400, 0x0, 0x0 },

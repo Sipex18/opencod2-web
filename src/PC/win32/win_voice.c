@@ -10,9 +10,9 @@ extern const dvar_t *Dvar_RegisterFloat(const char *name, float defaultValue, fl
 extern int Record_Init(int callInit, const void *handle);
 extern int Sound_Init(const unsigned char *handle);
 extern Bool Encode_Init(int freq);
-extern void Decode_Init(int freq);
+extern Bool Decode_Init(int freq);
 extern void Record_Shutdown(void);
-extern void Encode_Shutdown(void);
+extern Bool Encode_Shutdown(void);
 extern void Decode_Shutdown(void);
 extern void Sound_Shutdown(void);
 extern void *Sound_NewSample(void);

@@ -59,7 +59,7 @@ extern void ConvertQuatToMat(const DObjAnimMat *mat, float axis[3][3]);
 extern void XAnimClearTreeGoalWeightsStrict(XAnimTree_s *tree, unsigned int animIndex, float blendTime);
 extern int XAnimGetNumChildren(const XAnim_s *anims, unsigned int animIndex);
 extern unsigned int XAnimGetChildAt(const XAnim_s *anims, unsigned int animIndex, unsigned int childIndex);
-extern void XAnimSetGoalWeight(XAnimTree_s *tree, unsigned int animIndex, float goalWeight, float goalTime, float rate, unsigned int notifyName, unsigned int notifyType, int bRestart);
+extern int XAnimSetGoalWeight(XAnimTree_s *tree, unsigned int animIndex, float goalWeight, float goalTime, float rate, unsigned int notifyName, unsigned int notifyType, int bRestart);
 extern void XAnimCalcAbsDelta(XAnimTree_s *tree, unsigned int animIndex, float *rot, float *trans);
 extern float XAnimGetWeight(const XAnimTree_s *tree, unsigned int animIndex);
 extern const char *XAnimGetAnimDebugName(const XAnim_s *anims, unsigned int animIndex);
@@ -508,27 +508,12 @@ void turret_think_init(gentity_t *self)
 
     const scr_const_t *scr;
 
-#ifdef __EMSCRIPTEN__
-    puts("SYNC-DBG: turret_think_init enter");
-#endif
     info = self->pTurretInfo;
     self->handler = GMISC_ENT_HANDLER_TURRET;
     self->nextthink = level.time + 50;
 
     scr = SCR_CONST();
-#ifdef __EMSCRIPTEN__
-    {
-        extern int printf(const char *, ...);
-        printf("SYNC-DBG: turret_think_init before G_DObjGetLocalTagMatrix tag_aim=%u\n", scr->tag_aim);
-    }
-#endif
     aimMtx = G_DObjGetLocalTagMatrix(self, scr->tag_aim);
-#ifdef __EMSCRIPTEN__
-    {
-        extern int printf(const char *, ...);
-        printf("SYNC-DBG: turret_think_init aimMtx=%p\n", (void *)aimMtx);
-    }
-#endif
     if (!aimMtx) {
         return;
     }

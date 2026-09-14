@@ -16,7 +16,7 @@ extern int CG_ScoreboardDisplayed(void);
 extern int Cmd_Argc(void);
 extern void CG_SetShellShockParmsFromDvars(byte *parms);
 extern int CG_LoadShellShockDvars(const char *name);
-extern void CG_SaveShellShockDvars(const char *name);
+extern qboolean CG_SaveShellShockDvars(const char *name);
 extern float floorf(float x);
 extern void Cmd_ArgsBuffer(char *buf, int bufSize);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
@@ -24,7 +24,7 @@ extern void CL_AddReliableCommand(const char *cmd);
 extern const char *CG_Argv(int arg);
 extern int I_stricmp(const char *s1, const char *s2);
 extern void CL_AddCgameCommand(const char *cmdName);
-extern void CL_Popup(const char *name);
+extern qboolean CL_Popup(const char *menu);
 extern const char *UI_SafeTranslateString(const char *key);
 
 void CG_TargetCommand_f(void);

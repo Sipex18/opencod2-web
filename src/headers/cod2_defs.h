@@ -8580,8 +8580,9 @@ struct challenge_t {
 struct netchan_t {
     int outgoingSequence;
     netsrc_t sock;
-    int incomingSequence;
+    /* CoD2rev/cod2-main order: dropped precedes incomingSequence */
     int dropped;
+    int incomingSequence;
     struct netadr_t remoteAddress;
     int qport;
     int fragmentSequence;
@@ -9215,8 +9216,8 @@ struct animScriptData_t {
     short unsigned int torsoAnim;
     short unsigned int legsAnim;
     short unsigned int turningAnim;
-    snd_alias_list_t * (*soundAlias)();
-    int (*playSoundAlias)();
+    snd_alias_list_t *(*soundAlias)(const char *name);
+    int (*playSoundAlias)(int clientNum, snd_alias_list_t *aliasList);
 };
 
 struct bgs_t {
@@ -9226,10 +9227,10 @@ struct bgs_t {
     int latestSnapshotTime;
     int frametime;
     int anim_user;
-    struct XModel * (*GetXModel)();
-    void (*CreateDObj)();
-    void (*SafeDObjFree)();
-    void * (*AllocXAnim)();
+    struct XModel *(*GetXModel)(const char *name);
+    void (*CreateDObj)(DObjModel_s *dobjModels, unsigned short numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci);
+    void (*SafeDObjFree)(int handle);
+    void *(*AllocXAnim)(int size);
     clientInfo_t clientinfo[64];
 };
 

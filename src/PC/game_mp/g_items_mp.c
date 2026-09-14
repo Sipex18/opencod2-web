@@ -20,7 +20,6 @@ extern void *imp_g_scr_data;
 extern int G_GetPlayerCorpseIndex(gentity_t *ent);
 extern struct DObj_s *Com_GetServerDObj(int entNum);
 extern int G_RunThink(gentity_t *ent);
-extern int __mh_execute_header;
 extern char *va(const char *format, ...);
 extern void Scr_Error(const char *error);
 extern int G_ModelIndex(const char *name);
@@ -1304,7 +1303,7 @@ void G_SpawnItem(gentity_t *ent, const gitem_t *item)
     G_DObjUpdate(ent);
 
     ent->s.clientNum = 0x3fe;
-    ent->flags |= (int)&__mh_execute_header;
+    ent->flags |= COD2_MH_EXECUTE_HEADER;
 
     if (level.initializing) {
         G_SetAngle(ent, ent->r.currentAngles);

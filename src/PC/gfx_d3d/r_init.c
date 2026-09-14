@@ -418,8 +418,12 @@ void R_Error(errorParm_t errorLevel, const char *msg, ...)
 
     if (dx.inScene) {
         void *dev = (void *)dx.device;
-        void **vt = *(void ***)dev;
-        ((int (*)(void *))vt[0xa8 / 4])(dev);
+        /* Web GL path may have a null/stub device; vtable call_indirect traps. */
+        if (dev) {
+            void **vt = *(void ***)dev;
+            if (vt)
+                ((int (*)(void *))vt[0xa8 / 4])(dev);
+        }
         dx.inScene = 0;
     }
 

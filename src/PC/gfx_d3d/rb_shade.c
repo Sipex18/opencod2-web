@@ -6,6 +6,9 @@ extern materialCommands_t tess;
 extern r_global_permanent_t rgp;
 extern struct DxState dxState;
 #include <math.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 #include "imports.h"
 extern refimport_t ri;
 extern int alwaysfails;
@@ -612,6 +615,69 @@ static void RB_SetupLighting_impl(void)
             backEnd->codeConsts[24][3] = 0.0f;
         }
     }
+
+#ifdef __EMSCRIPTEN__
+    /* Web GLSL is FF (no HLSL codeConsts). Drive the same DX7 Ambient lights
+     * RB_DeriveEntityLights already builds for renderer==2. */
+    if (rendererType != 2) {
+        lighting = (char *)backEnd->currentEntityLighting;
+        if (lighting) {
+            RB_SetEntityHwLightsDx7_impl(
+                (vec4_t *)(lighting + 8),
+                *(float *)(lighting + 4));
+        } else {
+            entity = (char *)backEnd->currentEntity;
+            if (entity && *(int *)entity == 2) {
+                /*
+                 * The entity lighting union only holds a valid colorForDir
+                 * pointer when the scene set the DX7 path (renderer==2 or the
+                 * web table fix). Anything else (e.g. baseCoords floats read
+                 * as a pointer) traps wasm OOB in RB_DeriveEntityLights.
+                 * Validate against the world's smodel lighting table range.
+                 */
+                vec4_t *cfd = *(vec4_t **)(entity + 8);
+                GfxWorld *w = rgp.world;
+                byte *tbl = w ? (byte *)w->smodelLightingColorTable : NULL;
+                size_t tblSize = w ? (size_t)w->smodelCount * 96 : 0;
+
+                if (cfd && tbl && (byte *)cfd >= tbl && (byte *)cfd + 96 <= tbl + tblSize) {
+                    RB_SetEntityHwLightsDx7_impl(
+                        cfd,
+                        ((GfxEntity *)entity)->lighting.dx7.sunVisibility);
+                } else {
+                    int lightIdx;
+                    static int smodelLightWarn;
+
+                    if (smodelLightWarn < 6) {
+                        smodelLightWarn++;
+                        printf("[o1-lights] invalid static-model colorForDir=%p table=%p size=%u — lights off [o1-lights]\n",
+                               (void *)cfd, (void *)tbl, (unsigned)tblSize);
+                    }
+                    for (lightIdx = 0; lightIdx < 8; lightIdx++) {
+                        void *device;
+                        void **vtable;
+                        do {
+                            device = *(void **)((char *)imp_dx + 8);
+                            vtable = *(void ***)device;
+                            ((HRESULT(D3DVTCC *)(void *, DWORD, BOOL))(vtable[0xD4 / 4]))(device, (DWORD)lightIdx, 0);
+                        } while (*(volatile int *)&alwaysfails);
+                    }
+                }
+            } else {
+                int lightIdx;
+                for (lightIdx = 0; lightIdx < 8; lightIdx++) {
+                    void *device;
+                    void **vtable;
+                    do {
+                        device = *(void **)((char *)imp_dx + 8);
+                        vtable = *(void ***)device;
+                        ((HRESULT(D3DVTCC *)(void *, DWORD, BOOL))(vtable[0xD4 / 4]))(device, (DWORD)lightIdx, 0);
+                    } while (*(volatile int *)&alwaysfails);
+                }
+            }
+        }
+    }
+#endif
 }
 
 #ifdef __EMSCRIPTEN__
@@ -665,6 +731,21 @@ void RB_SetVertexData(unsigned int streamIndex, const void *data, int vertexCoun
 
     if (!lockSlot)
         return;
+
+    /* Clamp to buffer capacity: Lock() ignores SizeToLock, so an oversized
+     * write would corrupt the heap (memory access out of bounds). */
+    if (totalSize > lockSlot[1]) {
+        static int o1_vbclamp;
+        if (o1_vbclamp < 8) {
+            o1_vbclamp++;
+            fprintf(stderr, "[o1-vbguard] vertex data %d > VB %d (vc=%d stride=%d), clamping [o1-vbguard]\n",
+                    totalSize, lockSlot[1], vertexCount, stride);
+        }
+        vertexCount = lockSlot[1] / stride;
+        totalSize = vertexCount * stride;
+        if (vertexCount <= 0)
+            return;
+    }
 
     dxVb = *(IDirect3DVertexBuffer9 **)(lockSlot + 2);
     writeOffset = lockSlot[0];
@@ -1037,48 +1118,79 @@ static const float *RB_GetCodeMatrix(int source, int firstRow)
 #endif
 
 #ifdef __EMSCRIPTEN__
+/* SEMANTIC_COLOR=2, NORMAL=3, SPECULAR=4, WATER=5 (material_util + cod2map). */
+static GfxImage *RB_SelectMaterialColorImage(const Material *material, byte *outSamplerState)
+{
+    GfxImage *named;
+    GfxImage *semanticColor;
+    GfxImage *fallback;
+    byte namedState;
+    byte colorState;
+    byte fallbackState;
+    int textureIndex;
+
+    if (outSamplerState)
+        *outSamplerState = 1;
+    if (!material || !material->textures || !material->textureCount)
+        return NULL;
+
+    named = NULL;
+    semanticColor = NULL;
+    fallback = NULL;
+    namedState = 1;
+    colorState = 1;
+    fallbackState = 1;
+    for (textureIndex = 0; textureIndex < material->textureCount; ++textureIndex) {
+        const MaterialTextureDef *tex = &material->textures[textureIndex];
+        byte state;
+
+        if (!tex->u.image)
+            continue;
+        if (tex->semantic == 3 || tex->semantic == 4 || tex->semantic == 5)
+            continue;
+
+        state = tex->samplerState ? tex->samplerState : 1;
+        if (tex->name && !stricmp(tex->name, "colorMap")) {
+            named = tex->u.image;
+            namedState = state;
+        } else if (tex->semantic == 2 && !semanticColor) {
+            semanticColor = tex->u.image;
+            colorState = state;
+        } else if (!fallback) {
+            fallback = tex->u.image;
+            fallbackState = state;
+        }
+    }
+
+    if (named) {
+        if (outSamplerState)
+            *outSamplerState = namedState;
+        return named;
+    }
+    if (semanticColor) {
+        if (outSamplerState)
+            *outSamplerState = colorState;
+        return semanticColor;
+    }
+    if (fallback) {
+        if (outSamplerState)
+            *outSamplerState = fallbackState;
+        return fallback;
+    }
+    return NULL;
+}
+
 static void RB_EnsureMaterialColorMapSamplerBound(const Material *material)
 {
     GfxImage *image;
-    GfxImage *bound;
     byte samplerState;
-    int textureIndex;
 
-    if (!material || !material->textures || !material->textureCount)
+    image = RB_SelectMaterialColorImage(material, &samplerState);
+    if (!image)
         return;
-
-    bound = dxState.samplerImage[0];
-    for (textureIndex = 0; textureIndex < material->textureCount; ++textureIndex) {
-        const MaterialTextureDef *tex = &material->textures[textureIndex];
-
-        if (tex->semantic == 5 || !tex->u.image)
-            continue;
-        if (bound == tex->u.image)
-            return;
-    }
-
-    image = NULL;
-    samplerState = 1;
-    for (textureIndex = 0; textureIndex < material->textureCount; ++textureIndex) {
-        const MaterialTextureDef *tex = &material->textures[textureIndex];
-
-        if (tex->semantic == 5 || !tex->u.image)
-            continue;
-
-        if (tex->semantic == 2) {
-            image = tex->u.image;
-            samplerState = tex->samplerState ? tex->samplerState : 1;
-            break;
-        }
-
-        if (!image) {
-            image = tex->u.image;
-            samplerState = tex->samplerState ? tex->samplerState : 1;
-        }
-    }
-
-    if (image)
-        RB_SetSampler(0, samplerState, image);
+    if (dxState.samplerImage[0] == image)
+        return;
+    RB_SetSampler(0, samplerState, image);
 }
 #endif
 
@@ -1727,12 +1839,27 @@ static BM_NOINLINE void __attribute_regparm__(3) RB_DrawSingleTechnique(Material
             }
 
 #ifdef __EMSCRIPTEN__
+            {
+                tess = RB_TessBase();
+                RB_EnsureMaterialColorMapSamplerBound(((materialCommands_t *)tess)->material);
+                if (!((r_backEndGlobals_t *)backEnd)->projection2D) {
+                    unsigned t = (unsigned)techType;
+                    int lmapIdx = ((materialCommands_t *)tess)->lmapIndex;
+                    if (t >= 6 && t <= 8 && lmapIdx != 0x1f) {
+                        void *lmImage = NULL;
+                        byte lmState = 0x32;
+                        RB_GetTextureFromCode_impl(8, &lmImage, &lmState);
+                        if (lmImage)
+                            RB_SetSampler(1, lmState, lmImage);
+                    }
+                }
+            }
+
             if (((r_backEndGlobals_t *)backEnd)->projection2D) {
                 const Material *uiMaterial;
 
                 tess = RB_TessBase();
                 uiMaterial = ((materialCommands_t *)tess)->material;
-                RB_EnsureMaterialColorMapSamplerBound(uiMaterial);
 
                 /*
                  * Menu fadebox + white UI_FillRect overlays need SRC_ALPHA blending.
@@ -1979,10 +2106,30 @@ void RB_EndSurface(void)
         int needed = ((materialCommands_t *)tess)->vertexCount * vertexStride + lockSlot[0];
         if (needed > lockSlot[1])
             lockSlot[0] = 0;
+        /* Second guard: if the data cannot fit even in a fresh buffer, clamp
+         * the vertex count (Lock() ignores SizeToLock -> heap corruption). */
+        if (((materialCommands_t *)tess)->vertexCount * vertexStride > lockSlot[1]) {
+            static int o1_vbclamp2;
+            if (o1_vbclamp2 < 8) {
+                o1_vbclamp2++;
+                fprintf(stderr, "[o1-vbguard] EndSurf vc=%d stride=%d > VB %d, clamping [o1-vbguard]\n",
+                        ((materialCommands_t *)tess)->vertexCount, vertexStride, lockSlot[1]);
+            }
+            ((materialCommands_t *)tess)->vertexCount = lockSlot[1] / vertexStride;
+            if (((materialCommands_t *)tess)->vertexCount <= 0)
+                goto cleanup;
+            args.vertexCount = ((materialCommands_t *)tess)->vertexCount;
+            args.primCount = indexCount / 3;
+        }
     }
 
     RB_SetVertexData(0, tess, ((materialCommands_t *)tess)->vertexCount, vertexStride);
     args.u.buf.baseVertex = 0;
+
+    {
+        extern void O1_CheckNullWrite(const char *tag);
+        O1_CheckNullWrite("endsurface-after-vbdata");
+    }
 
     {
 #define RB_GL_TEXTURE_2D 0x0DE1
@@ -1995,28 +2142,34 @@ void RB_EndSurface(void)
             if (texCount > 0 && textures) {
 
                 void *image = NULL;
+                void *named = NULL;
+                void *semanticColor = NULL;
                 int textureIndex;
 
                 for (textureIndex = 0; textureIndex < texCount; ++textureIndex) {
                     byte *texEntry = textures + textureIndex * 0xc;
                     byte semantic = texEntry[5];
+                    const char *texName = *(const char **)texEntry;
                     void *candidate;
-
-                    if (semantic == 5)
-                        continue;
 
                     candidate = *(void **)(texEntry + 8);
                     if (!candidate)
                         continue;
+                    /* NORMAL=3, SPECULAR=4, WATER=5 — never stage-0 diffuse. */
+                    if (semantic == 3 || semantic == 4 || semantic == 5)
+                        continue;
 
-                    if (semantic == 2) {
-                        image = candidate;
-                        break;
-                    }
-
-                    if (!image)
+                    if (texName && !stricmp(texName, "colorMap"))
+                        named = candidate;
+                    else if (semantic == 2 && !semanticColor)
+                        semanticColor = candidate;
+                    else if (!image)
                         image = candidate;
                 }
+                if (named)
+                    image = named;
+                else if (semanticColor)
+                    image = semanticColor;
 
                 if (image) {
 

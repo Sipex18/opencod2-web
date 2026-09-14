@@ -527,6 +527,19 @@ GfxStaticModelSurfaceCached *R_CacheStaticModelSurface(GfxStaticSurface *staticS
     baseVertIndex = (treeIndex * 16 + leafIndex) * 32;
     cached->baseVertIndex = baseVertIndex;
 
+#ifdef __EMSCRIPTEN__
+    if (baseVertIndex < 0 || (baseVertIndex + vertCount) * 12 > 0xc0000 ||
+        baseVertIndex * 0x40 + vertCount * 0x40 > 0x400000) {
+        static int smcOobW;
+        if (smcOobW < 10) {
+            smcOobW++;
+            printf("[o1-smc] OOB alloc blocked: base=%d verts=%d idxCache=0xc0000 vb=0x400000 [o1-smc]\n",
+                   baseVertIndex, vertCount);
+        }
+        return NULL;
+    }
+#endif
+
     s_cache.stats.allocatedVerts += blockSize;
     s_cache.stats.usedVerts += xsurf->vertCount;
 

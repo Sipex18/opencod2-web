@@ -38,7 +38,7 @@ extern void Com_Printf(const char *fmt, ...);
 extern int I_stricmp(const char *s0, const char *s1);
 extern int I_strnicmp(const char *s0, const char *s1, size_t n);
 extern int Com_AddToString(const char *add, char *msg, int len, int maxlen, qboolean mayAddQuotes);
-extern void CL_Netchan_SendOOBPacket(int len, const char *data, int type, int addr0, int addr1);
+extern void CL_Netchan_SendOOBPacket(int len, const void *data, netadr_t to);
 extern int NET_StringToAdr(const char *s, netadr_t *a);
 extern Bool NET_OutOfBandPrint(netsrc_t sock, netadr_t adr, const char *data);
 extern int Com_sprintf(char *dest, int size, const char *fmt, ...);
@@ -51,7 +51,7 @@ extern void SND_StopSounds(int a);
 extern void SV_Frame(int a);
 extern void CL_Disconnect(void);
 extern void Con_Close(void);
-extern qboolean NET_IsLocalAddress(int addr0, int addr1, int addr2);
+extern qboolean NET_IsLocalAddress(netadr_t adr);
 extern void UI_CloseAll(void);
 extern void SCR_UpdateScreen(void);
 extern void Com_Error(int level, const char *fmt, ...);
@@ -422,7 +422,7 @@ void CL_Rcon_f(void)
 
     {
         int msgLen = strlen(message);
-        CL_Netchan_SendOOBPacket(msgLen, message, sendAdr.type, *(int *)sendAdr.ip, *(int *)&sendAdr.port);
+        CL_Netchan_SendOOBPacket(msgLen, message, sendAdr);
     }
 }
 
@@ -971,7 +971,7 @@ void CL_Connect_f(void)
         }
     }
 
-    if (!NET_IsLocalAddress(*(int *)&clc->serverAddress, *(int *)clc->serverAddress.ip, *(int *)&clc->serverAddress.port)) {
+    if (!NET_IsLocalAddress(clc->serverAddress)) {
 
         unsigned int crc = 0;
         byte *cdkey = (byte *)imp_cl_cdkey;
@@ -1006,7 +1006,7 @@ void CL_Connect_f(void)
         clc = *(clientConnection_t **)imp_clc;
         clcConn = (clientConnection_t *)clc;
 
-        if (NET_IsLocalAddress(*(int *)&clcConn->serverAddress, *(int *)clcConn->serverAddress.ip, *(int *)&clcConn->serverAddress.port)) {
+        if (NET_IsLocalAddress(clcConn->serverAddress)) {
             clcConn->state = 4;
         } else {
             clcConn = *(clientConnection_t **)imp_clc;

@@ -141,7 +141,7 @@ void Cylinder_Cylinder(const Cylinder *_this);
 void OrientedParticle_OrientedParticle(const OrientedParticle *_this);
 void ZN16OrientedParticleD1Ev(void *_this);
 void ZN16OrientedParticleD0Ev(void *_this);
-void Cloud_Cloud(const Cloud *_this, const Cloud *_this_1);
+void Cloud_Cloud(const Cloud *_this);
 void ZN5CloudD1Ev(void *_this);
 void ZN5CloudD0Ev(void *_this);
 void Line_Line(const Line *_this);

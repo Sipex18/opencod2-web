@@ -1461,6 +1461,17 @@ usercmd_t CL_CreateCmd(void)
     CL_KeyMove(&cmd);
     CL_MouseMove(&cmd);
 
+    /*
+     * Clamp the local pitch. PM_UpdateViewAngles clamps ps->viewangles via
+     * delta_angles, but this local angle keeps accumulating — past ±180° the
+     * cmd angle word wraps and the predicted view flips wildly.
+     */
+    if (cl->viewangles[0] > 89.0f) {
+        cl->viewangles[0] = 89.0f;
+    } else if (cl->viewangles[0] < -89.0f) {
+        cl->viewangles[0] = -89.0f;
+    }
+
     pitchDelta = cl->viewangles[0] - oldPitch;
     if (pitchDelta > 90.0f) {
         cl->viewangles[0] = oldPitch + 90.0f;
@@ -1476,6 +1487,10 @@ usercmd_t CL_CreateCmd(void)
         currentCmdTime = cl->snap.serverTime + 5000;
     }
     cmd.serverTime = currentCmdTime;
+#ifdef __EMSCRIPTEN__
+    if (cl->snap.valid && cmd.serverTime <= cl->snap.ps.commandTime)
+        cmd.serverTime = cl->snap.ps.commandTime + 1;
+#endif
 
     for (i = 0; i < 3; ++i) {
         cmd.angles[i] = ((int)((cl->viewangles[i] + cl->cgameKickAngles[i]) * 182.04444885253906f)) & 0xffff;

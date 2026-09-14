@@ -26,7 +26,7 @@ extern void Cbuf_AddText(const char *text);
 extern const char *va(const char *format, ...);
 extern void I_strncpyz(char *dest, const char *src, int destsize);
 extern int I_stricmp(const char *s1, const char *s2);
-extern int CL_Popup(const char *menuName);
+extern qboolean CL_Popup(const char *menu);
 extern void CL_ClosePopup(const char *menuName);
 extern const char *Com_Parse(const char **data_p);
 extern WeaponDef *BG_GetWeaponDef(int weaponIndex);
@@ -255,11 +255,7 @@ static void CG_OpenScriptMenu(void)
     static int traceCount;
 
     menuIndex = atoi(CG_Argv(1));
-    if (traceCount < 16) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] client open command indexArg='%s' arg2='%s' argc=%d\n",
-                       CG_Argv(1), Cmd_Argc() > 2 ? CG_Argv(2) : "", Cmd_Argc());
-    }
+    (void)traceCount;
 
     if ((unsigned int)menuIndex > 31) {
         Com_Printf((const char *)"Server tried to open a bad script menu index: %i\n", menuIndex);
@@ -268,10 +264,6 @@ static void CG_OpenScriptMenu(void)
     }
 
     pszMenu = CL_GetConfigString(menuIndex + 0x4de);
-    if (traceCount < 16) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] client menu index=%d configstring='%s'\n", menuIndex, pszMenu);
-    }
 
     if (*pszMenu == '\0') {
         Com_Printf((const char *)"Server tried to open a non-loaded script menu index: %i\n", menuIndex);
@@ -299,11 +291,6 @@ static void CG_OpenScriptMenu(void)
         result = CL_Popup((const char *)"UIMENU_SCRIPT_POPUP_NO_MOUSE");
     } else {
         result = CL_Popup((const char *)"UIMENU_SCRIPT_POPUP");
-    }
-    if (traceCount++ < 16) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] client popup menu='%s' noMouse=%u result=%d\n",
-                       pszMenu, noMouseControl, result);
     }
 
     if (result) {
@@ -347,13 +334,6 @@ void CG_CheckOpenWaitingScriptMenu(void)
         result = CL_Popup((const char *)"UIMENU_SCRIPT_POPUP_NO_MOUSE");
     } else {
         result = CL_Popup((const char *)"UIMENU_SCRIPT_POPUP");
-    }
-    if (traceCount++ < 32) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] waiting popup menu='%s' index=%d noMouse=%u result=%d\n",
-                       (char *)*cguiSlot + 0x3e8,
-                       *(int *)((char *)*cguiSlot + 0x4e8),
-                       *(unsigned char *)((char *)*cguiSlot + 0x4ec), result);
     }
 
     if (result) {

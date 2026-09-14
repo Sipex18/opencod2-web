@@ -3,6 +3,7 @@
 #include "bytematch.h"
 #ifdef __EMSCRIPTEN__
 #include <stdio.h>
+#include <string.h>
 #endif
 
 extern scr_classStruct_t g_classMap[5];
@@ -58,6 +59,11 @@ int dbg_alloc_counter = 0;
 static unsigned int s_varNetDbg = 0;
 static int s_varInitCheckDone = 0;
 static unsigned int s_varResetCount = 0;
+#ifdef __EMSCRIPTEN__
+static int s_freelistRebuildAttempts = 0;
+static int s_freelistEmptyDumped = 0;
+static int s_freelistTerminalLatched = 0;
+#endif
 static const char str_dbg_alloc_fmt[] = "DBG AllocValue exhausted after %d allocations\n";
 static const char str_dbg_site_classmap1[] = "DBG exceeded at: Scr_SetClassMap site1\n";
 static const char str_dbg_site_classmap2[] = "DBG exceeded at: Scr_SetClassMap site2\n";
@@ -119,6 +125,11 @@ static inline __attribute__((always_inline)) VariableValueInternal *ScrVarEntry(
 static inline __attribute__((always_inline)) unsigned int ScrVarEntryIndex(const VariableValueInternal *entry);
 unsigned int FindNextSibling(unsigned int id);
 void Scr_DumpScriptVariables(void);
+void Scr_DumpScriptVarSummary(void);
+#ifdef __EMSCRIPTEN__
+static int Scr_TryRebuildFreelist(void);
+static void Scr_DumpScriptVarSummaryOnce(void);
+#endif
 void Var_Init(void);
 unsigned int Scr_GetNumScriptVars(void);
 unsigned int GetVariableKeyObject(unsigned int id);
@@ -153,6 +164,7 @@ void AddRefToValue(int type, VariableUnion u);
 const float *Scr_AllocVector(const float *v);
 int Scr_GetOffset(int classnum, const char *name);
 unsigned int FindEntityId(int entnum, int classnum);
+int Scr_CountNotifyWaiters(int entnum, int classnum, unsigned int stringValue);
 unsigned int FindArrayVariable(unsigned int parentId, int intValue);
 unsigned int FindVariable(unsigned int parentId, unsigned int unsignedValue);
 unsigned int FindObjectVariable(unsigned int parentId, unsigned int id);
@@ -311,16 +323,34 @@ static inline __attribute__((always_inline)) unsigned int AllocVariable(void)
 
     if (!index) {
 #ifdef __EMSCRIPTEN__
+        /* Latch only blocks retry-storms while head stays 0. If a later
+         * rebuild/path restored the head, allow allocation again. */
+        if (s_freelistTerminalLatched) {
+            index = VG_U16(0);
+            if (index)
+                goto alloc_retry;
+            return 0;
+        }
         Com_Printf("AllocVariable: freelist empty (net=%u)\n", s_varNetDbg);
         Com_Printf("AllocVariable: scrVarGlob[0..15]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
                    scrVarGlob[0], scrVarGlob[1], scrVarGlob[2], scrVarGlob[3],
                    scrVarGlob[4], scrVarGlob[5], scrVarGlob[6], scrVarGlob[7],
                    scrVarGlob[8], scrVarGlob[9], scrVarGlob[10], scrVarGlob[11],
                    scrVarGlob[12], scrVarGlob[13], scrVarGlob[14], scrVarGlob[15]);
+        Scr_DumpScriptVarSummaryOnce();
+        if (Scr_TryRebuildFreelist()) {
+            index = VG_U16(0);
+            if (index)
+                goto alloc_retry;
+        }
+        s_freelistTerminalLatched = 1;
 #endif
         Scr_TerminalError("exceeded maximum number of script variables");
         return 0;
     }
+#ifdef __EMSCRIPTEN__
+alloc_retry:
+#endif
 
     id = VG_ID(index);
     next = VG_U16(id);
@@ -344,8 +374,6 @@ static inline __attribute__((always_inline)) unsigned int AllocVariable(void)
 
         id = VG_ID(index);
         s_varNetDbg++;
-        if ((s_varNetDbg & 0x7ff) == 0)
-            fprintf(stderr, "[varleak] net=%u\n", s_varNetDbg);
         return id;
     }
 }
@@ -361,6 +389,14 @@ void FreeVariable(unsigned int id)
         return;
 
     index = VG_NEXT(id);
+    if (!index || index > SCRVL_MAX_VARIABLES) {
+#ifdef __EMSCRIPTEN__
+        Com_Printf("FreeVariable: refuse id=%u with bad NEXT=%u (would empty freelist)\n",
+                   id, index);
+#endif
+        return;
+    }
+
     nextSiblingIndex = VG_NEXT_SIBLING(id);
 
     VG_PREV(nextSiblingIndex) = VG_PREV(index);
@@ -455,7 +491,152 @@ static unsigned int ScrVar_NextSiblingId(unsigned int id)
 
 void Scr_DumpScriptVariables(void)
 {
+#ifdef __EMSCRIPTEN__
+    Scr_DumpScriptVarSummary();
+#endif
 }
+
+#ifdef __EMSCRIPTEN__
+/* One-shot only: a rebuild that immediately re-empties would spin the main
+ * thread (65k scans + printf) and freeze the tab with no log updates.
+ *
+ * Must not treat live hash-index slots as free. Those often have status=0
+ * while VG_ID points at an allocated value; rewriting VG_ID there destroys
+ * FindVariable / waittill tables (weapon menuresponse then no-ops). */
+static unsigned char s_rebuildUsedBits[(SCRVL_MAX_VARIABLES / 8) + 2];
+
+static void Scr_RebuildMark(unsigned int id)
+{
+    if (!id || id > SCRVL_MAX_VARIABLES)
+        return;
+    s_rebuildUsedBits[id >> 3] |= (unsigned char)(1u << (id & 7));
+}
+
+static int Scr_RebuildIsMarked(unsigned int id)
+{
+    if (!id || id > SCRVL_MAX_VARIABLES)
+        return 1;
+    return (s_rebuildUsedBits[id >> 3] & (unsigned char)(1u << (id & 7))) != 0;
+}
+
+static int Scr_TryRebuildFreelist(void)
+{
+    unsigned int freeStatus = 0;
+    unsigned int id;
+    unsigned int prev;
+    unsigned int head;
+    unsigned int chained = 0;
+    unsigned int skipped = 0;
+
+    head = VG_U16(0);
+    if (head != 0)
+        return 0;
+
+    if (s_freelistRebuildAttempts >= 1) {
+        Com_Printf("Scr_TryRebuildFreelist: already attempted once — not retrying (avoids freeze)\n");
+        return 0;
+    }
+    s_freelistRebuildAttempts++;
+
+    for (id = 1; id <= SCRVL_MAX_VARIABLES; id++) {
+        if ((VG_STATUS(id) & SCRVL_VAR_ALLOCATED) == 0)
+            freeStatus++;
+    }
+
+    if (freeStatus < 64) {
+        Com_Printf("Scr_TryRebuildFreelist: head=0 and only %u free-status — genuine exhaustion\n",
+                   freeStatus);
+        return 0;
+    }
+
+    Com_Printf("Scr_TryRebuildFreelist: head=0 but freeStatus=%u — rebuilding freelist (entry0 status=0x%x) [o1-wepspawn]\n",
+               freeStatus, VG_STATUS(0));
+
+    memset(s_rebuildUsedBits, 0, sizeof(s_rebuildUsedBits));
+    for (id = 1; id <= SCRVL_MAX_VARIABLES; id++) {
+        unsigned int status = VG_STATUS(id);
+        unsigned int index;
+        unsigned int sib;
+
+        if ((status & 0x60) == 0)
+            continue;
+        Scr_RebuildMark(id);
+        index = VG_NEXT(id);
+        Scr_RebuildMark(index);
+        sib = VG_NEXT_SIBLING(id);
+        Scr_RebuildMark(sib);
+    }
+    for (id = 1; id <= SCRVL_MAX_VARIABLES; id++) {
+        unsigned int vid;
+
+        if (Scr_RebuildIsMarked(id))
+            continue;
+        vid = VG_ID(id);
+        if (vid && vid <= SCRVL_MAX_VARIABLES && (VG_STATUS(vid) & 0x60) != 0)
+            Scr_RebuildMark(id);
+    }
+
+    VG_STATUS(0) = 0;
+    VG_ID(0) = 0;
+    VG_NEXT(0) = 0;
+    VG_NEXT_SIBLING(0) = 0;
+
+    prev = 0;
+    for (id = 1; id <= SCRVL_MAX_VARIABLES; id++) {
+        if (Scr_RebuildIsMarked(id)) {
+            skipped++;
+            continue;
+        }
+        if ((VG_STATUS(id) & 0x60) != 0) {
+            skipped++;
+            continue;
+        }
+        {
+            unsigned int vid = VG_ID(id);
+
+            /* Do not rewrite VG_ID/VG_NEXT: status-0 hash indices may still
+             * pair to allocated values. Chain next through the value slot
+             * (AllocVariable walks VG_U16(VG_ID(index))). */
+            if (!vid || vid > SCRVL_MAX_VARIABLES) {
+                skipped++;
+                continue;
+            }
+            /* VG_U16(vid) is the freelist next link. Writing it on a live
+             * value overwrites stack/int/object data and later VM_Resume
+             * dereferences a garbage pos. */
+            if ((VG_STATUS(vid) & 0x60) != 0) {
+                skipped++;
+                continue;
+            }
+            VG_STATUS(id) = 0;
+            if (prev == 0)
+                VG_U16(0) = (unsigned short)id;
+            else
+                VG_U16(VG_ID(prev)) = (unsigned short)id;
+            VG_PREV(id) = (unsigned short)prev;
+            prev = id;
+            chained++;
+        }
+    }
+    if (prev == 0)
+        VG_U16(0) = 0;
+    else
+        VG_U16(VG_ID(prev)) = 0;
+    VG_PREV(0) = (unsigned short)prev;
+
+    Com_Printf("Scr_TryRebuildFreelist: done head=%u chained=%u skippedInUse=%u [o1-escjmp]\n",
+               (unsigned)VG_U16(0), chained, skipped);
+    return VG_U16(0) != 0;
+}
+
+static void Scr_DumpScriptVarSummaryOnce(void)
+{
+    if (s_freelistEmptyDumped)
+        return;
+    s_freelistEmptyDumped = 1;
+    Scr_DumpScriptVarSummary();
+}
+#endif
 
 void Scr_DumpScriptVarSummary(void)
 {
@@ -522,6 +703,10 @@ void Var_Init(void)
         g_classMap[i].id = 0;
     }
 #ifdef __EMSCRIPTEN__
+    s_freelistRebuildAttempts = 0;
+    s_freelistEmptyDumped = 0;
+    s_freelistTerminalLatched = 0;
+    s_varInitCheckDone = 0;
     {
         unsigned int count = 0;
         unsigned int idx = VG_U16(0);
@@ -548,15 +733,37 @@ unsigned int GetVariableKeyObject(unsigned int id)
 
 void AddRefToObject(unsigned int id)
 {
+#ifdef __EMSCRIPTEN__
+    /* id 0 is the freelist header (VG_U16(0) = free head). */
+    if (!id || id > SCRVL_MAX_VARIABLES)
+        return;
+#endif
     VG_U16(id) += 1;
 }
 
 void Scr_SetThreadNotifyName(unsigned int startLocalId, unsigned int stringValue)
 {
-    VariableValueInternal *entry = (VariableValueInternal *)((byte *)scrVarGlob + startLocalId * 16);
-    unsigned int val = entry->w.status;
-    val = (val & 0xe0) | 0x10;
-    entry->w.status = val | (stringValue << 8);
+    VariableValueInternal *entry;
+#ifdef __EMSCRIPTEN__
+    /* ID 0 is the freelist header — writing notify status here zeros/corrupts VG_U16(0). */
+    if (!startLocalId || startLocalId > SCRVL_MAX_VARIABLES) {
+        static unsigned int s_refuseCount;
+        if (s_refuseCount < 3) {
+            Com_Printf("Scr_SetThreadNotifyName: refuse id=%u name=%u\n",
+                       startLocalId, stringValue);
+        } else if (s_refuseCount == 3) {
+            Com_Printf("Scr_SetThreadNotifyName: refuse spam suppressed\n");
+        }
+        ++s_refuseCount;
+        return;
+    }
+#endif
+    entry = (VariableValueInternal *)((byte *)scrVarGlob + startLocalId * 16);
+    {
+        unsigned int val = entry->w.status;
+        val = (val & 0xe0) | 0x10;
+        entry->w.status = val | (stringValue << 8);
+    }
 }
 
 short unsigned int Scr_GetThreadNotifyName(unsigned int startLocalId)
@@ -892,6 +1099,46 @@ unsigned int FindEntityId(int entnum, int classnum)
     return VG_U32(valueId);
 }
 
+int Scr_CountNotifyWaiters(int entnum, int classnum, unsigned int stringValue)
+{
+    unsigned int ownerId;
+    unsigned int notifyListVar;
+    unsigned int notifyListId;
+    unsigned int notifyNameVar;
+    unsigned int notifyNameListId;
+    unsigned int scanId;
+    int count;
+
+    ownerId = FindEntityId(entnum, classnum);
+    if (!ownerId)
+        return -1;
+
+    notifyListVar = FindVariable(ownerId, 0x1fffe);
+    if (!notifyListVar)
+        return -2;
+
+    notifyListId = FindObject(notifyListVar);
+    if (!notifyListId)
+        return -2;
+
+    notifyNameVar = FindVariable(notifyListId, stringValue);
+    if (!notifyNameVar)
+        return 0;
+
+    notifyNameListId = FindObject(notifyNameVar);
+    if (!notifyNameListId)
+        return 0;
+
+    count = 0;
+    scanId = notifyNameListId;
+    while ((scanId = FindPrevSibling(scanId)) != 0) {
+        if (count > 256)
+            break;
+        count++;
+    }
+    return count;
+}
+
 unsigned int FindArrayVariable(unsigned int parentId, int intValue)
 {
     unsigned int bucket = FindVariableIndexInternal(parentId,
@@ -1167,6 +1414,34 @@ static unsigned int __attribute_regparm__(3)
 
     switch (type) {
     case 0:
+#ifdef __EMSCRIPTEN__
+        /*
+         * A status-0 hash slot with prev=0 that is not the real free head
+         * is leftover, not the list head. Vanilla unlink then does
+         * list[0].u.next = entryValue->u.next, which is often 0 and
+         * orphans ~64k free slots (weapon waittill dies after rebuild).
+         */
+        prev = entry->hash.u.prev;
+        if (prev == 0 && list[0].u.next != (unsigned short)index) {
+            /* Occupy this leftover slot in place. Do not unlink (next may
+             * be a live hash index) and do not pop-and-rebind (that pairs
+             * two hash indices to one value and smashes jmp_buf). */
+            newIndex = entry->v.index;
+            if (newIndex == entry->hash.id ||
+                (entry->w.status & SCRVL_VAR_ALLOCATED)) {
+                newEntryValue = entryValue;
+            } else {
+                list[newIndex].hash.id = entry->hash.id;
+                entry->hash.id = (unsigned short)index;
+                entryValue->v.index = newIndex;
+                entryValue->u.next = entry->u.next;
+                newEntryValue = entry;
+            }
+            newEntryValue->w.status = SCRVL_VAR_HASH;
+            newEntryValue->v.index = (unsigned short)index;
+            break;
+        }
+#endif
         newIndex = entry->v.index;
         next = entryValue->u.next;
 
@@ -1195,9 +1470,15 @@ static unsigned int __attribute_regparm__(3)
             if (!index) {
 #ifdef __EMSCRIPTEN__
                 Com_Printf("GetNewVarIdx3: freelist empty at HASH path (net=%u resetCount=%u)\n", s_varNetDbg, s_varResetCount);
+                Scr_DumpScriptVarSummaryOnce();
+                if (Scr_TryRebuildFreelist()) {
+                    index = list[0].u.next;
+                }
 #endif
-                Scr_TerminalError("exceeded maximum number of script variables");
-                return 0;
+                if (!index) {
+                    Scr_TerminalError("exceeded maximum number of script variables");
+                    return 0;
+                }
             }
 
             entry = &list[index];
@@ -1239,9 +1520,15 @@ static unsigned int __attribute_regparm__(3)
             if (!newIndex) {
 #ifdef __EMSCRIPTEN__
                 Com_Printf("GetNewVarIdx3: freelist empty at DEFAULT path (net=%u resetCount=%u)\n", s_varNetDbg, s_varResetCount);
+                Scr_DumpScriptVarSummaryOnce();
+                if (Scr_TryRebuildFreelist()) {
+                    newIndex = list[0].u.next;
+                }
 #endif
-                Scr_TerminalError("exceeded maximum number of script variables");
-                return 0;
+                if (!newIndex) {
+                    Scr_TerminalError("exceeded maximum number of script variables");
+                    return 0;
+                }
             }
 
             newEntry = &list[newIndex];
@@ -1466,6 +1753,8 @@ unsigned int Scr_GetEntityId(int entnum, int classnum)
         return VG_U32(entryId);
 
     entityId = AllocVariable();
+    if (!entityId)
+        return 0;
     VG_STATUS(entityId) = (classnum << 8) | SCRVL_VAR_ALLOCATED | SCRVL_VAR_ENTITY;
     VG_U16(entityId) = 0;
     VG_SIBLING(entityId) = (unsigned short)entnum;
@@ -1625,6 +1914,8 @@ static void __attribute_regparm__(2)
 static inline __attribute__((always_inline)) unsigned int Scr_AllocArray_core(void)
 {
     unsigned int result = AllocVariable();
+    if (!result)
+        return 0;
     VG_STATUS(result) = 0x60;
     VG_STATUS(result) |= 0x16;
     VG_U16(result) = 0;
@@ -1651,6 +1942,8 @@ unsigned int GetArray(unsigned int id)
 static inline __attribute__((always_inline)) unsigned int AllocObject_core(void)
 {
     unsigned int result = AllocVariable();
+    if (!result)
+        return 0;
     VG_STATUS(result) = 0x60;
     VG_STATUS(result) |= 0x13;
     VG_U16(result) = 0;
@@ -1672,6 +1965,8 @@ unsigned int GetObjectA(unsigned int id)
 unsigned int AllocValue(void)
 {
     unsigned int result = AllocVariable();
+    if (!result)
+        return 0;
 
     VG_STATUS(result) = 0x60;
     return result;
@@ -1690,6 +1985,8 @@ unsigned int Scr_AllocArray(void)
 unsigned int AllocThread(unsigned int self)
 {
     unsigned int result = AllocVariable();
+    if (!result)
+        return 0;
     VG_STATUS(result) = 0x60;
     VG_STATUS(result) |= 0x0F;
     VG_U16(result) = 0;
@@ -1700,6 +1997,8 @@ unsigned int AllocThread(unsigned int self)
 unsigned int AllocChildThread(unsigned int self, unsigned int parentLocalId)
 {
     unsigned int result = AllocVariable();
+    if (!result)
+        return 0;
     VG_STATUS(result) = 0x60;
     VG_STATUS(result) |= 0x12;
     VG_STATUS(result) |= (parentLocalId << 8);
@@ -1792,7 +2091,14 @@ static void __attribute_regparm__(2)
 void RemoveRefToObject(unsigned int id)
 {
     unsigned int status;
-    unsigned short refCount = VG_U16(id);
+    unsigned short refCount;
+
+#ifdef __EMSCRIPTEN__
+    if (!id || id > SCRVL_MAX_VARIABLES)
+        return;
+#endif
+
+    refCount = VG_U16(id);
 
     if (refCount) {
         refCount--;

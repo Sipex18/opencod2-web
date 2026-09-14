@@ -2,6 +2,10 @@
 extern dvar_t *r_rendererInUse;
 extern DxGlobals dx;
 #include "imports.h"
+#ifdef __EMSCRIPTEN__
+#include <math.h>
+#include <stdio.h>
+#endif
 
 extern struct GfxScene scene;
 static int warnCount_007f1dcc;
@@ -588,7 +592,7 @@ static void R_WorldCheck_diag(void *rgp_field, void *cell_ptr, int cellIdx)
 }
 
 extern void *R_AllocViewParms(void);
-extern int R_CellForPoint(const void *viewParms);
+extern int R_CellForPoint(const vec_t *origin);
 extern void R_AddWorldSurfacesDpvs(const void *viewParms, int cellIdx);
 extern void CG_AddMarks(void);
 extern void FX_DrawScheduledEffects(void);
@@ -609,6 +613,97 @@ extern void R_AddCmdLightProperties(int index, const void *light);
 extern void R_AddCmdDrawFullScreenColoredQuad(float x, float y, float w, float h, const void *material, const float *color);
 extern void R_AddCmdSetViewport(int x, int y, int w, int h);
 extern void Com_Printf(const char *fmt, ...);
+
+#ifdef __EMSCRIPTEN__
+static int s_viewDbgFrames;
+
+static int R_AddAllWorldSurfacesUnculled(const GfxWorld *world)
+{
+    int i;
+    int added = 0;
+
+    if (!world || !world->surfaces || world->surfaceCount <= 0)
+        return 0;
+    for (i = 0; i < world->surfaceCount; i++) {
+        const GfxSurface *surf = &world->surfaces[i];
+        if (!surf->material || !surf->tris)
+            continue;
+        R_AddDrawSurfForSurface((GfxSurface *)surf, surf->sortGroup + 0x800);
+        added++;
+    }
+    return added;
+}
+
+static int R_ViewOriginOutsideWorld(const GfxWorld *world, const float *origin)
+{
+    const float pad = 64.0f;
+    if (!world)
+        return 1;
+    if (origin[0] < world->mins[0] - pad || origin[0] > world->maxs[0] + pad)
+        return 1;
+    if (origin[1] < world->mins[1] - pad || origin[1] > world->maxs[1] + pad)
+        return 1;
+    if (origin[2] < world->mins[2] - pad || origin[2] > world->maxs[2] + pad)
+        return 1;
+    return 0;
+}
+
+static void R_RebuildViewAtWorldCenter(const refdef_t *refdef, const GfxWorld *world, GfxViewParms *vp)
+{
+    refdef_t tmp;
+    float z;
+
+    memcpy(&tmp, refdef, sizeof(tmp));
+    tmp.vieworg[0] = 0.5f * (world->mins[0] + world->maxs[0]);
+    tmp.vieworg[1] = 0.5f * (world->mins[1] + world->maxs[1]);
+    z = world->mins[2] + 64.0f;
+    if (z > world->maxs[2] - 8.0f)
+        z = 0.5f * (world->mins[2] + world->maxs[2]);
+    tmp.vieworg[2] = z;
+
+    /* Level look +X. Temporary until spawn origin/angles are in-world. */
+    tmp.viewaxis[0][0] = 1.0f;
+    tmp.viewaxis[0][1] = 0.0f;
+    tmp.viewaxis[0][2] = 0.0f;
+    tmp.viewaxis[1][0] = 0.0f;
+    tmp.viewaxis[1][1] = 1.0f;
+    tmp.viewaxis[1][2] = 0.0f;
+    tmp.viewaxis[2][0] = 0.0f;
+    tmp.viewaxis[2][1] = 0.0f;
+    tmp.viewaxis[2][2] = 1.0f;
+    R_SetViewParmsForScene(&tmp, vp);
+}
+
+static void R_FlattenViewKeepYaw(const refdef_t *refdef, GfxViewParms *vp)
+{
+    refdef_t tmp;
+    float fx, fy, len, inv;
+
+    memcpy(&tmp, refdef, sizeof(tmp));
+    fx = refdef->viewaxis[0][0];
+    fy = refdef->viewaxis[0][1];
+    len = fx * fx + fy * fy;
+    if (len < 0.000001f) {
+        fx = 1.0f;
+        fy = 0.0f;
+    } else {
+        inv = 1.0f / sqrtf(len);
+        fx *= inv;
+        fy *= inv;
+    }
+    tmp.viewaxis[0][0] = fx;
+    tmp.viewaxis[0][1] = fy;
+    tmp.viewaxis[0][2] = 0.0f;
+    tmp.viewaxis[1][0] = -fy;
+    tmp.viewaxis[1][1] = fx;
+    tmp.viewaxis[1][2] = 0.0f;
+    tmp.viewaxis[2][0] = 0.0f;
+    tmp.viewaxis[2][1] = 0.0f;
+    tmp.viewaxis[2][2] = 1.0f;
+    R_SetViewParmsForScene(&tmp, vp);
+}
+#endif
+
 void R_RenderScene(const refdef_t *refdef)
 {
     r_globals_t *rg_p = &rg;
@@ -635,8 +730,13 @@ void R_RenderScene(const refdef_t *refdef)
     {
         void *world = rgp_p->world;
         if (!world) {
+#ifdef __EMSCRIPTEN__
+            /* Soft-fail on web: R_Error → ri.Error/longjmp often becomes
+             * wasm unreachable under PROXY_TO_PTHREAD. */
+            return;
+#else
             R_Error(1, "R_RenderScene: no world loaded");
-
+#endif
         }
     }
 
@@ -723,14 +823,66 @@ void R_RenderScene(const refdef_t *refdef)
 
     {
         int cellIdx;
-        R_WorldCheck_diag(rgp_p->world, NULL, 0);
-        cellIdx = R_CellForPoint(viewParmsDraw);
-        {
-            GfxWorld *world = rgp_p->world;
-            if (world && world->cells) {
-                R_AddWorldSurfacesDpvs(viewParmsDraw, cellIdx);
+        GfxViewParms *vpDraw = (GfxViewParms *)viewParmsDraw;
+        GfxWorld *world = rgp_p->world;
+        int beforeSurfs;
+        int worldAdded;
+#ifdef __EMSCRIPTEN__
+        int outside = 0;
+        int snapped = 0;
+#endif
+
+        R_WorldCheck_diag(world, NULL, 0);
+
+#ifdef __EMSCRIPTEN__
+        if (world && viewParmsDraw == viewParms) {
+            outside = R_ViewOriginOutsideWorld(world, vpDraw->origin);
+            if (outside) {
+                R_RebuildViewAtWorldCenter(refdef, world, vpDraw);
+                snapped = 1;
             }
         }
+        cellIdx = (world && vpDraw) ? R_CellForPoint(vpDraw->origin) : -1;
+        if (world && (cellIdx < 0 || cellIdx >= world->cellCount))
+            cellIdx = -1;
+#else
+        cellIdx = R_CellForPoint(vpDraw->origin);
+#endif
+
+        beforeSurfs = scene.drawSurfCount;
+        if (world && world->cells)
+            R_AddWorldSurfacesDpvs(vpDraw, cellIdx);
+        worldAdded = scene.drawSurfCount - beforeSurfs;
+
+#ifdef __EMSCRIPTEN__
+        if (world && worldAdded <= 0 && viewParmsDraw == viewParms) {
+            if (world->cells) {
+                if (!snapped && R_ViewOriginOutsideWorld(world, vpDraw->origin)) {
+                    R_RebuildViewAtWorldCenter(refdef, world, vpDraw);
+                    snapped = 1;
+                } else if (!snapped && vpDraw->axis[0][2] * vpDraw->axis[0][2] > 0.85f) {
+                    R_FlattenViewKeepYaw(refdef, vpDraw);
+                    snapped = 2;
+                }
+                cellIdx = R_CellForPoint(vpDraw->origin);
+                if (cellIdx < 0 || cellIdx >= world->cellCount)
+                    cellIdx = -1;
+                beforeSurfs = scene.drawSurfCount;
+                R_AddWorldSurfacesDpvs(vpDraw, -1);
+                worldAdded = scene.drawSurfCount - beforeSurfs;
+            }
+            /* Temporary: DPVS/frustum produced nothing — submit every world surface. */
+            if (worldAdded <= 0) {
+                beforeSurfs = scene.drawSurfCount;
+                worldAdded = R_AddAllWorldSurfacesUnculled(world);
+                snapped = snapped ? snapped : 3;
+            }
+        }
+        (void)s_viewDbgFrames;
+#else
+        (void)worldAdded;
+        (void)beforeSurfs;
+#endif
     }
 
     CG_AddMarks();
@@ -923,9 +1075,19 @@ int R_AddStaticModelToScene(int smodelIndex)
     AxisCopy(smodelInst->axis, backEndRefEnt->axis);
     backEndRefEnt->scale = smodelInst->scale;
 
+#ifdef __EMSCRIPTEN__
+    /* Web RB_SetupLighting drives DX7 ambient lights from the smodel
+     * lighting tables for every renderer type, so the entity must always
+     * carry the table pointer (not baseCoords floats, which the draw path
+     * would otherwise dereference as a pointer -> wasm OOB trap). */
+    if (world->smodelLightingColorTable && world->smodelLightingSunVisTable) {
+        backEndRefEnt->lighting.dx7.colorForDir = (FxMemMgr_Emitter * (*)[2])((intptr_t)smodelIndex * 96 + (intptr_t)world->smodelLightingColorTable);
+        *(int *)&backEndRefEnt->lighting.dx7.sunVisibility = ((int *)world->smodelLightingSunVisTable)[smodelIndex];
+    } else
+#endif
     if (r_rendererInUse->current.integer == 2) {
 
-        backEndRefEnt->lighting.dx7.colorForDir = (FxMemMgr_Emitter * (*)[2])((intptr_t)smodelIndex + (intptr_t)world->smodelLightingColorTable);
+        backEndRefEnt->lighting.dx7.colorForDir = (FxMemMgr_Emitter * (*)[2])((intptr_t)smodelIndex * 96 + (intptr_t)world->smodelLightingColorTable);
         *(int *)&backEndRefEnt->lighting.dx7.sunVisibility = ((int *)world->smodelLightingSunVisTable)[smodelIndex];
     } else {
         backEndRefEnt->lighting.baseCoords[0] = smodelInst->baseLightingCoords[0];

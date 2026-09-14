@@ -9,7 +9,8 @@ extern float cosf(float x);
 extern double tan(double x);
 extern int CM_BoxTrace(trace_t *results, const vec_t *start, const vec_t *end, const vec_t *mins, const vec_t *maxs, unsigned int model, int brushmask);
 extern GfxEntity *R_AddRefEntityToScene(GfxEntity *ent, const struct XModel *model, int unk);
-extern void FX_AddScheduledEffects(void);
+/* Must match FxUtil.c — void vs (start,end) mismatch → WASM unreachable in FxHelper_WarpTime. */
+extern void FX_AddScheduledEffects(const vec_t *start, const vec_t *end);
 extern void FX_UpdateAllNonBolt(void);
 extern void FX_UpdateAllBolt(void);
 extern void FxArchive_ReadData(FxArchive *arch, void *data, int size);
@@ -112,7 +113,7 @@ void FxHelper_WarpTime(const FxHelper *_this, int intime)
 
     while (frameTime > 200) {
         self->mFrameTime = 200;
-        FX_AddScheduledEffects();
+        FX_AddScheduledEffects(NULL, NULL);
         FX_UpdateAllNonBolt();
         FX_UpdateAllBolt();
         self->mOldTime = self->mTime;
@@ -121,7 +122,7 @@ void FxHelper_WarpTime(const FxHelper *_this, int intime)
     }
 
     self->mFrameTime = frameTime;
-    FX_AddScheduledEffects();
+    FX_AddScheduledEffects(NULL, NULL);
     FX_UpdateAllNonBolt();
     FX_UpdateAllBolt();
     self->mTime += self->mFrameTime;

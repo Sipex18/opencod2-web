@@ -173,9 +173,9 @@ extern void CL_Netchan_AddOOBProfilePacket(int size);
 extern void CL_Netchan_Decode(byte *data, int len);
 extern void CL_Netchan_SendOOBPacket(int len, const void *data, netadr_t to);
 extern int CL_CDKeyValidate(const char *cdkey, const char *checksum);
-extern int CL_ServerInfoPacket(netadr_t from, msg_t *msg, int time);
-extern int CL_ServerStatusResponse(netadr_t from, msg_t *msg);
-extern int CL_ServersResponsePacket(netadr_t from, msg_t *msg);
+extern void CL_ServerInfoPacket(netadr_t from, msg_t *msg, int time);
+extern void CL_ServerStatusResponse(netadr_t from, msg_t *msg);
+extern void CL_ServersResponsePacket(netadr_t from, msg_t *msg);
 extern const char *CL_GetConfigString(int index);
 extern void CL_ParseServerMessage(msg_t *msg);
 extern void CL_ArchiveClientState(void *memFile);
@@ -2150,8 +2150,13 @@ Bool CL_ConnectionlessPacket(netadr_t from, msg_t *msg, int time)
 
         Netchan_Setup(NS_CLIENT1, &conn->netchan, from, *(int *)imp_g_qport);
         conn->state = CA_CONNECTED;
-        conn->lastPacketSentTime = cls.realtime;
-        conn->lastPacketTime = -9999;
+        conn->connectTime = cls.realtime;
+        conn->lastPacketSentTime = -9999;
+        conn->lastPacketTime = cls.realtime;
+#ifdef __EMSCRIPTEN__
+        Com_Printf("CL: connectResponse → CA_CONNECTED (loopback=%d)\n",
+                   from.type == NA_LOOPBACK);
+#endif
         result = 1;
         goto finish;
     }
@@ -2253,9 +2258,6 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
     int savedServerMessageSequence;
     int savedReliableAcknowledge;
 
-#ifdef __EMSCRIPTEN__
-    printf("CL_PacketEvent: enter cursize=%d data0=0x%x caState=%d\n", msg->cursize, *(int *)msg->data, *(int *)&clientConnections[0]);
-#endif
 
     if (msg->cursize > 3 && *(int *)msg->data == -1)
         return CL_ConnectionlessPacket(from, msg, time);
@@ -2275,14 +2277,8 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
 
     conn->lastPacketTime = cls.realtime;
 
-#ifdef __EMSCRIPTEN__
-    printf("CL_PacketEvent: before Netchan_Process\n");
-#endif
     if (!Netchan_Process(&conn->netchan, msg))
         return 0;
-#ifdef __EMSCRIPTEN__
-    printf("CL_PacketEvent: after Netchan_Process\n");
-#endif
 
     headerBytes = msg->readcount;
     savedServerMessageSequence = conn->serverMessageSequence;
@@ -2295,14 +2291,8 @@ CL_PacketEvent_real(netadr_t from, msg_t *msg, int time)
         return 0;
     }
 
-#ifdef __EMSCRIPTEN__
-    printf("CL_PacketEvent: before CL_ParseServerMessage\n");
-#endif
     CL_Netchan_Decode(msg->data + msg->readcount, msg->cursize - msg->readcount);
     CL_ParseServerMessage(msg);
-#ifdef __EMSCRIPTEN__
-    printf("CL_PacketEvent: after CL_ParseServerMessage\n");
-#endif
 
     if (msg->overflowed) {
         Com_DPrintf((const char *)"ignoring illegible message");
@@ -2392,6 +2382,63 @@ void CL_ShutdownAll(void)
 
 extern void *imp_sv_paused;
 
+#ifdef __EMSCRIPTEN__
+int cl_pendingPostGamestate;
+int cl_pendingInitCGame;
+
+static void CL_RunDeferredPostGamestate(void)
+{
+    clientConnection_t *conn = (clientConnection_t *)clc;
+
+    if (cl_pendingPostGamestate == 1) {
+        cl_pendingPostGamestate = 2;
+        Com_Printf("CL: deferred FS_ConditionalRestart begin (sv_running=%d checksumFeed=%d)\n",
+                   (*(const dvar_t **)imp_com_sv_running)->current.enabled, conn->checksumFeed);
+        FS_ConditionalRestart(conn->checksumFeed);
+        Com_Printf("CL: deferred FS_ConditionalRestart done\n");
+        return;
+    }
+    if (cl_pendingPostGamestate == 2) {
+        cl_pendingPostGamestate = 0;
+        Com_Printf("CL: deferred CL_InitDownloads begin (lanAuth=%d isLAN=%d)\n",
+                   (*(const dvar_t **)imp_net_lanauthorize)->current.enabled,
+                   Sys_IsLANAddress(conn->serverAddress));
+        if (!(*(const dvar_t **)imp_net_lanauthorize)->current.enabled &&
+            Sys_IsLANAddress(conn->serverAddress)) {
+            CL_InitDownloads();
+        } else {
+            CL_RequestAuthorization();
+            CL_InitDownloads();
+        }
+        Com_Printf("CL: deferred CL_InitDownloads done\n");
+        Dvar_SetInt(*(const dvar_t **)imp_cl_paused, 0);
+        return;
+    }
+    if (cl_pendingInitCGame) {
+        char cmd[1024];
+        int i;
+        cl_pendingInitCGame = 0;
+        Com_Printf("CL: deferred CL_InitCGame begin\n");
+        Dvar_SetInt(*(const dvar_t **)imp_cl_paused, 1);
+        CL_InitCGame();
+        Dvar_SetInt(*(const dvar_t **)imp_cl_paused, 0);
+        {
+            const char *checksums = FS_ReferencedIwdPureChecksums();
+            Com_sprintf(cmd, sizeof(cmd), (const char *)"Va ");
+            I_strncat(cmd, sizeof(cmd), checksums);
+        }
+        for (i = 0; i < 2; ++i)
+            cmd[i] = (char)(cmd[i] + 13 + i * 2);
+        CL_AddReliableCommand_core(cmd);
+        CL_WritePacket();
+        CL_WritePacket();
+        CL_WritePacket();
+        Com_Printf("CL: deferred CL_InitCGame done\n");
+    }
+}
+
+#endif
+
 void CL_Frame(int msec)
 {
 
@@ -2404,6 +2451,10 @@ void CL_Frame(int msec)
 
     if ((*(LegacyHacks **)imp_legacyHacks)->cl_running == 0)
         return;
+
+#ifdef __EMSCRIPTEN__
+    CL_RunDeferredPostGamestate();
+#endif
 
     Voice_GetLocalVoiceData((void *)&clients[0]);
 #ifdef __EMSCRIPTEN__
@@ -2519,6 +2570,7 @@ void CL_Vid_Restart_f(void)
      * "quit" and cannot return without a hard refresh). Soft-apply r_mode
      * into the live session instead.
      */
+        Com_Printf("vid_restart: soft path enter [o1-resizefix]\n");
     {
         static const int modeW[] = {640, 800, 1024, 1280, 1280, 1600, 1920};
         static const int modeH[] = {480, 600, 768, 720, 1024, 900, 1080};
@@ -2703,6 +2755,32 @@ void CL_Vid_Restart_f(void)
             Dvar_SetInt((dvar_t *)refreshDvar, refreshIdx);
 
         /*
+         * options_graphics_set.cfg latches the rest via setfromdvar (EXTERNAL).
+         * Soft path never tears down the renderer, so commit latched -> current
+         * here or the UI appears to "not apply" after Yes.
+         */
+        {
+            static const char *s_softCommit[] = {
+                "r_picmip", "r_picmip_bump", "r_picmip_spec", "r_picmip_manual",
+                "r_texturemode", "r_texturebits", "r_rendererpreference",
+                "r_swapinterval", "r_aaSamples", "sc_enable",
+            };
+            extern const char *Dvar_DisplayableLatchedValue(const dvar_t *dvar);
+            extern const dvar_t *Dvar_SetFromStringByNameFromSource(
+                const char *dvarName, const char *string, DvarSetSource source);
+            unsigned ci;
+            for (ci = 0; ci < sizeof(s_softCommit) / sizeof(s_softCommit[0]); ++ci) {
+                const dvar_t *dv = Dvar_FindVar(s_softCommit[ci]);
+                if (dv && Dvar_HasLatchedValue(dv)) {
+                    Dvar_SetFromStringByNameFromSource(
+                        s_softCommit[ci],
+                        Dvar_DisplayableLatchedValue(dv),
+                        DVAR_SOURCE_INTERNAL);
+                }
+            }
+        }
+
+        /*
          * WebGL antialias is a context attribute. If r_aaSamples crosses the
          * MSAA on/off boundary, destroy+recreate PROXY_ALWAYS context, then
          * reload GPU resources via the lost-device path (Reset is a no-op on Mac/GL).
@@ -2744,21 +2822,25 @@ void CL_Vid_Restart_f(void)
                 Com_Printf("vid_restart: canvas resize to %dx%d incomplete on web\n", wantW, wantH);
             }
             /*
-             * Apply the real drawing-buffer size. Web_TryResizeCanvas resizes the
-             * DOM canvas + OFFSCREEN_FRAMEBUFFER on the UI thread so 1024x768 is
-             * a real sharp buffer (not a CSS stretch of 640).
+             * Prefer the requested mode size after a successful soft resize.
+             * Falling back to a stale drawingBuffer (still 640x480 while the FBO
+             * chicken-egged) made every Apply look like a tiny 640 window and
+             * rewrote r_mode visuals incorrectly.
              */
             Web_GetDrawableSize(&gotW, &gotH);
             if (gotW < 1)
                 gotW = 640;
             if (gotH < 1)
                 gotH = 480;
-            if (gotW != wantW || gotH != wantH) {
-                Com_Printf("vid_restart: drawable %dx%d (wanted %dx%d); applying drawable size\n",
+            if (gotW == wantW && gotH == wantH) {
+                w = gotW;
+                h = gotH;
+            } else {
+                Com_Printf("vid_restart: drawable query %dx%d (wanted %dx%d); applying mode size\n",
                            gotW, gotH, wantW, wantH);
+                w = wantW;
+                h = wantH;
             }
-            w = gotW;
-            h = gotH;
         }
 
         float aspectWin = (float)w / (float)h;
@@ -2777,12 +2859,15 @@ void CL_Vid_Restart_f(void)
         sdl_gl_width = w;
         sdl_gl_height = h;
 #ifdef __EMSCRIPTEN__
-        /* Keep SDL's window size in sync so mouse coords match the new FB. */
+        /* Keep SDL's window size in sync so mouse coords match the new FB.
+         * SDL→emscripten_set_element_css_size would shrink the CSS box to WxH
+         * pixels (tiny centered window). Restore full-bleed immediately after. */
         {
             extern struct SDL_Window *sdl_gl_window;
             extern void SDL_SetWindowSize(struct SDL_Window *window, int width, int height);
             if (sdl_gl_window)
                 SDL_SetWindowSize(sdl_gl_window, w, h);
+            Web_ForceCanvasFullBleedCss();
         }
 #endif
 
@@ -2824,35 +2909,34 @@ void CL_Vid_Restart_f(void)
                 else
                     uiInfo->uiDC.bias = 0.0f;
             }
+            {
+                extern void CG_SyncScreenDimensions(void);
+                CG_SyncScreenDimensions();
+            }
         }
 
         /*
-         * CL_Snd_Restart_f (this function's caller) always calls SND_Shutdown()
-         * -> SND_Init() around this vid_restart. SND_Shutdown() unconditionally
-         * calls Com_UnloadSoundAliases(SASYS_CGAME) then Com_UnloadSoundAliases
-         * (SASYS_UI) (src/PC/snd.c), and Com_UnloadSoundAliases() wipes the
-         * *shared* g_sa.pHash name->alias hash table (src/PC/universal/
-         * com_sndalias.c), not just its own system's entries. On real Windows
-         * CoD2 this is harmless because this same function's non-emscripten
-         * branch below always runs CL_ShutdownHunkUsers()+CL_StartHunkUsers()
-         * around it, and CL_StartHunkUsers() calls CL_InitUI() whenever
-         * cls.uiStarted is false (src/PC/client_mp/cl_main_mp.c), which calls
-         * UI_Init() -> UI_LoadSoundAliases() (src/PC/client_mp/cl_ui_mp.c) and
-         * repopulates that hash table for the menu. The web soft-apply path
-         * deliberately skips that whole hunk-restart cascade (it would tear
-         * down/recreate the WebGL context), so cls.uiStarted stays true and
-         * UI_LoadSoundAliases() never reruns — menu sound aliases (mouse-over/
-         * select, etc.) silently stop resolving after any snd_restart
-         * (Options > Sound apply) until a full page reload re-runs CL_InitUI().
-         * Re-run just the alias reload here to match the net effect of the
-         * real restart cascade without touching renderer/UI layout state.
+         * After snd_restart, SND_Shutdown unloads UI aliases and the soft
+         * vid_restart path skips CL_StartHunkUsers — so reload UI aliases
+         * only when they were actually wiped. Plain vid_restart (boot
+         * display apply / graphics options) must NOT reload: Com_LoadSoundAliases
+         * reparses every soundaliases/*.csv and FS_ReadFile's each menu WAV,
+         * which freezes the WASM main thread (log stops at snd_list).
          */
         {
             extern void UI_LoadSoundAliases(void);
-            UI_LoadSoundAliases();
+            extern struct g_sa_type g_sa;
+            if (!g_sa.initialized[0]) {
+                Com_Printf("vid_restart: reloading UI sound aliases\n");
+                UI_LoadSoundAliases();
+                Com_Printf("vid_restart: UI sound aliases done\n");
+            } else {
+                Com_Printf("vid_restart: UI sound aliases already loaded — skip\n");
+            }
         }
 #endif
 
+        Com_Printf("vid_restart: applying viewport %dx%d\n", w, h);
         dxState.renderTargetWidth = w;
         dxState.renderTargetHeight = h;
         dxState.viewport.X = 0;
@@ -2883,6 +2967,7 @@ void CL_Vid_Restart_f(void)
                 cf->fixedSize = 1;
             }
         }
+        Com_Printf("vid_restart: soft path done\n");
     }
     return;
 #else
@@ -3371,6 +3456,11 @@ void CL_DownloadsComplete(void)
     }
 
     clientConnections[0].state = CA_LOADING;
+#ifdef __EMSCRIPTEN__
+    Com_Printf("CL_DownloadsComplete: CA_LOADING (sv_running=%d cgameInit=%d)\n",
+               (*(const dvar_t **)imp_com_sv_running)->current.enabled,
+               ((clientActive_t *)cl)->cgameInitialized);
+#endif
 
     if (!(*(const dvar_t **)imp_com_sv_running)->current.enabled) {
         const char *info;
@@ -3410,6 +3500,14 @@ void CL_DownloadsComplete(void)
         return;
     }
 
+#ifdef __EMSCRIPTEN__
+    /* Let a frame paint CA_LOADING before CG_Init/BSP work. */
+    cl_pendingInitCGame = 1;
+    Com_Printf("CL_DownloadsComplete: defer CL_InitCGame to next frame\n");
+    (void)cmd;
+    (void)i;
+    return;
+#else
     Dvar_SetInt(*(const dvar_t **)imp_cl_paused, 1);
     CL_InitCGame();
     Dvar_SetInt(*(const dvar_t **)imp_cl_paused, 0);
@@ -3426,6 +3524,7 @@ void CL_DownloadsComplete(void)
     CL_WritePacket();
     CL_WritePacket();
     CL_WritePacket();
+#endif
 }
 
 void CL_BeginDownload(const char *localName, const char *remoteName)
@@ -3498,24 +3597,17 @@ void CL_InitDownloads(void)
     char missingFiles[1024];
 
 #ifdef __EMSCRIPTEN__
-    printf("CL_InitDownloads: enter\n");
+    Com_Printf("CL_InitDownloads: enter (svRunning=%d allowDL=%d)\n",
+               (*(const dvar_t **)imp_com_sv_running)->current.enabled,
+               cl_allowDownload->current.enabled);
 #endif
     FS_ShiftStr((const char *)"ni]Zm^l", 7);
 
     svRunning = *(const dvar_t **)imp_com_sv_running;
-#ifdef __EMSCRIPTEN__
-    printf("CL_InitDownloads: svRunning=%d allowDL=%d\n", svRunning->current.enabled, cl_allowDownload->current.enabled);
-#endif
     if (svRunning->current.enabled || !cl_allowDownload->current.enabled) {
         if (FS_CompareIwds(missingFiles, sizeof(missingFiles), 0))
             Com_Printf((const char *)"\nWARNING: You are missing some files referenced by the server:\n%sYou might not be able to join the game\nGo to the settings menu to turn on autodownload, or get the file elsewhere\n\n", missingFiles);
-#ifdef __EMSCRIPTEN__
-        printf("CL_InitDownloads: before CL_DownloadsComplete\n");
-#endif
         CL_DownloadsComplete();
-#ifdef __EMSCRIPTEN__
-        printf("CL_InitDownloads: after CL_DownloadsComplete\n");
-#endif
         return;
     }
 

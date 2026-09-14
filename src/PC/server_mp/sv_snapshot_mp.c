@@ -23,8 +23,6 @@ extern byte *sv_showAverageBPS_dvar;
 extern byte *showpackets_dvar;
 extern byte *sv_maxRate_dvar;
 extern byte *sv_fps_dvar;
-extern int __mh_execute_header;
-
 #define CLIENT_RELIABLESEQUENCE 0x2080c
 #define CLIENT_RELIABLEACK 0x20810
 #define CLIENT_RELIABLESENT 0x20814
@@ -92,9 +90,9 @@ extern void MSG_WriteDeltaEntity(msg_t *msg, byte *from, byte *to, int force);
 extern void MSG_WriteDeltaClient(msg_t *msg, byte *from, byte *to, int force);
 extern void MSG_WriteDeltaPlayerstate(msg_t *msg, byte *from, byte *to);
 extern void MSG_WriteDeltaArchivedEntity(msg_t *msg, byte *from, byte *to, int force);
-extern void MSG_ReadDeltaClient(msg_t *msg, byte *from, byte *to, int clientNum);
+extern qboolean MSG_ReadDeltaClient(msg_t *msg, byte *from, byte *to, int clientNum);
 extern void MSG_ReadDeltaPlayerstate(msg_t *msg, byte *from, byte *to);
-extern void MSG_ReadDeltaArchivedEntity(msg_t *msg, byte *from, byte *to, int entNum);
+extern qboolean MSG_ReadDeltaArchivedEntity(msg_t *msg, byte *from, byte *to, int entNum);
 extern void SV_DropClient(client_t *client, const char *reason);
 extern Bool SV_Netchan_Transmit(client_t *client, int length, byte *data);
 extern Bool SV_Netchan_TransmitNextFragment(netchan_t *chan);
@@ -107,12 +105,13 @@ extern int GetFollowPlayerState(int clientNum, byte *ps);
 extern int G_GetClientArchiveTime(int clientNum);
 extern void G_SetClientArchiveTime(int clientNum, int archiveTime);
 extern float G_GetFogOpaqueDistSqrd(void);
-extern int BoxDistSqrdExceeds(byte *absmin, byte *absmax, byte *org, float distSqrd);
+extern qboolean BoxDistSqrdExceeds(const vec_t *absmin, const vec_t *absmax, const vec_t *org, float distSqrd);
 extern int CM_PointLeafnum(byte *p);
 extern int CM_LeafCluster(int leafnum);
 extern byte *CM_ClusterPVS(int cluster);
 extern int CM_BoxLeafnums(byte *mins, byte *maxs, int *leafs, int count, int *lastLeaf);
-extern void AddLeanToPosition(byte *org, int viewAngleYaw, int leanf, float a, float b);
+/* Must match q_shared.c — int/float mismatch → WASM unreachable in SV_BuildClientSnapshot. */
+extern void AddLeanToPosition(vec_t *position, float fViewYaw, float fLeanFrac, float fViewRoll, float fLeanDist);
 extern void LargeLocal_LargeLocal(byte *ll, int size);
 extern byte *LargeLocal_GetBuf(byte *ll);
 extern void ZN10LargeLocalD1Ev(byte *ll);
@@ -125,6 +124,7 @@ void SV_UpdateServerCommandsToClient(client_t *client, msg_t *msg);
 static cachedSnapshot_t *__attribute_regparm__(1) SV_GetCachedSnapshotInternal(int archivedFrame);
 void SV_ArchiveSnapshot(void);
 void SV_SendMessageToClient(msg_t *msg, client_t *client);
+extern void SV_SendClientGameState(client_t *client);
 qboolean SV_GetArchivedClientInfo(int clientNum, int *pArchiveTime, int (*ps)[4], void (*cs)());
 Bool SV_GetClientPositionAtTime(int client, int gametime, vec_t *pos);
 void SV_SendClientSnapshot(client_t *client);
@@ -196,7 +196,7 @@ static __attribute_regparm__(1)
                     cachedFrame = cf;
                     svs = (serverStatic_t *)imp_svs;
                     if (cf->first_entity >= svs->nextCachedSnapshotEntities - 0x4000) {
-                        if (cf->first_client >= svs->nextCachedSnapshotClients - (int)&__mh_execute_header) {
+                        if (cf->first_client >= svs->nextCachedSnapshotClients - COD2_MH_EXECUTE_HEADER) {
                             goto cleanup;
                         }
                     }
@@ -504,7 +504,7 @@ void SV_ArchiveSnapshot(void)
                         serverStatic_t *svs2 = (serverStatic_t *)imp_svs;
                         if (((cachedSnapshot_t *)cf)->first_entity < svs2->nextCachedSnapshotEntities - 0x4000)
                             break;
-                        if (((cachedSnapshot_t *)cf)->first_client < svs2->nextCachedSnapshotClients - (int)&__mh_execute_header)
+                        if (((cachedSnapshot_t *)cf)->first_client < svs2->nextCachedSnapshotClients - COD2_MH_EXECUTE_HEADER)
                             break;
 
                         MSG_WriteBit0((msg_t *)msg);
@@ -935,18 +935,12 @@ void SV_SendMessageToClient(msg_t *msg, client_t *client)
     int messageSize;
     int svsTime;
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendMessageToClient: enter cursize=%d\n", msg->cursize);
-#endif
     LargeLocal_LargeLocal(compressedBuf_ll, MAX_MSGLEN);
     compressedBuf = LargeLocal_GetBuf(compressedBuf_ll);
 
     *(int *)compressedBuf = *(int *)msg->data;
 
     compressedSize = MSG_WriteBitsCompress(msg->data + 4, compressedBuf + 4, msg->cursize - 4) + 4;
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendMessageToClient: compressed=%d dropReason=%p\n", compressedSize, client->dropReason);
-#endif
 
     if (client->dropReason != NULL) {
         SV_DropClient(client, client->dropReason);
@@ -961,13 +955,7 @@ void SV_SendMessageToClient(msg_t *msg, client_t *client)
         frame->messageAcked = -1;
     }
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendMessageToClient: before Netchan_Transmit len=%d\n", compressedSize);
-#endif
     SV_Netchan_Transmit(client, compressedSize, compressedBuf);
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendMessageToClient: after Netchan_Transmit\n");
-#endif
 
     {
         netadr_t *addr = &client->netchan.remoteAddress;
@@ -1378,7 +1366,7 @@ static int SV_EntityIsVisibleToClientLocal(byte *entBytes, const vec3_t org, con
         }
     }
 
-    if (fogOpaqueDistSqrd != 0.0f && BoxDistSqrdExceeds((byte *)shared->absmin, (byte *)shared->absmax, (byte *)org, fogOpaqueDistSqrd)) {
+    if (fogOpaqueDistSqrd != 0.0f && BoxDistSqrdExceeds(shared->absmin, shared->absmax, org, fogOpaqueDistSqrd)) {
         return 0;
     }
     return 1;
@@ -1416,7 +1404,7 @@ static int SV_CachedEntityIsVisibleLocal(archivedEntity_t *archEnt, const vec3_t
     if (i == numLeafs) {
         return 0;
     }
-    if (fogOpaqueDistSqrd != 0.0f && BoxDistSqrdExceeds((byte *)shared->absmin, (byte *)shared->absmax, (byte *)org, fogOpaqueDistSqrd)) {
+    if (fogOpaqueDistSqrd != 0.0f && BoxDistSqrdExceeds(shared->absmin, shared->absmax, org, fogOpaqueDistSqrd)) {
         return 0;
     }
     return 1;
@@ -1642,7 +1630,7 @@ static void SV_BuildClientSnapshotLocal(client_t *client)
     org[0] = frame->ps.origin[0];
     org[1] = frame->ps.origin[1];
     org[2] = frame->ps.origin[2] + frame->ps.viewHeightCurrent;
-    AddLeanToPosition((byte *)org, (int)frame->ps.viewangles[1], (int)frame->ps.leanf, 16.0f, 20.0f);
+    AddLeanToPosition(org, frame->ps.viewangles[1], frame->ps.leanf, 16.0f, 20.0f);
 
     if (cachedFrame) {
         SV_BuildVisibleCachedEntitiesLocal(frame, cachedFrame, org, clientNum, deltaTime);
@@ -1841,14 +1829,8 @@ void SV_SendClientSnapshot(client_t *client)
     byte *msg_buf;
     msg_t msg;
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendClientSnapshot: enter state=%d\n", client->state);
-#endif
     LargeLocal_LargeLocal(msg_buf_large_local, 0x20000);
     msg_buf = LargeLocal_GetBuf(msg_buf_large_local);
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendClientSnapshot: after LargeLocal buf=%p\n", msg_buf);
-#endif
 
     if (client->state == 4 || client->state == 1) {
         SV_BuildClientSnapshotLocal(client);
@@ -1861,19 +1843,10 @@ void SV_SendClientSnapshot(client_t *client)
         SV_UpdateServerCommandsToClient(client, &msg);
         SV_WriteSnapshotToClientLocal(client, &msg);
     } else {
-#ifdef __EMSCRIPTEN__
-        printf("SV_SendClientSnapshot: before WriteDownload state=%d\n", client->state);
-#endif
         SV_WriteDownloadToClient(client, &msg);
-#ifdef __EMSCRIPTEN__
-        printf("SV_SendClientSnapshot: after WriteDownload\n");
-#endif
     }
 
     MSG_WriteByte(&msg, SV_SVC_EOF);
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendClientSnapshot: before SendMessageToClient\n");
-#endif
 
     if (msg.overflowed) {
         Com_Printf("WARNING: msg overflowed for %s, trying to recover\n", client->name);
@@ -1915,29 +1888,46 @@ void SV_SendClientMessages(void)
 
     svsTime = psvs->time;
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_SendClientMessages: enter maxClients=%d svsTime=%d\n", maxClients, svsTime);
-#endif
 
     for (i = 0; i < maxClients; i++, c++) {
 
         if (c->state == 0 || svsTime < c->nextSnapshotTime)
             continue;
 
-#ifdef __EMSCRIPTEN__
-        printf("SV_SendClientMessages: client=%d state=%d sendFrag=%d\n", i, c->state, c->netchan.unsentFragments);
-#endif
         numclients++;
+
+#ifdef __EMSCRIPTEN__
+        /* Deferred listen-server gamestate (never from SV_DirectConnect stack). */
+        if (c->netchan.remoteAddress.type == NA_LOOPBACK &&
+            !c->netchan.unsentFragments) {
+            if (c->state == 2 && c->gamestateMessageNum < 0) {
+                int guard = 0;
+                Com_Printf("SV_SendClientMessages: deferred SV_SendClientGameState\n");
+                SV_SendClientGameState(c);
+                /* Queue fragments (web loopback depth 64). Guard against
+                 * exact-FRAGMENT_SIZE edge case spinning forever. */
+                while (c->netchan.unsentFragments && guard++ < 64)
+                    SV_Netchan_TransmitNextFragment(&c->netchan);
+                Com_Printf("SV_SendClientMessages: GS fragments queued (left=%d guard=%d)\n",
+                           c->netchan.unsentFragments, guard);
+            } else if (c->state == 3 &&
+                       c->messageAcknowledge <= c->gamestateMessageNum) {
+                int gsSent = c->frames[c->gamestateMessageNum & 31].messageSent;
+                if (gsSent > 0 && svsTime - gsSent > 1500) {
+                    int guard = 0;
+                    Com_Printf("SV_SendClientMessages: PRIMED stuck, resend gamestate (ack=%d gs=%d)\n",
+                               c->messageAcknowledge, c->gamestateMessageNum);
+                    SV_SendClientGameState(c);
+                    while (c->netchan.unsentFragments && guard++ < 64)
+                        SV_Netchan_TransmitNextFragment(&c->netchan);
+                }
+            }
+        }
+#endif
 
         sendFrag = c->netchan.unsentFragments;
         if (sendFrag == 0) {
-#ifdef __EMSCRIPTEN__
-            printf("SV_SendClientMessages: before SV_SendClientSnapshot client=%d\n", i);
-#endif
             SV_SendClientSnapshot(c);
-#ifdef __EMSCRIPTEN__
-            printf("SV_SendClientMessages: before SV_SendClientVoiceData client=%d\n", i);
-#endif
             SV_SendClientVoiceData(c);
             continue;
         }
@@ -1970,8 +1960,16 @@ void SV_SendClientMessages(void)
             }
         }
 
-        c->nextSnapshotTime = svsTime + rateMsec;
-        SV_Netchan_TransmitNextFragment(&c->netchan);
+        if (c->netchan.remoteAddress.type == NA_LOOPBACK ||
+            Sys_IsLANAddress(c->netchan.remoteAddress)) {
+            /* One frag per call keeps loopback depth safe; residual path
+             * calls us even between sim frames on web. */
+            c->nextSnapshotTime = svsTime - 1;
+            SV_Netchan_TransmitNextFragment(&c->netchan);
+        } else {
+            c->nextSnapshotTime = svsTime + rateMsec;
+            SV_Netchan_TransmitNextFragment(&c->netchan);
+        }
     }
 
     if ((*(dvar_t **)(imp_sv_showAverageBPS))->current.enabled == 0 || numclients <= 0)
@@ -2114,7 +2112,7 @@ void SV_ArchiveSnapshot(void)
                         serverStatic_t *svs2 = (serverStatic_t *)imp_svs;
                         if (((cachedSnapshot_t *)cf)->first_entity < svs2->nextCachedSnapshotEntities - 0x4000)
                             break;
-                        if (((cachedSnapshot_t *)cf)->first_client < svs2->nextCachedSnapshotClients - (int)&__mh_execute_header)
+                        if (((cachedSnapshot_t *)cf)->first_client < svs2->nextCachedSnapshotClients - COD2_MH_EXECUTE_HEADER)
                             break;
 
                         MSG_WriteBit0((msg_t *)msg);

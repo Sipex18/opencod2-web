@@ -572,6 +572,8 @@ static VariableStackBuffer *__attribute_regparm__(3)
         record[0] = (char)value->type;
 
         if (value->type == 7) {
+            unsigned int parentLocalId;
+
             scrVmPub.function_count--;
             scrVmPub.function_frame--;
 #if defined(__x86_64__) || defined(_M_X64)
@@ -582,7 +584,15 @@ static VariableStackBuffer *__attribute_regparm__(3)
             *(const char **)(record + 1) = scrVmPub.function_frame->fs.pos;
 #endif
             scrVmPub.localVars -= scrVmPub.function_frame->fs.localVarCount;
-            localId = GetParentLocalId(localId);
+            /*
+             * Native GetParentLocalId asserts VAR_CHILD_THREAD. Walking a
+             * root VAR_THREAD CODEPOS (or an extra sentinel) yields 0 and
+             * then Scr_SetThreadNotifyName(0) / GetNewObjectVariable(...,0)
+             * corrupt the freelist head. Only unwind real child frames.
+             */
+            parentLocalId = GetSafeParentLocalId(localId);
+            if (parentLocalId)
+                localId = parentLocalId;
         } else {
             *(int *)(record + 1) = value->u.intValue;
         }
@@ -1488,7 +1498,7 @@ static VariableStackBuffer *VM_NotifyRemoveStackFromWait(unsigned int selfId, un
 
     {
         unsigned int waitSelfId = Scr_GetSelf(startLocalId);
-        unsigned int selfNameId = FindObject(FindObjectVariable(varPub->levelId, waitSelfId));
+        unsigned int selfNameId = FindObject(FindObjectVariable(varPub->pauseArrayId, waitSelfId));
         unsigned int notifyListOwnerId = GetVariableValueAddress(FindObjectVariable(selfNameId, startLocalId))->pointerValue;
         unsigned int notifyListId = FindObject(FindVariable(notifyListOwnerId, 0x1fffe));
         unsigned int notifyNameListId = FindObject(FindVariable(notifyListId, waitString));
@@ -1498,7 +1508,7 @@ static VariableStackBuffer *VM_NotifyRemoveStackFromWait(unsigned int selfId, un
         VM_CancelNotifyInternal(notifyListOwnerId, startLocalId, notifyListId, notifyNameListId, waitString);
         RemoveObjectVariable(selfNameId, startLocalId);
         if (!GetArraySize(selfNameId)) {
-            RemoveObjectVariable(varPub->levelId, waitSelfId);
+            RemoveObjectVariable(varPub->pauseArrayId, waitSelfId);
         }
     }
 
@@ -1669,7 +1679,7 @@ static void VM_NotifySuspendStack(unsigned int notifyListOwnerId, unsigned int s
     VM_CancelNotifyInternal(notifyListOwnerId, startLocalId, notifyListId, notifyNameListId, stringValue);
     RemoveObjectVariable(selfNameId, startLocalId);
     if (!GetArraySize(selfNameId)) {
-        RemoveObjectVariable(varPub->levelId, selfId);
+        RemoveObjectVariable(varPub->pauseArrayId, selfId);
     }
 
     Scr_SetThreadWaitTime(startLocalId, varPub->time);
@@ -1722,7 +1732,7 @@ static void __attribute_regparm__(3)
     while ((scanId = FindPrevSibling(scanId)) != 0) {
         unsigned int startLocalId = GetVariableKeyObject(scanId);
         unsigned int selfId = Scr_GetSelf(startLocalId);
-        unsigned int selfNameId = FindObject(FindObjectVariable(varPub->levelId, selfId));
+        unsigned int selfNameId = FindObject(FindObjectVariable(varPub->pauseArrayId, selfId));
         int varType = GetVarType(scanId);
 
         if (!varType) {
@@ -1733,7 +1743,7 @@ static void __attribute_regparm__(3)
             Scr_KillEndonThread(startLocalId);
             RemoveObjectVariable(selfNameId, startLocalId);
             if (!GetArraySize(selfNameId)) {
-                RemoveObjectVariable(varPub->levelId, selfId);
+                RemoveObjectVariable(varPub->pauseArrayId, selfId);
             }
 
             currentStartLocalId = GetStartLocalId(selfId);
@@ -1766,6 +1776,13 @@ static void __attribute_regparm__(3)
             VariableStackBuffer *stackValue = stackRef->stackValue;
             Bool noStack;
 
+#ifdef __EMSCRIPTEN__
+            if (!stackValue || stackValue < (VariableStackBuffer *)1024 ||
+                !stackValue->pos || !Scr_IsInOpcodeMemory(stackValue->pos) ||
+                !Scr_IsInOpcodeMemory(stackValue->pos - 1)) {
+                continue;
+            }
+#endif
             if (stackValue->pos[-1] == 0x77) {
                 if (!VM_NotifyWaittillMatches(stackValue, top)) {
                     continue;
@@ -1853,8 +1870,17 @@ static inline __attribute__((always_inline)) void Scr_SetErrorMessageAndJump(con
     if (varPub->developer && *(int *)(scrVmGlob + 20))
         scrVmPub.terminal_error = 1;
 
-    if (scrVmPub.function_count || scrVmPub.debugCode)
+    if (scrVmPub.function_count || scrVmPub.debugCode) {
+#ifdef __EMSCRIPTEN__
+        if ((unsigned)g_script_error_level > 32) {
+            Com_Printf("Scr_SetErrorMessageAndJump: level=%d out of range [o1-escjmp]\n",
+                       g_script_error_level);
+            Com_Error(1, "\x15%s", varPub->error_message);
+            return;
+        }
+#endif
         longjmp(g_script_error[g_script_error_level], -1);
+    }
 
     Com_Error(1, "\x15%s", varPub->error_message);
 }
@@ -6472,10 +6498,8 @@ static void VM_CandidateCallBuiltin(const char **pos, VariableValue **top, unsig
 
     func = (BuiltinFunction)(uintptr_t)compilePub->func_table[builtinIndex];
     name = VM_LookupBuiltinName((void *)(uintptr_t)func);
-    Com_Printf("VM_CallBuiltin: idx=%u name=%s func=%p params=%u\n",
-               builtinIndex, name, (void *)(uintptr_t)func, paramCount);
+    (void)name;
     func();
-    Com_Printf("VM_CallBuiltin: done name=%s\n", name);
     VM_CandidateCompleteCall(pos, top);
 }
 
@@ -6515,18 +6539,17 @@ static void VM_CandidateCallBuiltinMethod(const char **pos, VariableValue **top,
     }
 
     method = (BuiltinMethod)(uintptr_t)compilePub->func_table[builtinIndex];
-    Com_Printf("VM_CallMethod: idx=%u name=%s ent=%u class=%u params=%u\n",
-               builtinIndex, VM_LookupBuiltinName((void *)(uintptr_t)method),
-               (unsigned)entref.entnum, (unsigned)entref.classnum, paramCount);
     ((void (*)(scr_entref_t))(uintptr_t)method)(entref);
-    Com_Printf("VM_CallMethod: done idx=%u\n", builtinIndex);
     VM_CandidateCompleteCall(pos, top);
 }
 
 static unsigned int VM_CandidateFinishOutermost(VariableValue *startTop, unsigned int localId)
 {
     scrVmPub.top = startTop;
-    g_script_error_level--;
+#ifdef __EMSCRIPTEN__
+    if (g_script_error_level > -1)
+#endif
+        g_script_error_level--;
     return localId;
 }
 
@@ -6544,7 +6567,7 @@ static void VM_CandidateRestoreCaller(unsigned int parentLocalId, const char **p
 
 static void VM_CandidatePopToFrameSentinel(VariableValue **top)
 {
-    while ((*top)->type != 7) {
+    while (*top > scrVmPub.stack && (*top)->type != 7) {
         RemoveRefToValue((*top)->type, (*top)->u);
         --*top;
     }
@@ -6607,6 +6630,49 @@ static int VM_CandidateHandleReturn(const char **pos, unsigned int *localId,
     return 0;
 }
 
+#ifdef __EMSCRIPTEN__
+extern unsigned char scrVarGlob[];
+
+/* When the VM localId was lost (placeholder frame / bad resume), pick the
+ * nearest non-zero id from the function stack before waittill/endon. */
+static unsigned int VM_RecoverLocalId(unsigned int localId)
+{
+    int i;
+
+    if (localId)
+        return localId;
+
+    for (i = scrVmPub.function_count - 1; i >= 0; i--) {
+        unsigned int id = scrVmPub.function_frame_start[i].fs.localId;
+        if (id)
+            return id;
+    }
+    return 0;
+}
+
+static void VM_DiagBadLocalId(const char *where, unsigned int localId, unsigned int name,
+                              unsigned int threadId)
+{
+    static unsigned int s_diagCount;
+    unsigned int freeHead;
+    int i;
+
+    if (s_diagCount >= 6)
+        return;
+    ++s_diagCount;
+
+    freeHead = *(unsigned short *)((byte *)scrVarGlob + 4);
+    Com_Printf("VM-LOCAL0: %s local=%u name=%u('%s') thread=%u fnCount=%d freeHead=%u frames:",
+               where, localId, name,
+               name ? SL_ConvertToString(name) : "?",
+               threadId, scrVmPub.function_count, freeHead);
+    for (i = 0; i < scrVmPub.function_count && i < 8; i++) {
+        Com_Printf(" [%d]=%u", i, scrVmPub.function_frame_start[i].fs.localId);
+    }
+    Com_Printf("\n");
+}
+#endif
+
 static unsigned int VM_CandidateSuspendCurrentStack(const char *archivePos,
                                                     unsigned int localVarCount,
                                                     VariableValue *top,
@@ -6620,7 +6686,10 @@ static unsigned int VM_CandidateSuspendCurrentStack(const char *archivePos,
 static unsigned int VM_CandidateFinishSuspend(VariableValue *startTop, unsigned int localId)
 {
     scrVmPub.top = startTop;
-    g_script_error_level--;
+#ifdef __EMSCRIPTEN__
+    if (g_script_error_level > -1)
+#endif
+        g_script_error_level--;
     return localId;
 }
 
@@ -6640,6 +6709,11 @@ static int VM_CandidateThreadSuspendReturn(const char **pos, unsigned int *local
         function_frame_t *ff = scrVmPub.function_frame;
         *pos = ff->fs.pos;
         *localId = ff->fs.localId;
+#ifdef __EMSCRIPTEN__
+        /* Defensive: resume slot must hold the caller thread id. */
+        if (!*localId)
+            *localId = VM_RecoverLocalId(0);
+#endif
         *localVarCount = ff->fs.localVarCount;
         *top = ff->fs.top;
         *startTop = ff->fs.startTop;
@@ -6701,10 +6775,30 @@ static int VM_CandidateHandleWait(const char **pos, unsigned int *localVarCount,
     waitTime = (waitTime + (unsigned int)varPub->time) & 0x00ffffffu;
     --*top;
 
+#ifdef __EMSCRIPTEN__
+    if (!*localId) {
+        unsigned int recovered = VM_RecoverLocalId(0);
+        if (recovered)
+            *localId = recovered;
+    }
+#endif
+
     stackValue = (VariableStackBuffer *)(uintptr_t)
         VM_CandidateSuspendCurrentStack(archivePos, *localVarCount, *top, *startTop, localId);
     tempValue.u.stackValue = SCR_STACK_ENC(stackValue);
     tempValue.type = 10;
+
+    if (!*localId)
+        *localId = stackValue->localId;
+#ifdef __EMSCRIPTEN__
+    if (!*localId)
+        *localId = VM_RecoverLocalId(0);
+    if (!*localId) {
+        VM_DiagBadLocalId("wait-fail", 0, 0, 0);
+        return VM_CandidateThreadSuspendReturn(pos, localId, localVarCount, top,
+                                               startTop, resultLocalId, threadCount);
+    }
+#endif
 
     waitArray = GetArray(GetVariable(varPub->timeArrayId, waitTime));
     stackId = GetNewObjectVariable(waitArray, *localId);
@@ -6727,10 +6821,30 @@ static int VM_CandidateHandleWaitTillFrameEnd(const char **pos, unsigned int *lo
     unsigned int stackId;
     const char *archivePos = *pos;
 
+#ifdef __EMSCRIPTEN__
+    if (!*localId) {
+        unsigned int recovered = VM_RecoverLocalId(0);
+        if (recovered)
+            *localId = recovered;
+    }
+#endif
+
     stackValue = (VariableStackBuffer *)(uintptr_t)
         VM_CandidateSuspendCurrentStack(archivePos, *localVarCount, *top, *startTop, localId);
     tempValue.u.stackValue = SCR_STACK_ENC(stackValue);
     tempValue.type = 10;
+
+    if (!*localId)
+        *localId = stackValue->localId;
+#ifdef __EMSCRIPTEN__
+    if (!*localId)
+        *localId = VM_RecoverLocalId(0);
+    if (!*localId) {
+        VM_DiagBadLocalId("waittillframeend-fail", 0, 0, 0);
+        return VM_CandidateThreadSuspendReturn(pos, localId, localVarCount, top,
+                                               startTop, resultLocalId, threadCount);
+    }
+#endif
 
     waitArray = GetArray(GetVariable(varPub->timeArrayId, (unsigned int)varPub->time));
     stackId = GetNewObjectVariableReverse(waitArray, *localId);
@@ -6772,10 +6886,36 @@ static int VM_CandidateHandleWaitTill(const char **pos, unsigned int *localVarCo
     stringValue = (*top)->u.stringValue;
     --*top;
 
+#ifdef __EMSCRIPTEN__
+    if (!*localId) {
+        unsigned int recovered = VM_RecoverLocalId(0);
+        VM_DiagBadLocalId("waittill-pre", *localId, stringValue, recovered);
+        if (recovered)
+            *localId = recovered;
+    }
+#endif
+
     stackValue = (VariableStackBuffer *)(uintptr_t)
         VM_CandidateSuspendCurrentStack(archivePos, *localVarCount, *top, *startTop, localId);
     tempValue.u.stackValue = SCR_STACK_ENC(stackValue);
     tempValue.type = 10;
+
+    /* If ArchiveStack still produced 0, fall back to the pre-archive id. */
+    if (!*localId)
+        *localId = stackValue->localId;
+#ifdef __EMSCRIPTEN__
+    if (!*localId) {
+        unsigned int recovered = VM_RecoverLocalId(0);
+        VM_DiagBadLocalId("waittill-post", *localId, stringValue, recovered);
+        if (recovered)
+            *localId = recovered;
+    }
+    if (!*localId) {
+        VM_DiagBadLocalId("waittill-fail", 0, stringValue, 0);
+        return VM_CandidateThreadSuspendReturn(pos, localId, localVarCount, top,
+                                               startTop, resultLocalId, threadCount);
+    }
+#endif
 
     notifyListId = GetArray(GetVariable(notifyListOwnerId, 0x1fffe));
     notifyNameListId = GetArray(GetVariable(notifyListId, stringValue));
@@ -6785,7 +6925,8 @@ static int VM_CandidateHandleWaitTill(const char **pos, unsigned int *localVarCo
     tempValue.u.pointerValue = notifyListOwnerId;
     tempValue.type = VAR_POINTER;
     selfId = Scr_GetSelf(*localId);
-    selfNameId = GetArray(GetObjectVariable(varPub->levelId, selfId));
+    /* CoD2rev: pauseArrayId indexes waittill/endon waiters, not levelId. */
+    selfNameId = GetArray(GetObjectVariable(varPub->pauseArrayId, selfId));
     selfVarId = GetNewObjectVariable(selfNameId, *localId);
     SetNewVariableValue(selfVarId, &tempValue);
     Scr_SetThreadNotifyName(*localId, stringValue);
@@ -6865,8 +7006,30 @@ static void VM_CandidateHandleEndOnCallback(unsigned int localId, VariableValue 
     }
     stringValue = (*top - 1)->u.stringValue;
 
+#ifdef __EMSCRIPTEN__
+    if (!localId) {
+        unsigned int recovered = VM_RecoverLocalId(0);
+        VM_DiagBadLocalId("endon-pre", localId, stringValue, recovered);
+        if (recovered)
+            localId = recovered;
+    }
+    if (!localId) {
+        VM_DiagBadLocalId("endon-fail", 0, stringValue, 0);
+        *top -= 2;
+        return;
+    }
+#endif
+
     AddRefToObject(localId);
     threadId = AllocThread(localId);
+#ifdef __EMSCRIPTEN__
+    if (!threadId) {
+        VM_DiagBadLocalId("endon-alloc", localId, stringValue, 0);
+        RemoveRefToObject(localId);
+        *top -= 2;
+        return;
+    }
+#endif
 
     notifyListId = GetArray(GetVariable(notifyListOwnerId, 0x1fffe));
     notifyNameListId = GetArray(GetVariable(notifyListId, stringValue));
@@ -6876,7 +7039,8 @@ static void VM_CandidateHandleEndOnCallback(unsigned int localId, VariableValue 
 
     tempValue.u.pointerValue = notifyListOwnerId;
     tempValue.type = VAR_POINTER;
-    selfNameId = GetArray(GetObjectVariable(varPub->levelId, localId));
+    /* CoD2rev: endon waiter is keyed under pauseArrayId by the thread localId. */
+    selfNameId = GetArray(GetObjectVariable(varPub->pauseArrayId, localId));
     selfVarId = GetNewObjectVariable(selfNameId, threadId);
     SetNewVariableValue(selfVarId, &tempValue);
     Scr_SetThreadNotifyName(threadId, stringValue);
@@ -7052,20 +7216,33 @@ static void VM_CandidateEnterMethodCall(const char **pos, unsigned int *localId,
     VM_CandidateEnterScriptFrame(pos, localId, localVarCount, top, startTop, targetPos, newLocalId, returnPos);
 }
 
-static void VM_CandidatePrepareThreadCallerFrame(const char *returnPos,
-                                                 unsigned int localVarCount,
-                                                 VariableValue *top,
-                                                 VariableValue *callerStartTop,
-                                                 unsigned int paramCount)
+/* CoD2rev ScriptThreadCall: save caller resume on function_frame (next slot)
+ * WITHOUT clearing fs.localId — that slot holds the caller's thread id. Then
+ * bump the frame and store the new thread id on the new next slot. */
+static void VM_CandidateEnterThreadCall(const char **pos, unsigned int *localId,
+                                        unsigned int *localVarCount, VariableValue **top,
+                                        VariableValue **startTop, const char *targetPos,
+                                        const char *returnPos, unsigned int paramCount,
+                                        unsigned int newLocalId)
 {
     function_frame_t *frame = scrVmPub.function_frame;
-    VariableValue *threadStartTop = top - paramCount;
+    VariableValue *threadStartTop = *top - paramCount;
 
     frame->fs.pos = returnPos;
-    frame->fs.localVarCount = localVarCount;
+    frame->fs.startTop = *startTop;
+    frame->fs.localVarCount = *localVarCount;
     frame->fs.top = threadStartTop;
-    frame->fs.startTop = callerStartTop;
     frame->topType = threadStartTop->type;
+
+    *startTop = threadStartTop;
+    (*startTop)->type = 8;
+    *localVarCount = 0;
+    *localId = newLocalId;
+    *pos = targetPos;
+
+    scrVmPub.function_count++;
+    scrVmPub.function_frame++;
+    scrVmPub.function_frame->fs.localId = newLocalId;
 }
 
 static void VM_CandidateEnterFunctionThreadCall(const char **pos, unsigned int *localId,
@@ -7075,17 +7252,18 @@ static void VM_CandidateEnterFunctionThreadCall(const char **pos, unsigned int *
 {
     unsigned int selfId;
     unsigned int newLocalId;
-    VariableValue *callerStartTop = *startTop;
 
     VM_CandidateCheckFrameDepth();
     selfId = Scr_GetSelf(*localId);
     AddRefToObject(selfId);
     newLocalId = AllocThread(selfId);
-    VM_CandidatePrepareThreadCallerFrame(returnPos, *localVarCount, *top,
-                                         callerStartTop, paramCount);
-    *startTop = *top - paramCount;
-    (*startTop)->type = 8;
-    VM_CandidateEnterScriptFrame(pos, localId, localVarCount, top, startTop, targetPos, newLocalId, returnPos);
+    if (!newLocalId) {
+        RemoveRefToObject(selfId);
+        Scr_SetErrorMessageAndJump("exceeded maximum number of script variables");
+        return;
+    }
+    VM_CandidateEnterThreadCall(pos, localId, localVarCount, top, startTop,
+                                targetPos, returnPos, paramCount, newLocalId);
 }
 
 static void VM_CandidateEnterMethodThreadCall(const char **pos, unsigned int *localId,
@@ -7095,16 +7273,16 @@ static void VM_CandidateEnterMethodThreadCall(const char **pos, unsigned int *lo
 {
     unsigned int objectId;
     unsigned int newLocalId;
-    VariableValue *callerStartTop = *startTop;
 
     VM_CandidateCheckFrameDepth();
     objectId = VM_CandidatePopObjectForCall(top, 1);
     newLocalId = AllocThread(objectId);
-    VM_CandidatePrepareThreadCallerFrame(returnPos, *localVarCount, *top,
-                                         callerStartTop, paramCount);
-    *startTop = *top - paramCount;
-    (*startTop)->type = 8;
-    VM_CandidateEnterScriptFrame(pos, localId, localVarCount, top, startTop, targetPos, newLocalId, returnPos);
+    if (!newLocalId) {
+        Scr_SetErrorMessageAndJump("exceeded maximum number of script variables");
+        return;
+    }
+    VM_CandidateEnterThreadCall(pos, localId, localVarCount, top, startTop,
+                                targetPos, returnPos, paramCount, newLocalId);
 }
 
 static unsigned int VM_Execute_CXX_Candidate_Pass66(struct function_stack_t fs)
@@ -7132,7 +7310,20 @@ static unsigned int VM_Execute_CXX_Candidate_Pass66(struct function_stack_t fs)
     (void)currentCodePos;
     (void)thread_count;
 
+#ifdef __EMSCRIPTEN__
+    if ((unsigned)(g_script_error_level + 1) > 32) {
+        g_script_error_level = -1;
+    }
+#endif
     g_script_error_level++;
+#ifdef __EMSCRIPTEN__
+    if (!pos || !Scr_IsInOpcodeMemory(pos)) {
+        if (g_script_error_level > -1)
+            g_script_error_level--;
+        return 0;
+    }
+    g_script_error[g_script_error_level][0] = 0;
+#endif
     if (setjmp(g_script_error[g_script_error_level])) {
         RuntimeError(pos, varPub->error_index, varPub->error_message,
                      ((struct scrVmGlob_t *)scrVmGlob)->dialog_error_message);
@@ -7846,14 +8037,20 @@ static unsigned int VM_Execute_CXX_Candidate_Pass66(struct function_stack_t fs)
             break;
 
         case VMOP_Abort:
-            g_script_error_level--;
+#ifdef __EMSCRIPTEN__
+            if (g_script_error_level > -1)
+#endif
+                g_script_error_level--;
             return 0;
 
         default:
             scrVmPub.top = top;
+#ifdef __EMSCRIPTEN__
+            if (g_script_error_level > -1)
+#endif
+                g_script_error_level--;
             Com_Error(1, "VM_Execute C candidate pass66 hit unconverted opcode 0x%02x (%s)",
                       opcode, VM_OpcodeName(opcode));
-            g_script_error_level--;
             return localId;
         }
     }
@@ -7933,6 +8130,15 @@ static void VM_Resume(unsigned int timeId)
 
         startLocalId = GetVariableKeyObject(stackId);
         stackValue = GetVariableValueAddress(stackId)->stackValue;
+#ifdef __EMSCRIPTEN__
+        if (!stackValue || stackValue < (VariableStackBuffer *)1024 ||
+            !stackValue->pos || !Scr_IsInOpcodeMemory(stackValue->pos)) {
+            RemoveObjectVariable(timeId, startLocalId);
+            if (startLocalId)
+                Scr_ClearWaitTime(startLocalId);
+            continue;
+        }
+#endif
         if (traceCount < 64) {
             if (getenv("DBGSPAM"))
                 Com_Printf("[team-trace] resume bucket=%u local=%u time=%u archivedTime=%u pos=%p size=%u\n",
@@ -7942,6 +8148,11 @@ static void VM_Resume(unsigned int timeId)
             ++traceCount;
         }
         RemoveObjectVariable(timeId, startLocalId);
+
+        scrVmPub.function_count = 0;
+        scrVmPub.function_frame = scrVmPub.function_frame_start;
+        scrVmPub.stack[0].type = 7;
+        scrVmPub.top = scrVmPub.stack;
 
         scrVmPub.function_frame->fs.pos = stackValue->pos;
         scrVmPub.function_count++;
@@ -7962,14 +8173,16 @@ static void VM_Resume(unsigned int timeId)
                 top->type = type;
 
                 if (type == 7) {
+                    if (scrVmPub.function_count < 31) {
 #if defined(__x86_64__) || defined(_M_X64)
-                    scrVmPub.function_frame->fs.pos =
-                        SCR_CODEPOS_PTR(*(unsigned int *)(record + 1));
+                        scrVmPub.function_frame->fs.pos =
+                            SCR_CODEPOS_PTR(*(unsigned int *)(record + 1));
 #else
-                    scrVmPub.function_frame->fs.pos = *(const char **)(record + 1);
+                        scrVmPub.function_frame->fs.pos = *(const char **)(record + 1);
 #endif
-                    scrVmPub.function_count++;
-                    scrVmPub.function_frame++;
+                        scrVmPub.function_count++;
+                        scrVmPub.function_frame++;
+                    }
                 } else {
                     top->u.intValue = *(int *)(record + 1);
                 }
@@ -7982,23 +8195,36 @@ static void VM_Resume(unsigned int timeId)
         localId = stackValue->localId;
         Scr_ClearWaitTime(startLocalId);
 
+        /*
+         * Match CoD2rev VM_UnarchiveStack: localId lives on
+         * function_frame_start[function_count] (the NEXT slot past the
+         * active frames). ScriptThreadCall saves caller resume onto that
+         * same slot and must keep the caller's id there — if we only fill
+         * frames [0..count-1], thread waittill restore reads localId=0.
+         */
         if (scrVmPub.function_count > 0) {
-            unsigned int frameIndex;
+            int functionCount = scrVmPub.function_count;
             unsigned int frameLocalId = localId;
 
-            for (frameIndex = (unsigned int)scrVmPub.function_count; frameIndex > 0; frameIndex--) {
-                function_frame_t *frame = &scrVmPub.function_frame_start[frameIndex - 1];
-                frame->fs.localId = frameLocalId;
-                frameLocalId = GetParentLocalId(frameLocalId);
+            for (;;) {
+                unsigned int parentLocalId;
+
+                scrVmPub.function_frame_start[functionCount].fs.localId = frameLocalId;
+                functionCount--;
+                if (!functionCount)
+                    break;
+                parentLocalId = GetSafeParentLocalId(frameLocalId);
+                if (!parentLocalId)
+                    break;
+                frameLocalId = parentLocalId;
             }
 
-            for (i = 0; i + 1 < (unsigned int)scrVmPub.function_count; i++) {
+            for (i = 1; i < (unsigned int)scrVmPub.function_count; i++) {
                 function_frame_t *frame = &scrVmPub.function_frame_start[i];
                 frame->fs.localVarCount = VM_RestoreLocalVarsFromSibling(frame->fs.localId);
             }
 
             localVarCount = VM_RestoreArchivedLocalVars(stackValue);
-            scrVmPub.function_frame_start[scrVmPub.function_count - 1].fs.localVarCount = localVarCount;
         } else {
             localVarCount = VM_RestoreArchivedLocalVars(stackValue);
         }
@@ -8018,6 +8244,10 @@ static void VM_Resume(unsigned int timeId)
         endLocalId = VM_Execute(fs);
         RemoveRefToObject(endLocalId);
         RemoveRefToValue(scrVmPub.stack[1].type, scrVmPub.stack[1].u);
+        scrVmPub.function_count = 0;
+        scrVmPub.function_frame = scrVmPub.function_frame_start;
+        scrVmPub.stack[0].type = 7;
+        scrVmPub.top = scrVmPub.stack;
     }
 
     RemoveRefToObject(timeId);
@@ -8085,9 +8315,6 @@ __attribute__((noinline)) unsigned int __attribute_regparm__(3)
     VariableValue *startTop;
     unsigned int oldInParamCount;
     unsigned int result;
-
-    Com_Printf("VM_ExecuteExtCall: thread=%u pos=%p params=%u\n",
-               threadId, (void *)pos, paramcount);
 
     while (scrVmPub.outparamcount) {
         RemoveRefToValue(scrVmPub.top->type, scrVmPub.top->u);

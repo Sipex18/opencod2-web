@@ -34,7 +34,6 @@ languageInfo_t g_languages[] = {
 static qboolean g_currentAsian;
 
 extern const dvar_t *com_developer;
-extern int __mh_execute_header;
 extern byte *__DefaultRuneLocale;
 
 extern void SE_Init(void);
@@ -146,8 +145,8 @@ void SEH_InitLanguage(void)
     loc_language = Dvar_RegisterInt("loc_language", 0, 0, 13, 0x1021);
     loc_forceEnglish = Dvar_RegisterBool("loc_forceEnglish", 0, 0x1021);
     loc_translate = Dvar_RegisterBool("loc_translate", 1, 0x1020);
-    loc_warnings = Dvar_RegisterBool("loc_warnings", 0, (int)&__mh_execute_header);
-    loc_warningsAsErrors = Dvar_RegisterBool("loc_warningsAsErrors", 0, (int)&__mh_execute_header);
+    loc_warnings = Dvar_RegisterBool("loc_warnings", 0, COD2_MH_EXECUTE_HEADER);
+    loc_warningsAsErrors = Dvar_RegisterBool("loc_warningsAsErrors", 0, COD2_MH_EXECUTE_HEADER);
 
     g_currentAsian = ((unsigned int)(loc_language->current.integer - 8) <= 4);
 }

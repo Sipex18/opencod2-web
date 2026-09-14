@@ -7,7 +7,7 @@ extern void jpeg_CreateCompress(j_compress_ptr cinfo, int version, size_t struct
 extern void jpeg_set_defaults(j_compress_ptr cinfo);
 extern void jpeg_set_quality(j_compress_ptr cinfo, int quality, int force_baseline);
 extern void jpeg_start_compress(j_compress_ptr cinfo, int write_all_tables);
-extern void jpeg_write_scanlines(j_compress_ptr cinfo, byte **scanlines, int num_lines);
+extern unsigned int jpeg_write_scanlines(j_compress_ptr cinfo, byte **scanlines, int num_lines);
 extern void jpeg_finish_compress(j_compress_ptr cinfo);
 extern void jpeg_destroy_compress(j_compress_ptr cinfo);
 extern void jpeg_CreateDecompress(void *cinfo, int version, int structsize);
@@ -17,9 +17,9 @@ extern void jpeg_memory_src(void *cinfo, byte *data, int size);
 extern void jpeg_mem_src(void *cinfo, const unsigned char *data, unsigned long size);
 #endif
 extern int jpeg_read_header(void *cinfo, int require_image);
-extern void jpeg_start_decompress(void *cinfo);
-extern void jpeg_read_scanlines(void *cinfo, byte **scanlines, int num_lines);
-extern void jpeg_finish_decompress(void *cinfo);
+extern int jpeg_start_decompress(void *cinfo);
+extern unsigned int jpeg_read_scanlines(void *cinfo, byte **scanlines, int num_lines);
+extern int jpeg_finish_decompress(void *cinfo);
 extern void jpeg_destroy_decompress(void *cinfo);
 
 extern byte r_limits_ptr[];

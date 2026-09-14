@@ -1,6 +1,7 @@
 #include "common_types.h"
 #include "imports.h"
 #include "bytematch.h"
+#include <string.h>
 
 #define MATERIAL_REGPARM2_ABI COD2_REGPARM(2)
 #define MATERIAL_REGPARM3_ABI COD2_REGPARM(3)
@@ -158,11 +159,19 @@ static Bool MATERIAL_REGPARM3_ABI Material_ValidatePassArguments_impl(const Mate
                 }
             }
             if (!found) {
-                Com_Printf("material '%s' using technique '%s' from techniqueSet '%s' doesn't have texture '%s'\n",
-                           material->info.name, techniqueName, techniqueSetName, argName);
 #ifdef __EMSCRIPTEN__
+                /* featherParms/detailScale are optional on many materials —
+                 * printing each miss costs ~3.4ms on web (main-thread proxy),
+                 * ~1300 lines during BSP load ≈ 4s of map load time. */
+                if (argName && strcmp(argName, "featherParms") != 0 &&
+                    strcmp(argName, "detailScale") != 0) {
+                    Com_Printf("material '%s' using technique '%s' from techniqueSet '%s' doesn't have texture '%s'\n",
+                               material->info.name, techniqueName, techniqueSetName, argName);
+                }
                 continue;
 #else
+                Com_Printf("material '%s' using technique '%s' from techniqueSet '%s' doesn't have texture '%s'\n",
+                           material->info.name, techniqueName, techniqueSetName, argName);
                 return 0;
 #endif
             }
@@ -726,6 +735,31 @@ extern void *Material_RegisterLiteral(float *literal);
 extern void Com_SkipRestOfLine(const char **text);
 extern int printf(const char *fmt, ...);
 
+#ifdef __EMSCRIPTEN__
+/* Empty D3DX CT has no register indices. dest=nArgs mixed constants into sampler
+ * slots so colorMap landed on s1+ while ARB stubs sample texture[0]/texture[1]
+ * (D3DXShader.c arb_ps_textured / arb_ps_lightmap). */
+static unsigned short Material_WebStubSamplerDest(const char *name)
+{
+    if (!name || !name[0])
+        return 0;
+    if (strstr(name, "lightmap") || strstr(name, "Lightmap"))
+        return 1;
+    /*
+     * FF WebGL only samples s0 (diffuse) and s1 (lightmap). Empty-CT argument
+     * lists put every non-lightmap sampler on dest 0, so normalMap/specularMap
+     * overwrite colorMap. Keep bump/spec/detail off s0.
+     * SEMANTIC_COLOR=2, NORMAL=3, SPECULAR=4 (material_util + cod2map).
+     */
+    if (strstr(name, "normal") || strstr(name, "Normal") ||
+        strstr(name, "bump") || strstr(name, "Bump") ||
+        strstr(name, "specular") || strstr(name, "Specular") ||
+        strstr(name, "detail") || strstr(name, "Detail"))
+        return 2;
+    return 0;
+}
+#endif
+
 static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const char **text, const byte *mtlShader,
                                                                        short unsigned int *techFlags, short unsigned int *argCount, MaterialShaderArgument **args)
 {
@@ -794,9 +828,18 @@ static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const cha
         for (;;) {
             const char *token = Com_Parse(text);
             MaterialShaderArgument *arg;
+            char lhsName[64];
 
             if (token[0] == '\0' || token[0] == '}')
                 break;
+
+            {
+                size_t n = strlen(token);
+                if (n >= sizeof(lhsName))
+                    n = sizeof(lhsName) - 1;
+                memcpy(lhsName, token, n);
+                lhsName[n] = '\0';
+            }
 
             if (!Com_MatchToken(text, "=", 1))
                 goto fail;
@@ -856,6 +899,9 @@ static Bool MATERIAL_REGPARM3_ABI Material_SetPassShaderArguments_impl(const cha
             if (!Com_MatchToken(text, ";", 1))
                 goto fail;
 
+            if (arg->type == 3 || arg->type == 4) {
+                arg->dest = Material_WebStubSamplerDest(lhsName);
+            }
             if (arg->type == 3) {
                 if (arg->u.codeSampler == 0xE)
                     *techFlags |= 1;

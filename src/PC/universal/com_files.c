@@ -2614,6 +2614,7 @@ typedef struct webIwdFile_s {
     int size;
     struct webIwd_s *iwd;
     struct webIwdFile_s *next;
+    struct webIwdFile_s *hashNext;
 } webIwdFile_t;
 
 typedef struct webIwd_s {
@@ -2621,11 +2622,18 @@ typedef struct webIwd_s {
     unzFile zipHandle;
     qboolean localized;
     int language;
+    long totalSize;
     webIwdFile_t *files;
+    webIwdFile_t **hashTable;
+    int hashSize;
+    int fileCount;
     struct webIwd_s *next;
 } webIwd_t;
 
 static webIwd_t *fs_webIwds;
+/* Parsed IWD indexes kept across FS_Restart cycles — re-parsing ~36k index
+ * lines from OPFS costs ~2s per FS_Restart (server start). */
+static webIwd_t *fs_webIwdCache;
 static qboolean fs_webStarted;
 
 static int FS_WebAllocMemFile(const byte *data, int size)
@@ -2888,6 +2896,44 @@ static long FS_WebFileSize(const char *path)
     return (long)st.st_size;
 }
 
+/* Same power-of-two hash as vanilla FS_LoadIwd / FS_HashFileName. */
+static void FS_WebBuildIwdHash(webIwd_t *iwd, int fileCount)
+{
+    int hashSize;
+    int i;
+    webIwdFile_t *file;
+
+    if (!iwd || fileCount <= 0) {
+        return;
+    }
+    if (iwd->hashTable) {
+        Z_FreeInternal(iwd->hashTable);
+        iwd->hashTable = NULL;
+    }
+
+    hashSize = 1;
+    for (i = 11; i && hashSize <= fileCount; i--) {
+        hashSize <<= 1;
+    }
+    iwd->hashSize = hashSize;
+    iwd->fileCount = fileCount;
+    iwd->hashTable = (webIwdFile_t **)Z_MallocInternal(hashSize * (int)sizeof(webIwdFile_t *));
+    if (!iwd->hashTable) {
+        iwd->hashSize = 0;
+        return;
+    }
+    Com_Memset(iwd->hashTable, 0, hashSize * (int)sizeof(webIwdFile_t *));
+    for (file = iwd->files; file; file = file->next) {
+        long hash = FS_HashFileName(file->name, hashSize);
+        file->hashNext = iwd->hashTable[hash];
+        iwd->hashTable[hash] = file;
+    }
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_Web: hash table %s buckets=%d files=%d [o1-load]\n",
+               iwd->path, hashSize, fileCount);
+#endif
+}
+
 static qboolean FS_WebTryLoadIwdIndex(webIwd_t *iwd, const char *iwdPath, long iwdSize)
 {
     char cachePath[512];
@@ -2976,6 +3022,7 @@ static qboolean FS_WebTryLoadIwdIndex(webIwd_t *iwd, const char *iwdPath, long i
     }
 
     Com_Printf("FS_Web: cached index %s (%d files)\n", iwdPath, loaded);
+    FS_WebBuildIwdHash(iwd, loaded);
     return 1;
 }
 
@@ -3022,9 +3069,33 @@ static void FS_WebAddIwd(const char *path)
     long iwdSize;
 
     iwdSize = FS_WebFileSize(path);
+
+    /* Reuse a parsed index from a previous FS cycle when path+size match. */
+    {
+        webIwd_t **link = &fs_webIwdCache;
+        while (*link) {
+            if (strcmp((*link)->path, path) == 0 &&
+                (iwdSize <= 0 || (*link)->totalSize == iwdSize)) {
+                webIwd_t *cached = *link;
+                *link = cached->next;
+                cached->next = fs_webIwds;
+                cached->zipHandle = NULL;
+                fs_webIwds = cached;
+                Com_Printf("FS_Web: reused index %s (%d files) [o1-load]\n",
+                           path, cached->fileCount);
+                if (cached->localized) {
+                    FS_WebAddLanguageSearchPath(cached->language);
+                }
+                return;
+            }
+            link = &(*link)->next;
+        }
+    }
+
     iwd = (webIwd_t *)Z_MallocInternal(sizeof(*iwd));
     Com_Memset(iwd, 0, sizeof(*iwd));
     I_strncpyz(iwd->path, path, sizeof(iwd->path));
+    iwd->totalSize = iwdSize;
     FS_WebDetectLocalizedIwd(iwd, path);
 
     if (iwdSize > 0 && FS_WebTryLoadIwdIndex(iwd, path, iwdSize)) {
@@ -3079,6 +3150,7 @@ static void FS_WebAddIwd(const char *path)
     iwd->next = fs_webIwds;
     fs_webIwds = iwd;
     Com_Printf("FS_Web: indexed %s (%d files)\n", path, fileCount);
+    FS_WebBuildIwdHash(iwd, fileCount);
 
     if (iwdSize > 0) {
         FS_WebSaveIwdIndex(iwd, iwdSize, fileCount);
@@ -3119,20 +3191,15 @@ static void FS_WebShutdownIwds(void)
     iwd = fs_webIwds;
     while (iwd) {
         webIwd_t *nextIwd = iwd->next;
-        webIwdFile_t *file = iwd->files;
 
         if (iwd->zipHandle) {
             unzClose(iwd->zipHandle);
             iwd->zipHandle = NULL;
         }
 
-        while (file) {
-            webIwdFile_t *nextFile = file->next;
-            Z_FreeInternal(file);
-            file = nextFile;
-        }
-
-        Z_FreeInternal(iwd);
+        /* Keep parsed files+hashTable — park in the restart cache. */
+        iwd->next = fs_webIwdCache;
+        fs_webIwdCache = iwd;
         iwd = nextIwd;
     }
 
@@ -3231,9 +3298,18 @@ static const webIwdFile_t *FS_WebFindIwdFile(const char *qpath)
             }
         }
 
-        for (file = iwd->files; file; file = file->next) {
-            if (!FS_WebStringCompare(file->name, normalized)) {
-                return file;
+        if (iwd->hashTable && iwd->hashSize > 0) {
+            long hash = FS_HashFileName(normalized, iwd->hashSize);
+            for (file = iwd->hashTable[hash]; file; file = file->hashNext) {
+                if (!FS_WebStringCompare(file->name, normalized)) {
+                    return file;
+                }
+            }
+        } else {
+            for (file = iwd->files; file; file = file->next) {
+                if (!FS_WebStringCompare(file->name, normalized)) {
+                    return file;
+                }
             }
         }
     }
@@ -4141,7 +4217,14 @@ void FS_Restart(int checksumFeed)
 {
     searchpath_t *search;
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_Restart: begin (checksumFeed=%d)\n", checksumFeed);
+#endif
+
     FS_Shutdown(0);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_Restart: after FS_Shutdown\n");
+#endif
     fs_checksumFeed = checksumFeed;
 
     for (search = fs_searchpaths; search; search = (searchpath_t *)(uintptr_t)search->next) {
@@ -4151,9 +4234,15 @@ void FS_Restart(int checksumFeed)
     }
 
     FS_Startup("main");
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_Restart: after FS_Startup\n");
+#endif
     SEH_Init_StringEd();
     SEH_UpdateLanguageInfo();
     FS_SetRestrictions();
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_Restart: after SetRestrictions, reading default_mp.cfg\n");
+#endif
 
     if (FS_ReadFile("default_mp.cfg", NULL) <= 0) {
         if (lastValidBase[0]) {
@@ -4181,6 +4270,13 @@ void FS_Restart(int checksumFeed)
 qboolean FS_ConditionalRestart(int checksumFeed)
 {
     const dvar_t *sv_running = *(const dvar_t **)imp_com_sv_running;
+
+#ifdef __EMSCRIPTEN__
+    Com_Printf("FS_ConditionalRestart: enter svRunning=%d modified=%d feed=%d/%d\n",
+               sv_running ? sv_running->current.enabled : -1,
+               fs_gameDirVar ? fs_gameDirVar->modified : -1,
+               fs_checksumFeed, checksumFeed);
+#endif
 
     if (sv_running && sv_running->current.enabled)
         return 0;

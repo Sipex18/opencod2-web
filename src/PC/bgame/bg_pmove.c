@@ -28,6 +28,8 @@ extern qboolean BG_CheckProne(int passEntityNum, const vec_t *vPos, const float 
 extern float Vec3Normalize(vec_t *v);
 extern float Vec2Normalize(vec_t *v);
 extern void Com_Printf(const char *fmt, ...);
+extern void AddLeanToPosition(vec_t *position, float fViewYaw, float fLeanFrac, float fViewRoll, float fLeanDist);
+extern float UnGetLeanFraction(float fFrac);
 
 extern const dvar_t *friction;
 extern const dvar_t *stopspeed;
@@ -112,8 +114,8 @@ extern void Mantle_CapView(playerState_t *ps);
 extern void AngleVectors(const vec_t *angles, vec_t *forward, vec_t *right, vec_t *up);
 extern void Sys_SnapVector(vec_t *v);
 
-extern int Jump_ActivateSlowdown(playerState_t *ps);
-extern int PM_ExitAimDownSight(playerState_t *ps);
+extern void Jump_ActivateSlowdown(playerState_t *ps);
+extern void PM_ExitAimDownSight(playerState_t *ps);
 extern int BG_PlayAnim(playerState_t *ps, int animNum, int bodyPart, int forceDuration, qboolean setTimer, qboolean isContinue, qboolean force);
 extern float PitchForYawOnNormal(float fYaw, const vec_t *normal);
 extern const dvar_t *bg_fallDamageMinHeight;
@@ -387,28 +389,10 @@ static void PM_DropTimers(playerState_t *ps, int msec)
         }
     }
 
-    if (ps->weaponTime > 0) {
-        ps->weaponTime -= msec;
-        if (ps->weaponTime < 0)
-            ps->weaponTime = 0;
-    }
-
-    if (ps->weaponDelay > 0) {
-        ps->weaponDelay -= msec;
-        if (ps->weaponDelay < 0)
-            ps->weaponDelay = 0;
-    }
-
     if (ps->grenadeTimeLeft > 0) {
         ps->grenadeTimeLeft -= msec;
         if (ps->grenadeTimeLeft < 0)
             ps->grenadeTimeLeft = 0;
-    }
-
-    if (ps->weaponRestrictKickTime > 0) {
-        ps->weaponRestrictKickTime -= msec;
-        if (ps->weaponRestrictKickTime < 0)
-            ps->weaponRestrictKickTime = 0;
     }
 
     if (ps->foliageSoundTime > 0) {
@@ -429,19 +413,94 @@ static void PM_DropTimers(playerState_t *ps, int msec)
             ps->damageDuration = 0;
     }
 
-    if (ps->holdBreathTimer > 0) {
-        ps->holdBreathTimer -= msec;
-        if (ps->holdBreathTimer < 0)
-            ps->holdBreathTimer = 0;
-    }
 }
 
 void PM_UpdateLean(playerState_t *ps, float msec, usercmd_t *cmd, void (*capsuleTrace)())
 {
-    (void)msec;
-    (void)cmd;
-    (void)capsuleTrace;
-    ps->leanf = 0.0f;
+    int leanDir;
+    float leanMax;
+    float curLean;
+    float newLean;
+    trace_t trace;
+    vec3_t start, end, mins, maxs;
+
+    if ((cmd->buttons & 0xC0) != 0 && (ps->pm_flags & 0x8000) == 0 &&
+        ps->pm_type <= 5 &&
+        (ps->groundEntityNum != ENTITYNUM_NONE || ps->pm_type == 1)) {
+        if (cmd->buttons & 0x40)
+            leanDir = -1;
+        else
+            leanDir = 1;
+        if ((cmd->buttons & 0x80) != 0)
+            leanDir = (cmd->buttons & 0x40) ? 0 : 1;
+    } else {
+        leanDir = 0;
+    }
+
+    if (ps->eFlags & 0x300)
+        leanDir = 0;
+
+    leanMax = (ps->viewHeightTarget == 11) ? 0.25f : 0.5f;
+    curLean = ps->leanf;
+
+    if (leanDir) {
+        if (leanDir > 0) {
+            if (leanMax > curLean) {
+                newLean = curLean + (msec / 350.0f) * leanMax;
+                if (newLean > leanMax)
+                    newLean = leanMax;
+            } else {
+                newLean = curLean;
+            }
+        } else {
+            newLean = -leanMax;
+            if (curLean > -leanMax)
+                newLean = curLean + (leanMax * (msec / -350.0f));
+            if (-leanMax > newLean)
+                newLean = -leanMax;
+        }
+    } else {
+        if (curLean > 0.0f) {
+            newLean = curLean + (msec / -280.0f) * leanMax;
+            if (newLean < 0.0f)
+                newLean = 0.0f;
+        } else if (curLean < 0.0f) {
+            newLean = curLean + (msec / 280.0f) * leanMax;
+            if (newLean > 0.0f)
+                newLean = 0.0f;
+        } else {
+            newLean = curLean;
+        }
+    }
+
+    ps->leanf = newLean;
+
+    if (newLean != 0.0f) {
+        float leanFrac;
+
+        start[0] = ps->origin[0];
+        start[1] = ps->origin[1];
+        start[2] = ps->origin[2] + ps->viewHeightCurrent;
+        end[0] = start[0];
+        end[1] = start[1];
+        end[2] = start[2];
+
+        AddLeanToPosition(end, ps->viewangles[1],
+                          (float)(-2 * (newLean < 0.0f) + 1), 16.0f, 20.0f);
+
+        mins[0] = -0.5f;
+        mins[1] = -0.5f;
+        mins[2] = -0.5f;
+        maxs[0] = 0.5f;
+        maxs[1] = 0.5f;
+        maxs[2] = 0.5f;
+
+        capsuleTrace(&trace, start, mins, maxs, end, ps->clientNum, 42008593);
+
+        leanFrac = UnGetLeanFraction(trace.fraction);
+        if (fabsf(ps->leanf) > leanFrac)
+            ps->leanf = (float)(-2 * (ps->leanf < 0.0f) + 1) * leanFrac;
+    }
 }
 
 void PM_UpdateViewAngles(playerState_t *ps, float msec, usercmd_t *cmd, int handler)
@@ -1523,17 +1582,105 @@ restart_lerp: {
 
 void PM_UpdatePronePitch(pmove_t *pm, pml_t *pml)
 {
-    (void)pm;
-    (void)pml;
+    playerState_t *ps = pm->ps;
+    float targetPitch;
+    float delta;
+
+    if (!(ps->pm_flags & 0x1))
+        return;
+
+    if (ps->groundEntityNum == ENTITYNUM_NONE) {
+        vec_t *normal;
+
+        if (pml->groundPlane)
+            normal = pml->groundTrace.normal;
+        else
+            normal = NULL;
+
+        if (!BG_CheckProne(
+                ps->clientNum,
+                ps->origin,
+                ps->maxs[0],
+                30.0f,
+                ps->proneDirection,
+                &ps->fTorsoHeight,
+                &ps->fTorsoPitch,
+                &ps->fWaistPitch,
+                1,
+                0,
+                normal,
+                pm->handler,
+                PCT_CLIENT,
+                66.0f)) {
+            BG_AddPredictableEventToPlayerstate(141, 0, ps);
+            ps->pm_flags |= 0x10000u;
+        }
+
+        if (pml->groundPlane)
+            targetPitch = PitchForYawOnNormal(ps->proneDirection, pml->groundTrace.normal);
+        else
+            targetPitch = 0.0f;
+    } else {
+        if (!pml->groundPlane) {
+            targetPitch = 0.0f;
+        } else {
+            if (pml->groundTrace.normal[2] < 0.69999999f)
+                BG_AddPredictableEventToPlayerstate(141, 0, ps);
+            targetPitch = PitchForYawOnNormal(ps->proneDirection, pml->groundTrace.normal);
+        }
+    }
+
+    delta = AngleDelta(targetPitch, ps->proneDirectionPitch);
+    if (delta != 0.0f) {
+        float maxStep = 70.0f * pml->frametime;
+        if (fabsf(delta) <= maxStep)
+            ps->proneDirectionPitch += delta;
+        else
+            ps->proneDirectionPitch += (float)(-2 * (delta < 0.0f) + 1) * maxStep;
+        ps->proneDirectionPitch = AngleNormalize180Accurate(ps->proneDirectionPitch);
+    }
+
+    if (pml->groundPlane)
+        targetPitch = PitchForYawOnNormal(ps->viewangles[1], pml->groundTrace.normal);
+    else
+        targetPitch = 0.0f;
+
+    delta = AngleDelta(targetPitch, ps->proneTorsoPitch);
+    if (delta != 0.0f) {
+        float maxStep = 70.0f * pml->frametime;
+        if (fabsf(delta) <= maxStep)
+            ps->proneTorsoPitch += delta;
+        else
+            ps->proneTorsoPitch += (float)(-2 * (delta < 0.0f) + 1) * maxStep;
+        ps->proneTorsoPitch = AngleNormalize180Accurate(ps->proneTorsoPitch);
+    }
 }
 
 void PM_FootstepEvent(pmove_t *pm, pml_t *pml, int iOldBobCycle, int iNewBobCycle, qboolean bFootStep)
 {
-    (void)pm;
-    (void)pml;
+    int surfaceType;
+    int event;
+
     (void)iOldBobCycle;
     (void)iNewBobCycle;
-    (void)bFootStep;
+
+    if (!bFootStep)
+        return;
+    if (pm->ps->groundEntityNum == ENTITYNUM_NONE)
+        return;
+
+    surfaceType = PM_GroundSurfaceType(pml);
+    if (surfaceType) {
+        if (pm->ps->pm_flags & 1)
+            event = surfaceType + 47;
+        else if ((pm->ps->pm_flags & 0x100) || pm->ps->leanf != 0.0f)
+            event = surfaceType + 24;
+        else
+            event = surfaceType + 1;
+    } else {
+        event = 0;
+    }
+    PM_AddEvent(pm->ps, event);
 }
 
 static void PM_REGPARM2_ABI PM_Footsteps(pmove_t *pm, pml_t *pml)
@@ -1897,6 +2044,7 @@ void Pmove(pmove_t *pm)
 
         if (ps->pm_type <= 5) {
             PM_GroundTrace(pm, &pml);
+            PM_UpdatePronePitch(pm, &pml);
 
             if (ps->pm_flags & PMF_LADDER) {
                 PM_LadderMove(pm, &pml);
@@ -1923,6 +2071,30 @@ void Pmove(pmove_t *pm)
 
         ps->commandTime = pm->cmd.serverTime;
         pm->oldcmd = pm->cmd;
+    }
+
+    {
+        /* Stuck detector: grounded player holding move keys but with no
+         * horizontal velocity for many consecutive pmove steps. Prints the
+         * exact origin/state so the cause (solid brush, ghost entity, wrong
+         * ground normal...) can be pinned down from the browser console. */
+        static int stuckFrames[2];
+        static int stuckPrinted[2];
+        int hidx = (unsigned char)pm->handler & 1;
+        int moveHeld = pm->cmd.forwardmove || pm->cmd.rightmove;
+
+        if (ps->pm_type <= 5 && moveHeld &&
+            ps->groundEntityNum != ENTITYNUM_NONE) {
+            float v2 = ps->velocity[0] * ps->velocity[0] +
+                       ps->velocity[1] * ps->velocity[1];
+            if (v2 < 1.0f) {
+                stuckFrames[hidx]++;
+            } else {
+                stuckFrames[hidx] = 0;
+            }
+        } else {
+            stuckFrames[hidx] = 0;
+        }
     }
 }
 

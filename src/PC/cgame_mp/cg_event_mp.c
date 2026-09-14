@@ -17,10 +17,12 @@ extern void Com_DPrintf(const char *msg, ...);
 extern void Com_Error(int level, const char *msg, ...);
 extern void *BG_GetWeaponDef(int weapon);
 extern int BG_WeaponIsClipOnly(int weapon);
-extern void CG_PlayEntitySoundAlias(int entNum, int alias);
-extern int CG_PlaySoundAlias(int entNum, void *origin, int alias);
-extern int CG_PlaySoundAliasByName(int entNum, void *origin, const char *name);
-extern int CG_PlaySoundAliasAsMasterByName(int entNum, void *origin, const char *name);
+/* Must match cg_main_mp.c / cg_funcs.h: wasm types void(i32,i32) vs i32(i32,i32)
+ * diverge, and mismatched call sites are lowered to unreachable. */
+extern int CG_PlayEntitySoundAlias(int entitynum, snd_alias_list_t *aliasList);
+extern int CG_PlaySoundAlias(int entitynum, const vec_t *origin, snd_alias_list_t *aliasList);
+extern int CG_PlaySoundAliasByName(int entitynum, const vec_t *origin, const char *aliasname);
+extern int CG_PlaySoundAliasAsMasterByName(int entitynum, const vec_t *origin, const char *aliasname);
 extern void CG_FireWeapon(centity_t *cent, int weaponId, int hand);
 extern void CG_EjectWeaponBrass(entityState_t *es, int weaponId);
 extern void CG_PrepOffHand(entityState_t *es, int weaponId, int eventParm);
@@ -35,9 +37,10 @@ extern void CG_StartShakeCamera(float scale, int duration, const vec_t *src, flo
 extern void CG_BulletHitEvent(int otherEntNum, void *position, void *dir, void *reflect, int surfType, int event);
 extern void CG_BulletHitClientEvent(int otherEntNum, void *position, int surfType, int event);
 extern void CG_CompassAddWeaponPingInfo(void *ent, void *position, int duration);
-extern unsigned int CG_PriorityCenterPrint(const char *msg, float scale, int priority);
+/* Definition in cg_draw_mp.c is void; i32 return here caused wasm-ld sig mismatch + GC. */
+extern void CG_PriorityCenterPrint(const char *msg, float scale, int priority);
 extern void CL_DeathMessagePrint(const char *attackerName, float *attackerColor, const char *targetName, float *victimColor, const char *iconShader, float iconWidth, float iconHeight, float *iconColor, int iconHorzFlip);
-extern float CG_DrawScoreboard_GetTeamColor(int team, float *color);
+extern void CG_DrawScoreboard_GetTeamColor(int team, float *color);
 extern void CL_SetADS(int val);
 extern void CG_CalcEntityLerpPositions(centity_t *cent);
 extern void CG_CheckOpenWaitingScriptMenu(void);
@@ -156,8 +159,19 @@ void CG_CheckEvents(centity_t *cent);
 
 static void PlayProneSound(int entNum, int isFirstPerson, int soundOffset)
 {
-    int alias = *(int *)((char *)cgs + soundOffset);
+    snd_alias_list_t *alias = *(snd_alias_list_t **)((char *)cgs + soundOffset);
     CG_PlayEntitySoundAlias(entNum, alias);
+}
+
+static void CG_EntityEventUnhandled(int event)
+{
+    static unsigned char unhandledSeen[256];
+    unsigned int e = (unsigned int)event;
+    if (e < 256 && !unhandledSeen[e]) {
+        unhandledSeen[e] = 1;
+        Com_DPrintf("CG_EntityEvent: unhandled event '%s' (%d) -- not yet reconstructed (warned once)\n",
+                    CG_EventNames()[event], event);
+    }
 }
 
 void CG_EntityEvent(centity_t *cent, int event)
@@ -426,10 +440,8 @@ void CG_EntityEvent(centity_t *cent, int event)
     {
         int jmpIdx = event - 0x8b;
         if ((unsigned int)jmpIdx > 0x3b) {
-
-            char **eventNames = CG_EventNames();
-
-            Com_Error(1, (const char *)"\x15Unknown event: '%s'", eventNames[event]);
+            /* Hard Com_Error here becomes a wasm trap (unreachable) after longjmp. */
+            CG_EntityEventUnhandled(event);
             return;
         }
 
@@ -444,11 +456,11 @@ void CG_EntityEvent(centity_t *cent, int event)
         case 0xac:
             return;
 
-        case 0xb2:
-        case 0xb8:
-        case 0xc0:
-        case 0xc1:
-            Com_Error(1, (const char *)"\x15Unknown event: '%s'", CG_EventNames()[event]);
+        case 0xb2: /* EV_BULLET_TRACER — stub */
+        case 0xb8: /* EV_BULLET_HIT_AP — stub */
+        case 0xc0: /* EV_CUSTOM_EXPLODE_NOMARKS — stub */
+        case 0xc1: /* EV_BULLET — stub */
+            CG_EntityEventUnhandled(event);
             return;
 
         case 0x8b: {
@@ -611,14 +623,14 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadSoundPlayer) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadSoundPlayer;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEmptySoundPlayer) ;
+                alias = ((weaponInfo_t *)wepData)->reloadEmptySoundPlayer;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
@@ -629,13 +641,13 @@ void CG_EntityEvent(centity_t *cent, int event)
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
 
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadSound) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEmptySound) ;
+                alias = ((weaponInfo_t *)wepData)->reloadEmptySound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
@@ -651,14 +663,14 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEmptySoundPlayer) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadEmptySoundPlayer;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadSoundPlayer) ;
+                alias = ((weaponInfo_t *)wepData)->reloadSoundPlayer;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
@@ -669,13 +681,13 @@ void CG_EntityEvent(centity_t *cent, int event)
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
 
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEmptySound) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadEmptySound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadSound) ;
+                alias = ((weaponInfo_t *)wepData)->reloadSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
@@ -691,14 +703,14 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadStartSoundPlayer) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadStartSoundPlayer;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadStartSound) ;
+                alias = ((weaponInfo_t *)wepData)->reloadStartSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                 }
@@ -708,7 +720,7 @@ void CG_EntityEvent(centity_t *cent, int event)
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
 
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEndSound) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadEndSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                 }
@@ -723,14 +735,14 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEndSoundPlayer) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadEndSoundPlayer;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->reloadEndSound) ;
+                alias = ((weaponInfo_t *)wepData)->reloadEndSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                 }
@@ -740,7 +752,7 @@ void CG_EntityEvent(centity_t *cent, int event)
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
 
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->reloadStartSound) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->reloadStartSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                 }
@@ -799,7 +811,7 @@ void CG_EntityEvent(centity_t *cent, int event)
             int wepOff = weaponDataOffset(weapon);
             char *wepDefs = CG_WeaponInfoBase();
             char *wepData = wepDefs + wepOff * 4;
-            int alias = (*(int *)&((weaponInfo_t *)wepData)->raiseSound) ;
+            snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->raiseSound;
             if (alias != 0) {
 
                 CG_PlayEntitySoundAlias(es->number, alias);
@@ -813,7 +825,7 @@ void CG_EntityEvent(centity_t *cent, int event)
             int wepOff = weaponDataOffset(weapon);
             char *wepDefs = CG_WeaponInfoBase();
             char *wepData = wepDefs + wepOff * 4;
-            int alias = (*(int *)&((weaponInfo_t *)wepData)->putawaySound) ;
+            snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->putawaySound;
             if (alias != 0) {
 
                 CG_PlayEntitySoundAlias(es->number, alias);
@@ -827,7 +839,7 @@ void CG_EntityEvent(centity_t *cent, int event)
             int wepOff = weaponDataOffset(weapon);
             char *wepDefs = CG_WeaponInfoBase();
             char *wepData = wepDefs + wepOff * 4;
-            int alias = (*(int *)&((weaponInfo_t *)wepData)->altSwitchSound) ;
+            snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->altSwitchSound;
             if (alias != 0) {
 
                 CG_PlayEntitySoundAlias(es->number, alias);
@@ -887,7 +899,7 @@ void CG_EntityEvent(centity_t *cent, int event)
             int wepOff = weaponDataOffset(weapon);
             char *wepDefs = CG_WeaponInfoBase();
             char *wepData = wepDefs + wepOff * 4;
-            int alias = (*(int *)&((weaponInfo_t *)wepData)->pullbackSound) ;
+            snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->pullbackSound;
             if (alias != 0) {
 
                 CG_PlayEntitySoundAlias(es->number, alias);
@@ -910,14 +922,14 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->rechamberSoundPlayer) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->rechamberSoundPlayer;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
                     return;
                 }
 
-                alias = (*(int *)&((weaponInfo_t *)wepData)->rechamberSound) ;
+                alias = ((weaponInfo_t *)wepData)->rechamberSound;
                 if (alias != 0) {
                     CG_PlayEntitySoundAlias(es->number, alias);
                 }
@@ -926,7 +938,7 @@ void CG_EntityEvent(centity_t *cent, int event)
                 int wepOff = weaponDataOffset(weapon);
                 char *wepDefs = CG_WeaponInfoBase();
                 char *wepData = wepDefs + wepOff * 4;
-                int alias = (*(int *)&((weaponInfo_t *)wepData)->meleeSwipeSound) ;
+                snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->meleeSwipeSound;
                 if (alias != 0) {
 
                     CG_PlayEntitySoundAlias(es->number, alias);
@@ -946,7 +958,7 @@ void CG_EntityEvent(centity_t *cent, int event)
             int wepOff = weaponDataOffset(weapon);
             char *wepDefs = CG_WeaponInfoBase();
             char *wepData = wepDefs + wepOff * 4;
-            int alias = (*(int *)&((weaponInfo_t *)wepData)->meleeSwipeSound) ;
+            snd_alias_list_t *alias = ((weaponInfo_t *)wepData)->meleeSwipeSound;
             if (alias != 0) {
 
                 CG_PlayEntitySoundAlias(es->number, alias);
@@ -1089,7 +1101,7 @@ void CG_EntityEvent(centity_t *cent, int event)
                 weapon = es->weapon;
                 wepOff = weaponDataOffset(weapon);
 
-                int sndAlias = *(int *)(wepDefs + 0x168 + wepOff * 4);
+                snd_alias_list_t *sndAlias = *(snd_alias_list_t **)(wepDefs + 0x168 + wepOff * 4);
                 if (sndAlias != 0) {
 
                     CG_PlaySoundAlias(0x3fe, position, sndAlias);
@@ -1133,7 +1145,7 @@ void CG_EntityEvent(centity_t *cent, int event)
 
                 weapon = es->weapon;
                 wepOff = weaponDataOffset(weapon);
-                int sndAlias = *(int *)(wepDefs + 0x168 + wepOff * 4);
+                snd_alias_list_t *sndAlias = *(snd_alias_list_t **)(wepDefs + 0x168 + wepOff * 4);
                 if (sndAlias != 0) {
 
                     CG_PlaySoundAlias(0x3fe, position, sndAlias);
@@ -1179,7 +1191,7 @@ void CG_EntityEvent(centity_t *cent, int event)
                 weapon = es->weapon;
                 wepOff = weaponDataOffset(weapon);
 
-                int sndAlias = *(int *)(wepDefs + 0x168 + wepOff * 4);
+                snd_alias_list_t *sndAlias = *(snd_alias_list_t **)(wepDefs + 0x168 + wepOff * 4);
                 if (sndAlias != 0) {
 
                     CG_PlaySoundAlias(0x3fe, position, sndAlias);
@@ -1214,7 +1226,7 @@ void CG_EntityEvent(centity_t *cent, int event)
 
                 weapon = es->weapon;
                 wepOff = weaponDataOffset(weapon);
-                int sndAlias = *(int *)(wepDefs + 0x168 + wepOff * 4);
+                snd_alias_list_t *sndAlias = *(snd_alias_list_t **)(wepDefs + 0x168 + wepOff * 4);
                 if (sndAlias == 0)
                     return;
 
@@ -1345,9 +1357,10 @@ void CG_EntityEvent(centity_t *cent, int event)
             }
 
             if ((unsigned int)target > 63) {
-
-                Com_Error(1, (const char *)"\x15"
-                                           "CG_Obituary: target out of range");
+                /* Hard Com_Error becomes a wasm trap (unreachable) after longjmp. */
+                Com_DPrintf("CG_Obituary: target out of range (%d) -- ignored\n",
+                            target);
+                return;
             }
 
             {
@@ -1516,15 +1529,7 @@ void CG_EntityEvent(centity_t *cent, int event)
         }
 
         default: {
-            {
-                static unsigned char unhandledSeen[256];
-                unsigned int e = (unsigned int)event;
-                if (e < 256 && !unhandledSeen[e]) {
-                    unhandledSeen[e] = 1;
-                    Com_DPrintf("CG_EntityEvent: unhandled event '%s' (%d) -- not yet reconstructed (warned once)\n",
-                                CG_EventNames()[event], event);
-                }
-            }
+            CG_EntityEventUnhandled(event);
             return;
         }
 

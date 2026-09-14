@@ -426,26 +426,7 @@ static void SV_InitGameVM(int restart, int savepersist)
     G_InitGame(svs.time, Sys_MillisecondsRaw(),
                restart, savepersist);
 
-    Com_Printf("webdbg: SV_InitGameVM after G_InitGame returned\n");
-#ifdef __EMSCRIPTEN__
-    puts("SYNC-DBG: SV_InitGameVM after G_InitGame");
     Sys_LoadingKeepAlive();
-    puts("SYNC-DBG: SV_InitGameVM after Sys_LoadingKeepAlive2");
-
-    for (i = 0; i < sv_maxclients->current.integer; i++) {
-        *(int *)((char *)&svs.clients[i] + 0x20c44) = 0;
-    }
-    puts("SYNC-DBG: SV_InitGameVM after client loop");
-
-    if (com_dedicated->current.integer) {
-        puts("SYNC-DBG: SV_InitGameVM before Com_DvarDump");
-        Com_DvarDump(4);
-        puts("SYNC-DBG: SV_InitGameVM after Com_DvarDump");
-    }
-    puts("SYNC-DBG: SV_InitGameVM done");
-#else
-    Sys_LoadingKeepAlive();
-    Com_Printf("webdbg: SV_InitGameVM after Sys_LoadingKeepAlive\n");
 
     for (i = 0; i < sv_maxclients->current.integer; i++) {
         *(int *)((char *)&svs.clients[i] + 0x20c44) = 0;
@@ -454,7 +435,6 @@ static void SV_InitGameVM(int restart, int savepersist)
     if (com_dedicated->current.integer) {
         Com_DvarDump(4);
     }
-#endif
 }
 
 void SV_RestartGameProgs(qboolean savepersist)

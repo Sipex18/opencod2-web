@@ -371,7 +371,10 @@ void SetClientViewAngle(gentity_t *ent, const vec_t *angle)
 
     client = ent->client;
 
-    if ((client->ps.pm_flags & 1) == 0 || (client->ps.eFlags & 0x300) != 0) {
+    /* Vanilla: prone yaw/pitch cone only while actually prone and not on a turret.
+     * The inverted test ran this at every spawn (pm_flags freshly zeroed) and
+     * rewrote spawn yaw 180 → ±45 against proneDirection=0. */
+    if ((client->ps.pm_flags & 1) != 0 && (client->ps.eFlags & 0x300) == 0) {
 
         delta = AngleNormalize180(AngleDelta(client->ps.proneDirection, newAngle[1]));
 

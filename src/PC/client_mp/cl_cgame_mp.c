@@ -74,6 +74,7 @@ extern const char *UI_ReplaceConversionString(const char *base, const char *repl
 extern qboolean UI_SetActiveMenu(int menu);
 extern int UI_GetActiveMenu(void);
 extern qboolean UI_IsFullscreen(void);
+extern void UI_CloseAll(void);
 extern void UI_CloseFocusedMenu(void);
 extern void UI_KeyEvent(int key, int down);
 extern void SCR_UpdateScreenInternal(void);
@@ -727,24 +728,31 @@ void CL_SwitchFog(int fogvar, int startTime, int transitionTime)
 }
 
 extern void *s_cmdList;
+extern void R_RenderScene(const refdef_t *refdef);
+extern int R_BeginDelayedDrawing(void);
+extern void R_EndDelayedDrawing(int marker);
+extern void R_IssueDelayedDrawing(int marker);
+
 void CL_RenderScene(const refdef_t *fd)
 {
-    RE->RenderScene(fd);
+    /* Direct call — RE->RenderScene is call_indirect; wasm traps on any
+     * signature / table mismatch (RuntimeError: unreachable). */
+    R_RenderScene(fd);
 }
 
 int CL_BeginDelayedDrawing(void)
 {
-    return RE->BeginDelayedDrawing();
+    return R_BeginDelayedDrawing();
 }
 
 void CL_EndDelayedDrawing(int marker)
 {
-    RE->EndDelayedDrawing(marker);
+    R_EndDelayedDrawing(marker);
 }
 
 void CL_IssueDelayedDrawing(int marker)
 {
-    RE->IssueDelayedDrawing(marker);
+    R_IssueDelayedDrawing(marker);
 }
 
 void CL_SetViewport(int x, int y, int width, int height)
@@ -816,13 +824,7 @@ qboolean CL_Popup(const char *menu)
     clientConnection_t *clui = CLUI_STATE;
     int fullscreen = UI_IsFullscreen();
     int activeMenu = UI_GetActiveMenu();
-    static int traceCount;
-
-    if (traceCount++ < 32) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] CL_Popup menu='%s' state=%d demo=%d fullscreen=%d active=%d\n",
-                       menu, clui->state, clui->demoplaying, fullscreen, activeMenu);
-    }
+    (void)activeMenu;
 
     if (clui->state != 8)
         return 0;
@@ -830,6 +832,12 @@ qboolean CL_Popup(const char *menu)
     if (clui->demoplaying)
         return 0;
 
+#ifdef __EMSCRIPTEN__
+    if (fullscreen && I_strnicmp(menu, "UIMENU_SCRIPT_POPUP", 0x13) == 0) {
+        UI_CloseAll();
+        fullscreen = 0;
+    }
+#endif
     if (fullscreen)
         return 0;
 
@@ -996,7 +1004,20 @@ write_new:
 
     len = FS_FOpenFileByMode("hunkusage.dat", &handle, 2);
     if (!handle) {
+#ifdef __EMSCRIPTEN__
+        /*
+         * hunkusage.dat is only a memory-preallocation size hint used to
+         * speed up subsequent loads of the same map; it has no effect on
+         * gameplay or rendering. On the web build the writable home
+         * directory (IDBFS, mounted at fs_homepath) can be unavailable or
+         * not yet synced in some environments, so treat a failed append
+         * as non-fatal instead of dropping the whole session.
+         */
+        Com_Printf("WARNING: CL_UpdateLevelHunkUsage: cannot open hunkusage.dat for append (fs_homepath may be unwritable), skipping\n");
+        return;
+#else
         Com_Error(ERR_DROP, "CL_UpdateLevelHunkUsage: cannot open for append");
+#endif
     }
 
     {
@@ -1030,7 +1051,11 @@ void CL_InitCGame(void)
     clientActive_t *cl;
 
     t1 = Sys_Milliseconds();
+#ifdef __EMSCRIPTEN__
+    Com_Printf("CL_InitCGame: map load begin\n");
+#else
     Con_Close();
+#endif
 
     cl = CL_LOCAL;
     {
@@ -1227,12 +1252,15 @@ void CL_UpdateColor(void)
     clientActive_t *cl = CL_LOCAL;
     float *alliesColor = (float *)cl->color_allies;
     float *axisColor;
+    /* Avoid short string-literal merge issues on the WASM toolchain. */
+    static const char kTeamColorAllies[] = "g_TeamColor_Allies";
+    static const char kTeamColorAxis[] = "g_TeamColor_Axis";
 
-    Dvar_GetUnpackedColorByName("g_TeamColor_Allies", alliesColor);
+    Dvar_GetUnpackedColorByName(kTeamColorAllies, alliesColor);
     alliesColor[3] = 1.0f;
 
     axisColor = (float *)cl->color_axis;
-    Dvar_GetUnpackedColorByName("g_TeamColor_Axis", axisColor);
+    Dvar_GetUnpackedColorByName(kTeamColorAxis, axisColor);
     axisColor[3] = 1.0f;
 
     RE->UpdateColor(alliesColor, axisColor);
@@ -1349,6 +1377,19 @@ void CL_SetCGameTime(void)
             if (cl->serverTime < oldServerTime) {
                 cl->serverTime = oldServerTime;
             }
+#ifdef __EMSCRIPTEN__
+            /*
+             * Local listen server has no network delay. Running behind the
+             * snapshot makes usercmd.serverTime < ps.commandTime after spawn
+             * and the server skips Pmove (msec <= 0).
+             */
+            if (I_stricmp(cls->servername, "localhost") == 0 && cl->snap.valid) {
+                if (cl->serverTime < cl->snap.serverTime)
+                    cl->serverTime = cl->snap.serverTime;
+                if (cl->serverTime <= cl->snap.ps.commandTime)
+                    cl->serverTime = cl->snap.ps.commandTime + 1;
+            }
+#endif
             cl->oldServerTime = cl->serverTime;
 
             int serverTime = cl->snap.serverTime;

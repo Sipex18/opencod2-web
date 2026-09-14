@@ -329,8 +329,11 @@ static void SCR_UpdateFrame(void)
 
     UI_UpdateTime((((clientStatic_t *)(cls))->realtime));
 
-    if (connstate >= 3 && connstate <= 8 && UI_GetActiveMenu() == 1) {
-        UI_SetActiveMenu(0);
+    if (connstate >= 3 && connstate <= 8) {
+        int activeMenu = UI_GetActiveMenu();
+        /* Close main (1) and player_profile (11) so they cannot stack over team/weapon script menus. */
+        if (activeMenu == 1 || activeMenu == 11)
+            UI_SetActiveMenu(0);
     }
 
     s_prevConnstate = connstate;

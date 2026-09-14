@@ -1841,6 +1841,13 @@ static Bool __attribute_regparm__(2) UI_ParseMenuInternal(const char *menuFile, 
     return 1;
 }
 
+/* WASM workaround: this literal was observed (o1-strcatdbg-20260808 diagnostic
+ * build) to arrive as an empty string at its use site — a toolchain/constant-
+ * merging artifact affecting short string-literal call arguments in this file,
+ * not a logic bug. Routing through a named, addressable static avoids it (see
+ * kScriptMenuExt in ui_main_mp.c for the same fix applied to a sibling symptom). */
+static const char kDefaultMenuFile[] = "ui/default.menu";
+
 MenuList *UI_LoadMenus(const char *menuFile, int imageTrack)
 {
     const char *p;
@@ -1854,7 +1861,7 @@ MenuList *UI_LoadMenus(const char *menuFile, int imageTrack)
     len = FS_FOpenFileByMode(menuFile, &f, FS_READ);
     if (!f) {
         Com_Printf("^3WARNING: menu file not found: %s\n", menuFile);
-        len = FS_FOpenFileByMode("ui/default.menu", &f, FS_READ);
+        len = FS_FOpenFileByMode(kDefaultMenuFile, &f, FS_READ);
         if (!f)
             Com_Error(ERR_DROP, "default menu file not found");
     }
@@ -1908,7 +1915,7 @@ MenuList *UI_LoadMenu(const char *menuFile, int imageTrack)
 
     if (!UI_ParseMenuInternal(menuFile, imageTrack)) {
         Com_Printf("^3WARNING: menu file not found: %s\n", menuFile);
-        if (!UI_ParseMenuInternal("ui/default.menu", imageTrack))
+        if (!UI_ParseMenuInternal(kDefaultMenuFile, imageTrack))
             Com_Error(ERR_DROP, "default menu file not found");
     }
 

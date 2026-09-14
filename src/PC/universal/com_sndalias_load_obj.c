@@ -57,7 +57,7 @@ extern void *imp_fs_gamedir;
 extern void *imp_fs_homepath;
 extern void FS_BuildOSPath(const char *base, const char *game, const char *qpath, char *ospath);
 extern void *FS_FileOpen(const char *path, const char *mode);
-extern void FS_FileClose(void *stream);
+extern int FS_FileClose(void *stream);
 extern int FS_FileExists(const char *qpath);
 extern void FS_CopyFile(const char *fromOSPath, const char *toOSPath);
 extern char **FS_ListFiles(const char *path, const char *extension, int behavior, int *numfiles, int wantsubs);

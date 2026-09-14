@@ -561,6 +561,9 @@ static void RB_EndFrame_real(void)
                     g_rdsl_ignore_decal, g_rdsl_ignore_techm1);
     }
 #endif
+#ifdef __EMSCRIPTEN__
+    /* Render frame debugging disabled for performance */
+#endif
 #ifdef GFX_REAL_D3D9
 
     if (getenv("REALD3D9_BBREAD")) {
@@ -690,6 +693,13 @@ static void RB_EndFrame_real(void)
         lastFrameEnd = t1;
     } else
 #endif
+#ifdef __EMSCRIPTEN__
+    {
+        extern HRESULT CDirect3DDevice_Present(const void *dev, const void *pSourceRect,
+                                                const void *pDestRect, void *hDestWindowOverride, const void *pDirtyRegion);
+        hr = CDirect3DDevice_Present(device, NULL, NULL, NULL, NULL);
+    }
+#else
         hr = ((HRESULT(D3DVTCC *)(void *, void *, void *, void *, void *))(vtable[0x44 / 4]))(device, NULL, NULL, NULL, NULL);
 
     if (hr < 0) {
@@ -699,6 +709,7 @@ static void RB_EndFrame_real(void)
         ((DxGlobals *)dx)->deviceLost = 1;
         R_FlushStaticModelCache();
     }
+#endif
 
     dx = (char *)imp_dx;
     *(int *)((DxGlobals *)dx)->dynamicIndexBuffer = 0;
@@ -918,16 +929,6 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
     void *device;
     void **vtable;
 
-#ifdef __EMSCRIPTEN__
-    {
-        static int clr_dbg;
-        if (clr_dbg < 3) {
-            printf("webdbg: RB_ClearScreen enter which=%d #%d\n", whichToClear, clr_dbg);
-            clr_dbg++;
-        }
-    }
-#endif
-
     if (whichToClear & 2)
         clearFlags |= 2;
     if (whichToClear & 4)
@@ -940,15 +941,6 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
     viewport[2] = dxs->renderTargetWidth;
     viewport[3] = dxs->renderTargetHeight;
     RB_SetViewport(viewport);
-#ifdef __EMSCRIPTEN__
-    {
-        static int clr_vp_dbg;
-        if (clr_vp_dbg < 3) {
-            printf("webdbg: RB_ClearScreen after SetViewport #%d\n", clr_vp_dbg);
-            clr_vp_dbg++;
-        }
-    }
-#endif
     backEnd.viewportIsDirty = 1;
 
     r = (byte)(int)floorf(color[0] * 255.0f + 0.5f);
@@ -983,13 +975,6 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
         }
 #endif
 #ifdef __EMSCRIPTEN__
-        {
-            static int clr_d3d_dbg;
-            if (clr_d3d_dbg < 3) {
-                printf("webdbg: RB_ClearScreen before D3D Clear flags=%u #%d\n", (unsigned)clearFlags, clr_d3d_dbg);
-                clr_d3d_dbg++;
-            }
-        }
         /* Direct call avoids call_indirect float/HRESULT signature traps on WASM. */
         {
             extern HRESULT CDirect3DDevice_Clear(const void *dev, DWORD count, const void *rects,
@@ -1001,15 +986,6 @@ void RB_ClearScreen(int whichToClear, const vec_t *color, float depth, int stenc
             device, 0, NULL, clearFlags, d3dColor, depth, (DWORD)(byte)stencil);
 #endif
     } while (*(volatile int *)&alwaysfails);
-#ifdef __EMSCRIPTEN__
-    {
-        static int clr_done_dbg;
-        if (clr_done_dbg < 3) {
-            printf("webdbg: RB_ClearScreen done #%d\n", clr_done_dbg);
-            clr_done_dbg++;
-        }
-    }
-#endif
 }
 
 static void RB_ClearScreenCmd(GfxRenderCommandExecState *execState)
@@ -1624,23 +1600,15 @@ have_tech:
         MaterialTechnique *technique;
         if (!techSet) {
             g_rdsl_ignore_technull++;
-#    ifdef GFX_REAL_D3D9
-            if (getenv("REALD3D9_RDSL") && g_technull_saved < 8) {
-                g_technull_saved++;
-                fprintf(stderr, "[TECHNULL] techSet==NULL mat='%s' type=%d\n",
-                        material->info.name ? material->info.name : "?", actualTechType);
-            }
-#    endif
             goto ignore_surf;
         }
         technique = techSet->techniques[actualTechType];
-#ifdef GFX_REAL_D3D9
-        if (!technique && getenv("REALD3D9_RDSL") && g_technull_saved2 < 12) {
-            g_technull_saved2++;
-            fprintf(stderr, "[TECHNULL] tech[%d]==NULL mat='%s' techset='%s'\n",
-                    actualTechType, material->info.name ? material->info.name : "?",
-                    techSet->name ? techSet->name : "?");
-        }
+#ifdef __EMSCRIPTEN__
+        /*
+         * In pass 1 (TECHNIQUE_SKY), only genuine sky materials (gameFlags & 8) should draw.
+         */
+        if (actualTechType == 1 && !(material->info.gameFlags & 8))
+            goto ignore_surf;
 #endif
         if (!technique) {
             g_rdsl_ignore_technull++;
@@ -1805,6 +1773,10 @@ dispatch:
         g_rb_tess_type_counts[type]++;
         g_rb_last_tess_type = type;
         g_tess_since_begin++;
+        {
+            extern void O1_CheckNullWrite(const char *tag);
+            O1_CheckNullWrite("rdsl-dispatch");
+        }
         rb_tessTable[type](surfType);
     }
     goto advance;
@@ -2964,6 +2936,9 @@ void RB_ExecuteRenderCommands(const void *data)
 
     dx = (char *)imp_dx;
 
+#ifdef __EMSCRIPTEN__
+    ((DxGlobals *)dx)->deviceLost = 0;
+#else
     if (!((DxGlobals *)dx)->deviceLost) {
         void *device = *(void **)(dx + 8);
         void **vtable = *(void ***)device;
@@ -2971,6 +2946,7 @@ void RB_ExecuteRenderCommands(const void *data)
         if ((unsigned int)(hr + 0x7789f798u) <= 1)
             ((DxGlobals *)dx)->deviceLost = 1;
     }
+#endif
 
     needToTouchImages = ((DxGlobals *)dx)->deviceLost;
     if (needToTouchImages) {
@@ -3076,26 +3052,8 @@ void RB_ExecuteRenderCommands(const void *data)
         execState.stackPos = 0;
 
         cmd = *(unsigned short *)cmdBuf;
-#ifdef __EMSCRIPTEN__
-        {
-            static int exec_cmd_dbg;
-            if (exec_cmd_dbg < 3) {
-                printf("webdbg: RB_Execute firstCmd=%u #%d\n", (unsigned)cmd, exec_cmd_dbg);
-                exec_cmd_dbg++;
-            }
-        }
-#endif
 
         while (cmd != 0) {
-#ifdef __EMSCRIPTEN__
-            {
-                static int exec_each_dbg;
-                if (exec_each_dbg < 40) {
-                    printf("webdbg: RB_Execute cmd=%u #%d\n", (unsigned)cmd, exec_each_dbg);
-                    exec_each_dbg++;
-                }
-            }
-#endif
             if (execTraceCount < 260) {
                 int off = (int)((const byte *)execState.cmd - cmdBuf);
                 if (off >= 900 && off <= 2420) {
@@ -3114,15 +3072,6 @@ void RB_ExecuteRenderCommands(const void *data)
             RB_RenderCommandTable[cmd](&execState);
             cmd = *(unsigned short *)execState.cmd;
         }
-#ifdef __EMSCRIPTEN__
-        {
-            static int exec_done_dbg;
-            if (exec_done_dbg < 3) {
-                printf("webdbg: RB_Execute cmd loop done #%d\n", exec_done_dbg);
-                exec_done_dbg++;
-            }
-        }
-#endif
     }
 
 post_render:

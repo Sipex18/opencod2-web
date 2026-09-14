@@ -41,7 +41,16 @@ extern void Dvar_SetFromStringByName(const char *dvarName, const char *string);
 extern void Scr_AddFloat(float value);
 extern void Scr_AddBool(int value);
 extern const char *Scr_GetDebugString(unsigned int index);
-extern unsigned int Scr_GetAnim(unsigned int index, int treeIndex);
+extern scr_anim_t Scr_GetAnim(unsigned int index, void *tree);
+/* scr_anim_t is {u16 index; u16 tree;}, so the packed int the GSC builtins use
+ * is index | (tree << 16). Reading the struct through a union keeps the sret
+ * return convention of Scr_GetAnim intact instead of aliasing the type. */
+static inline unsigned int Scr_GetAnimPacked(unsigned int index, void *tree)
+{
+    union { scr_anim_t anim; unsigned int packed; } v;
+    v.anim = Scr_GetAnim(index, tree);
+    return v.packed;
+}
 extern void *Scr_GetAnims(unsigned int treeIndex);
 extern void XAnimGetRelDelta(const void *anims, unsigned int animIndex, vec_t *rot, vec_t *trans, float time1, float time2);
 extern Bool XAnimIsPrimitive(void *anims, unsigned int animIndex);
@@ -608,6 +617,7 @@ void Scr_PlayFX(void);
 void iprintln(void);
 void iprintlnbold(void);
 void GScr_LoadGameTypeScript(void);
+void GScr_LoadAnimScripts(void);
 void GScr_LoadScripts(int inst);
 
 unsigned int GScr_AllocString(const char *s)
@@ -782,7 +792,7 @@ void Scr_GetWeaponModel(void)
 
 void GScr_GetAnimLength(void)
 {
-    unsigned int anim = Scr_GetAnim(0, 0);
+    unsigned int anim = Scr_GetAnimPacked(0, 0);
     void *anims = Scr_GetAnims(anim >> 16);
     unsigned short animIndex = anim;
 
@@ -793,7 +803,7 @@ void GScr_GetAnimLength(void)
 
 void GScr_AnimHasNotetrack(void)
 {
-    unsigned int anim = Scr_GetAnim(0, 0);
+    unsigned int anim = Scr_GetAnimPacked(0, 0);
     unsigned int treeIndex = anim >> 16;
     unsigned int animIndex = anim & 0xffff;
     unsigned int notetrack = Scr_GetConstString(1);
@@ -1675,7 +1685,7 @@ void GScr_GetMoveDelta(void)
 
     GScr_GetAnimDeltaTimes(&startTime, &endTime);
 
-    anim = Scr_GetAnim(0, 0);
+    anim = Scr_GetAnimPacked(0, 0);
     XAnimGetRelDelta(Scr_GetAnims(anim >> 16), (unsigned short)anim, rot, trans, startTime, endTime);
     Scr_AddVector(trans);
     return;
@@ -1691,7 +1701,7 @@ void GScr_GetAngleDelta(void)
 
     GScr_GetAnimDeltaTimes(&startTime, &endTime);
 
-    anim = Scr_GetAnim(0, 0);
+    anim = Scr_GetAnimPacked(0, 0);
     XAnimGetRelDelta(Scr_GetAnims(anim >> 16), (unsigned short)anim, rot, trans, startTime, endTime);
     Scr_AddFloat(RotationToYaw(rot));
     return;
@@ -4180,23 +4190,23 @@ void GScr_PlaceSpawnPoint(scr_entref_t entref)
     vec3_t vEnd;
     vec3_t mins = { -15.0f, -15.0f, 0.0f };
     vec3_t maxs = { 15.0f, 15.0f, 70.0f };
+    vec3_t orig;
     trace_t trace;
+    trace_t downTrace;
 
-    Com_Printf("GScr_PlaceSpawnPoint: ent=%u origin=(%.1f %.1f %.1f)\n",
-               (unsigned)entref.entnum,
-               pEnt->r.currentOrigin[0], pEnt->r.currentOrigin[1], pEnt->r.currentOrigin[2]);
+    orig[0] = pEnt->r.currentOrigin[0];
+    orig[1] = pEnt->r.currentOrigin[1];
+    orig[2] = pEnt->r.currentOrigin[2];
 
-    vStart[0] = pEnt->r.currentOrigin[0];
-    vStart[1] = pEnt->r.currentOrigin[1];
-    vStart[2] = pEnt->r.currentOrigin[2];
+    vStart[0] = orig[0];
+    vStart[1] = orig[1];
+    vStart[2] = orig[2];
 
     vEnd[0] = pEnt->r.currentOrigin[0];
     vEnd[1] = pEnt->r.currentOrigin[1];
     vEnd[2] = pEnt->r.currentOrigin[2] + 128.0f;
 
-    Com_Printf("GScr_PlaceSpawnPoint: before TraceCapsule up\n");
     G_TraceCapsule(&trace, vStart, mins, maxs, vEnd, pEnt->s.number, 0x2810011);
-    Com_Printf("GScr_PlaceSpawnPoint: after TraceCapsule up frac=%.3f\n", trace.fraction);
     vStart[0] = vStart[0] + (vEnd[0] - vStart[0]) * trace.fraction;
     vStart[1] = vStart[1] + (vEnd[1] - vStart[1]) * trace.fraction;
     vStart[2] = vStart[2] + (vEnd[2] - vStart[2]) * trace.fraction;
@@ -4205,24 +4215,35 @@ void GScr_PlaceSpawnPoint(scr_entref_t entref)
     vEnd[1] = vStart[1];
     vEnd[2] = vStart[2] - 262144.0f;
 
-    G_TraceCapsule(&trace, vStart, mins, maxs, vEnd, pEnt->s.number, 0x2810011);
-    pEnt->s.groundEntityNum = trace.entityNum;
+    G_TraceCapsule(&downTrace, vStart, mins, maxs, vEnd, pEnt->s.number, 0x2810011);
+    pEnt->s.groundEntityNum = downTrace.entityNum;
 
-    vStart[0] = vStart[0] + (vEnd[0] - vStart[0]) * trace.fraction;
-    vStart[1] = vStart[1] + (vEnd[1] - vStart[1]) * trace.fraction;
-    vStart[2] = vStart[2] + (vEnd[2] - vStart[2]) * trace.fraction;
+    vStart[0] = vStart[0] + (vEnd[0] - vStart[0]) * downTrace.fraction;
+    vStart[1] = vStart[1] + (vEnd[1] - vStart[1]) * downTrace.fraction;
+    vStart[2] = vStart[2] + (vEnd[2] - vStart[2]) * downTrace.fraction;
 
     G_TraceCapsule(&trace, vStart, mins, maxs, vStart, pEnt->s.number, 0x2810011);
-    if (trace.startsolid) {
+    if (trace.allsolid) {
         Com_Printf("WARNING: Spawn point entity %i is in solid at (%i, %i, %i)\n",
                    pEnt->s.number,
-                   (int)pEnt->r.currentOrigin[0],
-                   (int)pEnt->r.currentOrigin[1],
-                   (int)pEnt->r.currentOrigin[2]);
+                   (int)orig[0], (int)orig[1], (int)orig[2]);
+    }
+
+    /*
+     * Temporary: clip traces can punch through the floor brush the capsule
+     * starts on (startsolid + getOut leaves fraction untouched, then the
+     * underside hits ~32u lower). Map spawn origins are already on the
+     * floor; reject a drop bigger than a step. See GScr_PlaceSpawnPoint in
+     * referencia/cod2-main — vanilla relies on the down-trace hitting the
+     * top face.
+     */
+    if ((orig[2] - vStart[2]) > 18.0f || downTrace.startsolid) {
+        vStart[0] = orig[0];
+        vStart[1] = orig[1];
+        vStart[2] = orig[2] + 1.0f;
     }
 
     G_SetOrigin(pEnt, vStart);
-    Com_Printf("GScr_PlaceSpawnPoint: done ent=%u\n", (unsigned)entref.entnum);
 }
 
 void GScr_UpdateScores(scr_entref_t entref)
@@ -4405,6 +4426,16 @@ void GScr_LoadGameTypeScript(void)
     g_scr_data.gametype.playerdisconnect = GScr_LoadScriptFunction(callbackSetup, "CodeCallback_PlayerDisconnect");
     g_scr_data.gametype.playerdamage = GScr_LoadScriptFunction(callbackSetup, "CodeCallback_PlayerDamage");
     return (g_scr_data.gametype.playerkilled = GScr_LoadScriptFunction(callbackSetup, "CodeCallback_PlayerKilled"));
+}
+
+void GScr_LoadAnimScripts(void)
+{
+    /*
+     * CoD2 MP player animation is BG_LoadAnim / xanim trees (already run in
+     * G_InitGame). SP animscripts/*.gsc is not in this tree. Calling
+     * Scr_LoadScript here after Scr_FreeScripts overwrites programBuffer
+     * and traps on web — see Scr_BeginLoadAnimScripts in link_stubs.c.
+     */
 }
 
 void GScr_LoadScripts(int inst)

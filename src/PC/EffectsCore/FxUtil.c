@@ -114,7 +114,7 @@ void FX_CalcOrigin2(const PrimitiveTemplate *primTemp, vec_t *org, vec_t *org2, 
 Bool FX_GetBoneOrientation(const FxBoltInfo *bolt, orientation_t *orient);
 void FX_AddScheduledEffects(const vec_t *start, const vec_t *end);
 float FX_GetServerVisibility(const vec_t *start, const vec_t *end);
-static void FX_CalcOriginAndAxis(EffectPrimitive *prim, vec_t *orgOut, vec3_t *ax);
+static void FX_CalcOriginAndAxis(EffectPrimitive *prim, vec_t *orgOut, const vec_t *origin, vec3_t *ax);
 static void FX_InitParticle(EffectPrimitive *prim, Particle *particle, vec_t *newOrigin, const vec_t *origin, vec3_t *ax, int indexInBatch);
 void FX_AddCameraShake(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const int lateTime, const int indexInBatch);
 void FX_AddFxRunner(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const int lateTime, const int indexInBatch);
@@ -502,11 +502,9 @@ extern void Vec3Cross(const vec_t *a, const vec_t *b, vec_t *out);
 extern void MakeNormalVectors(const vec_t *forward, vec_t *right, vec_t *up);
 extern void AxisTransformVector(void *axis, float x, float y, float z, vec_t *out);
 extern void OrientationPosFromWorldPos(void *orient, vec_t *worldPos, vec_t *localPos);
-static void FX_CalcOriginAndAxis_impl(byte *prim, vec_t *orgOut, vec3_t *ax)
+static void FX_CalcOriginAndAxis_impl(byte *prim, vec_t *orgOut, const vec_t *origin, vec3_t *ax)
 {
     byte *primTemp = *(byte **)(prim + 4);
-    const vec_t *origin = (const vec_t *)((byte *)prim + 4);
-
     vec3_t up = { 0.0f, 0.0f, 1.0f };
     int flags = (((PrimitiveTemplate *)(primTemp))->mSpawnFlags);
     vec3_t org;
@@ -525,6 +523,13 @@ static void FX_CalcOriginAndAxis_impl(byte *prim, vec_t *orgOut, vec3_t *ax)
         float y = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mOrigin1Y)));
         float x = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mOrigin1X)));
         AxisTransformVector(ax, x, y, z, org);
+    }
+
+    /* Vanilla FX_CalcOriginAndAxis adds the spawn origin before spherical/cylinder offsets. */
+    if (origin) {
+        org[0] += origin[0];
+        org[1] += origin[1];
+        org[2] += origin[2];
     }
 
     orgOut[0] = org[0];
@@ -614,17 +619,19 @@ static void FX_CalcOriginAndAxis_impl(byte *prim, vec_t *orgOut, vec3_t *ax)
     byte *bolt = *(byte **)(prim + 8);
     if (bolt) {
         void *orient = FxBoltFrame_GetOrientation(bolt);
-        vec3_t localOrg;
-        OrientationPosFromWorldPos(orient, orgOut, localOrg);
-        orgOut[0] = localOrg[0];
-        orgOut[1] = localOrg[1];
-        orgOut[2] = localOrg[2];
+        if (orient) {
+            vec3_t localOrg;
+            OrientationPosFromWorldPos(orient, orgOut, localOrg);
+            orgOut[0] = localOrg[0];
+            orgOut[1] = localOrg[1];
+            orgOut[2] = localOrg[2];
+        }
     }
 }
 
-static inline __attribute__((always_inline)) void FX_CalcOriginAndAxis(EffectPrimitive *prim, vec_t *orgOut, vec3_t *ax)
+static inline __attribute__((always_inline)) void FX_CalcOriginAndAxis(EffectPrimitive *prim, vec_t *orgOut, const vec_t *origin, vec3_t *ax)
 {
-    FX_CalcOriginAndAxis_impl((byte *)prim, orgOut, ax);
+    FX_CalcOriginAndAxis_impl((byte *)prim, orgOut, origin, ax);
 }
 
 extern void AxisTransformVector(void *axis, float x, float y, float z, vec_t *out);
@@ -658,7 +665,7 @@ static void FX_InitParticle_impl(byte *prim, Effect *particle, vec_t *newOrigin,
     (((Particle *)(particle))->gravity) = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mGravity)));
     (((Particle *)(particle))->windModifier) = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mWindModifier)));
 
-    FX_CalcOriginAndAxis_impl(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis_impl(prim, newOrigin, origin, ax);
     Particle_SetAxis(particle, ax);
 
     (((Particle *)(particle))->nonUniformScale) = ((PrimitiveTemplate *)primTemp)->mNonUniformScale;
@@ -674,11 +681,10 @@ extern float FxRange_GetVal(void *range);
 extern void FxHelper_CameraShake(void *helper, vec_t *origin, float intensity, int duration, int fadeTime);
 void FX_AddCameraShake(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const int lateTime, const int indexInBatch)
 {
-    (void)origin;
     (void)lateTime;
     (void)indexInBatch;
     vec3_t newOrigin;
-    FX_CalcOriginAndAxis(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis(prim, newOrigin, origin, ax);
     byte *primTemp = (byte *)prim->primTemp;
     float duration = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mLife)));
     float fadeTime = FxRange_GetVal(((char *)primTemp + offsetof(PrimitiveTemplate, mRadius)));
@@ -690,11 +696,10 @@ extern void *MediaHandles_GetEffect(void *mediaHandles);
 extern void FxScheduler_PlayEffect(void *scheduler, void *effectTemplate, vec_t *origin, vec3_t *ax, void *bolt);
 void FX_AddFxRunner(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const int lateTime, const int indexInBatch)
 {
-    (void)origin;
     (void)lateTime;
     (void)indexInBatch;
     vec3_t newOrigin;
-    FX_CalcOriginAndAxis(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis(prim, newOrigin, origin, ax);
     byte *primTemp = (byte *)prim->primTemp;
     void *bolt = (void *)prim->boltFrame.value;
     void *effect = MediaHandles_GetEffect(((char *)primTemp + offsetof(PrimitiveTemplate, mPlayFxHandles)));
@@ -710,11 +715,10 @@ extern void *imp_theFxScheduler;
 extern void FxScheduler_CreateDecalEffect(void *scheduler, void *primTemp, vec_t *origin, vec3_t *ax);
 void FX_AddDecal(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const int lateTime, const int indexInBatch)
 {
-    (void)origin;
     (void)lateTime;
     (void)indexInBatch;
     vec3_t newOrigin;
-    FX_CalcOriginAndAxis(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis(prim, newOrigin, origin, ax);
     FxScheduler_CreateDecalEffect(*(void **)imp_theFxScheduler, (void *)prim->primTemp, newOrigin, ax);
 }
 
@@ -1052,7 +1056,7 @@ void FX_AddLight(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const i
     }
 
     vec3_t newOrigin;
-    FX_CalcOriginAndAxis(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis(prim, newOrigin, origin, ax);
     PART_ANCHOR_X(light) = newOrigin[0];
     PART_ANCHOR_Y(light) = newOrigin[1];
     PART_ANCHOR_Z(light) = newOrigin[2];
@@ -1136,7 +1140,7 @@ void FX_AddLine(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const in
     vec3_t newOrigin;
     vec3_t org2;
     vec3_t worldEnd;
-    FX_CalcOriginAndAxis(prim, newOrigin, ax);
+    FX_CalcOriginAndAxis(prim, newOrigin, origin, ax);
 
     Particle_SetAxis(p, ax);
 

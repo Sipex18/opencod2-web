@@ -874,7 +874,11 @@ static inline __attribute__((always_inline)) void CG_RegisterDvars(void)
     cg_drawHealth = Dvar_RegisterBool_mac("cg_drawHealth", 0, 0x1080);
     cg_drawBreathHint = Dvar_RegisterBool_mac("cg_drawBreathHint", 1, 0x1001);
     cg_drawMantleHint = Dvar_RegisterBool_mac("cg_drawMantleHint", 1, 0x1001);
+#ifdef __EMSCRIPTEN__
+    cg_drawFPS = Dvar_RegisterEnum("cg_drawFPS", cg_drawFpsNames, 1, 0x1001);
+#else
     cg_drawFPS = Dvar_RegisterEnum("cg_drawFPS", cg_drawFpsNames, 0, 0x1001);
+#endif
     cg_drawSoundOverlay = Dvar_RegisterEnum("cg_drawSoundOverlay", cg_drawSoundOverlayStrings, 0, 0x1000);
     cg_drawScriptUsage = Dvar_RegisterBool_mac("cg_drawScriptUsage", 0, 0x1000);
     cg_drawMaterial = Dvar_RegisterBool_mac("cg_drawMaterial", 0, 0x1080);
@@ -1023,12 +1027,13 @@ static inline __attribute__((always_inline)) void CG_InitBgsCallbacks(void)
 {
     byte *cgBase = (byte *)cg;
 
-    (*(void **)&((cg_t *)cgBase)->bgs.animScriptData.soundAlias) = imp_Com_FindSoundAlias;
-    (*(void **)&((cg_t *)cgBase)->bgs.animScriptData.playSoundAlias) = (void *)CG_PlayEntitySoundAlias;
-    (*(void **)&((cg_t *)cgBase)->bgs.GetXModel) = (void *)CG_GetXModel;
-    (*(void **)&((cg_t *)cgBase)->bgs.CreateDObj) = (void *)CG_CreateDObj;
-    (*(void **)&((cg_t *)cgBase)->bgs.SafeDObjFree) = imp_Com_SafeClientDObjFree;
-    (*(void **)&((cg_t *)cgBase)->bgs.AllocXAnim) = (void *)Hunk_AllocXAnimClient;
+    ((cg_t *)cgBase)->bgs.animScriptData.soundAlias =
+        (snd_alias_list_t *(*)(const char *))imp_Com_FindSoundAlias;
+    ((cg_t *)cgBase)->bgs.animScriptData.playSoundAlias = CG_PlayEntitySoundAlias;
+    ((cg_t *)cgBase)->bgs.GetXModel = CG_GetXModel;
+    ((cg_t *)cgBase)->bgs.CreateDObj = CG_CreateDObj;
+    ((cg_t *)cgBase)->bgs.SafeDObjFree = (void (*)(int))imp_Com_SafeClientDObjFree;
+    ((cg_t *)cgBase)->bgs.AllocXAnim = Hunk_AllocXAnimClient;
     ((cg_t *)cgBase)->bgs.anim_user = 0;
 }
 

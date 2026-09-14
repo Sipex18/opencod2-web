@@ -16,6 +16,7 @@ extern void FxBoltFrame_Release(const FxBoltFrame *frame);
 extern const orientation_t *FxBoltFrame_GetOrientation(const FxBoltFrame *frame);
 extern const FxBoltFramePtr FxBoltFrame_Acquire(const FxBoltInfo *bolt);
 extern void AxisCopy(const vec_t *src, vec_t *dst);
+extern void Com_Printf(const char *fmt, ...);
 extern float flrand(float min, float max);
 extern void RotatePointAroundVector(vec_t *dst, const vec_t *src, const vec_t *dir, float degrees);
 extern void Vec3Cross(const vec_t *a, const vec_t *b, vec_t *out);
@@ -198,28 +199,37 @@ Bool FX_GetBoltingFrame(const PrimitiveTemplate *primTemp, const FxBoltInfo *bol
 
 void FxScheduler_CreateEffect(const FxScheduler *_this, const EffectTemplate *fx, const PrimitiveTemplate *primTemp, const FxBoltInfo *bolt, const vec_t *origin, MediaHandles *(*axis)[4], int lateTime, int indexInBatch)
 {
-    FxBoltFramePtr boltFrame;
     vec3_t ax[3];
     EffectPrimitive prim;
     int primType;
+    static int o1_fxbolt_logged;
 
-    boltFrame._placeholder = 0;
+    /* Vanilla CreateEffect uses one EffectPrimitive: boltFrame=0, then
+     * FX_GetBoltingFrame writes into that same struct before Add*. */
+    prim.fx = 0;
+    prim.primTemp = 0;
+    prim.boltFrame.value = 0;
 
     AxisCopy((const vec_t *)axis, (vec_t *)ax);
 
-    if (primTemp->mSpawnFlags & 1) {
-        vec3_t rotated;
+    /* source.c FxScheduler::CreateEffect: mSpawnFlags & 0x100, not bit 0. */
+    if (primTemp->mSpawnFlags & 0x100) {
         float angle = flrand(0.0f, 360.0f);
-        RotatePointAroundVector(rotated, (const vec_t *)ax, (const vec_t *)axis + 3, angle);
-        Vec3Cross((const vec_t *)ax, rotated, ax[1]);
+        RotatePointAroundVector(ax[1], (const vec_t *)ax, (const vec_t *)axis + 3, angle);
+        Vec3Cross((const vec_t *)ax, ax[1], ax[2]);
     }
 
-    if (!FX_GetBoltingFrame(primTemp, bolt, &boltFrame)) {
+    if (!FX_GetBoltingFrame(primTemp, bolt, &prim.boltFrame)) {
         goto cleanup;
     }
 
     prim.fx = fx;
     prim.primTemp = primTemp;
+
+    if (!o1_fxbolt_logged) {
+        o1_fxbolt_logged = 1;
+        Com_Printf("[o1-fxbolt] CreateEffect boltFrame wired into prim\n");
+    }
 
     primType = primTemp->mType;
     if (primType > 12) {
@@ -268,8 +278,8 @@ void FxScheduler_CreateEffect(const FxScheduler *_this, const EffectTemplate *fx
     }
 
 cleanup:
-    if (boltFrame._placeholder) {
-        FxBoltFrame_Release((FxBoltFrame *)(void *)(size_t)boltFrame._placeholder);
+    if (prim.boltFrame.value) {
+        FxBoltFrame_Release(prim.boltFrame.value);
     }
 }
 
@@ -319,6 +329,7 @@ void FxScheduler_PlayEffect(const FxScheduler *_this, const EffectTemplate *fx, 
             return;
         if (!FX_GetBoneOrientation(bolt, &or_))
             return;
+        AxisCopy((const vec_t *)or_.axis, (vec_t *)ax);
     } else {
 
         if (origin) {
@@ -330,7 +341,21 @@ void FxScheduler_PlayEffect(const FxScheduler *_this, const EffectTemplate *fx, 
             or_.origin[1] = 0.0f;
             or_.origin[2] = 0.0f;
         }
-        AxisCopy((const vec_t *)axis, (vec_t *)ax);
+        if (axis) {
+            AxisCopy((const vec_t *)axis, (vec_t *)ax);
+        } else {
+            /* Vanilla 3-arg PlayEffect identity: +Z forward, +X right, +Y up. */
+            ax[0][0] = 0.0f;
+            ax[0][1] = 0.0f;
+            ax[0][2] = 1.0f;
+            ax[1][0] = 1.0f;
+            ax[1][1] = 0.0f;
+            ax[1][2] = 0.0f;
+            ax[2][0] = 0.0f;
+            ax[2][1] = 1.0f;
+            ax[2][2] = 0.0f;
+        }
+        AxisCopy((const vec_t *)ax, (vec_t *)or_.axis);
     }
 
     numAdded = 0;

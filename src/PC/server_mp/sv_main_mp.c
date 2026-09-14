@@ -931,6 +931,11 @@ void SV_Frame(int msec)
 
         if (connectedCount - 1 <= 0) {
             Dvar_SetInt(*(const dvar_t **)imp_sv_paused, 1);
+#ifdef __EMSCRIPTEN__
+            /* Solo listen + cl_paused must still drip gamestate fragments;
+             * otherwise the client sits forever on CS_PRIMED. */
+            SV_SendClientMessages();
+#endif
             return;
         }
 
@@ -939,8 +944,26 @@ void SV_Frame(int msec)
 
     frameMsec = 1000 / sv_fps->current.integer;
     sv.timeResidual += msec;
+#ifdef __EMSCRIPTEN__
+    /* A hitch (map load, GC) can dump many 50ms ticks in one Com_Frame
+     * while the listen client only emits one usercmd — server time then
+     * walks away from commandTime. Keep at most two game ticks. */
+    if (frameMsec > 0 && sv.timeResidual > frameMsec * 2)
+        sv.timeResidual = frameMsec * 2;
+#endif
 
     if (frameMsec > sv.timeResidual) {
+#ifdef __EMSCRIPTEN__
+        cl = svs.clients;
+        for (i = 0; i < sv_maxclients->current.integer; ++i, ++cl) {
+            if (cl->state >= 2 &&
+                (cl->netchan.unsentFragments || cl->gamestateMessageNum < 0 ||
+                 (cl->state == 3 && cl->messageAcknowledge <= cl->gamestateMessageNum))) {
+                SV_SendClientMessages();
+                break;
+            }
+        }
+#endif
         return;
     }
 
@@ -1068,18 +1091,12 @@ void SV_Frame(int msec)
         SV_ResetSkeletonCache();
         G_RunFrame(svs.time);
         Scr_SetLoading(0);
-#ifdef __EMSCRIPTEN__
-        printf("SV_Frame: after Scr_SetLoading residual=%d frameMsec=%d\n", sv.timeResidual, frameMsec);
-#endif
 
         if (frameMsec <= sv.timeResidual) {
             SV_ArchiveSnapshot();
         }
     } while (frameMsec <= sv.timeResidual);
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_Frame: after frame loop, before client timeout\n");
-#endif
     timeout = svs.time - sv_timeout->current.integer * 1000;
     zombieTimeout = svs.time - sv_zombietime->current.integer * 1000;
 
@@ -1111,20 +1128,8 @@ void SV_Frame(int msec)
         cl->timeoutCount = 0;
     }
 
-#ifdef __EMSCRIPTEN__
-    printf("SV_Frame: before SendClientMessages\n");
-#endif
     SV_SendClientMessages();
-#ifdef __EMSCRIPTEN__
-    printf("SV_Frame: before final ArchiveSnapshot\n");
-#endif
     SV_ArchiveSnapshot();
-#ifdef __EMSCRIPTEN__
-    printf("SV_Frame: before MasterHeartbeat\n");
-#endif
     SV_MasterHeartbeat("COD-2");
-#ifdef __EMSCRIPTEN__
-    printf("SV_Frame: done\n");
-#endif
     return;
 }

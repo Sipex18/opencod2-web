@@ -62,9 +62,9 @@ static int previous;
 static struct trStatistics_t rendererStats;
 static int fps_previousTimes[32];
 static int fps_index;
-static vec4_t colorWhiteFaded;
-static vec4_t colorGreenFaded;
-static vec4_t colorRedFaded;
+static vec4_t colorWhiteFaded = { 1.0f, 1.0f, 1.0f, 0.9f };
+static vec4_t colorGreenFaded = { 0.2f, 1.0f, 0.2f, 0.9f };
+static vec4_t colorRedFaded = { 1.0f, 0.2f, 0.2f, 0.9f };
 
 extern const vec_t colorWhite[4];
 extern void UI_DrawHandlePic(float x, float y, float w, float h, int horzAlign, int vertAlign, const vec_t *color, MaterialHandle material);
@@ -82,7 +82,7 @@ extern Bool CL_IsRenderingSplitScreen(void);
 extern void CL_SetUserCmdAimValues(const vec_t *angles);
 extern void CL_SetUserCmdValue(int weapon, int offHandIndex, float sensitivity);
 extern void CL_RenderScene(const void *refdef);
-extern void CG_DrawShellShockSavedScreenBlend(float r, float g, float b);
+extern qboolean CG_DrawShellShockSavedScreenBlend(const shellshock_parms_t *parms, int start, int duration);
 extern void CG_TileClear(void);
 extern const char *UI_SafeTranslateString(const char *ref);
 extern const char *UI_ReplaceConversionString(const char *sourceString, const char *replaceString);
@@ -113,7 +113,6 @@ extern void CG_PlayerSprites(centity_t *cent);
 extern qboolean CL_PickMaterial(const vec_t *org, const vec_t *dir, char *pszName, char *pszSurfaceFlags, char *pszContents, int iMaxChars);
 extern int CG_DrawSmallDevStringColor(float x, float y, const char *s, const vec_t *color, int align);
 extern int CG_DrawBigDevStringColor(float x, float y, const char *s, const vec_t *color, int align);
-extern int __mh_execute_header;
 extern int SND_GetSoundOverlay(snd_overlay_type_t type, snd_overlay_info_t *info, int maxcount, int *cpu);
 extern const char *Dvar_GetString(const char *dvarName);
 extern int Dvar_GetInt(const char *dvarName);
@@ -150,7 +149,8 @@ extern const vec_t colorBlue[4];
 extern void Menus_CloseByName(void *dc, const char *name);
 extern void *Menus_FindByName(void *dc, const char *name);
 extern void Window_AddDynamicFlags(void *window, int flags);
-extern int Window_RemoveDynamicFlags(void *window, int flags);
+/* Must match ui_utils.c — int vs void return → WASM unreachable in CG_CheckTimedMenus. */
+extern void Window_RemoveDynamicFlags(void *window, int flags);
 extern void CG_MenuShowNotify(int menuToShow);
 extern float CG_CalcPlayerHealth(void);
 extern Bool CG_CheckPlayerForLowAmmo(void);
@@ -813,7 +813,8 @@ after_buttons:
     if (!menu) {
         return 0;
     }
-    return Window_RemoveDynamicFlags(menu, 4);
+    Window_RemoveDynamicFlags(menu, 4);
+    return 0;
 }
 
 static unsigned int CG_DrawSoundOverlay(void)
@@ -882,7 +883,7 @@ unsigned int CG_DrawMaterial(void)
     char szContents[0x1000];
     float y;
 
-    if (!CL_PickMaterial((const vec_t *)cg->refdef.vieworg, (const vec_t *)cg->refdef.viewaxis, szName, szSurfaceFlags, szContents, (int)&__mh_execute_header)) {
+    if (!CL_PickMaterial((const vec_t *)cg->refdef.vieworg, (const vec_t *)cg->refdef.viewaxis, szName, szSurfaceFlags, szContents, COD2_MH_EXECUTE_HEADER)) {
         return 0;
     }
 
@@ -1074,9 +1075,9 @@ void CG_DrawActive(void)
 
     if (!CL_IsRenderingSplitScreen()) {
         CG_DrawShellShockSavedScreenBlend(
-            *(float *)&cg->shellshock.parms,
-            *(float *)&cg->shellshock.startTime,
-            *(float *)&cg->shellshock.duration);
+            cg->shellshock.parms,
+            cg->shellshock.startTime,
+            cg->shellshock.duration);
     }
 
     CG_TileClear();
@@ -1207,11 +1208,22 @@ static float CG_DrawFPS(float y)
     int minFps;
     int maxFps;
     const char *text;
+    int count;
 
-    if (fps_index <= 31)
+    int now = Sys_Milliseconds();
+    if (previous > 0) {
+        int delta = now - previous;
+        if (delta <= 0) delta = 1;
+        fps_previousTimes[fps_index % 32] = delta;
+        fps_index++;
+    }
+    previous = now;
+
+    count = fps_index < 32 ? fps_index : 32;
+    if (count <= 0)
         return y;
 
-    for (i = 0; i < 32; ++i) {
+    for (i = 0; i < count; ++i) {
         int frameTime = fps_previousTimes[i];
         total += frameTime;
         if (frameTime < minTime)
@@ -1228,14 +1240,14 @@ static float CG_DrawFPS(float y)
     if (maxTime <= 0)
         maxTime = 1;
 
-    avgFps = (int)floorf(32000.0f / (float)total + 0.5f);
+    avgFps = (int)floorf(((float)count * 1000.0f) / (float)total + 0.5f);
     minFps = (int)floorf(1000.0f / (float)maxTime + 0.5f);
     maxFps = (int)floorf(1000.0f / (float)minTime + 0.5f);
 
     if (cg_drawFPS->current.integer > 2)
-        text = va("%1.2fmspf(%i-%i)", (float)total * 0.03125f, minTime, maxTime);
+        text = va("%1.2fmspf(%i-%i)", (float)total / (float)count, minTime, maxTime);
     else
-        text = va("%ifps(%i-%i)", avgFps, minFps, maxFps);
+        text = va("%i FPS (%i-%i)", avgFps, minFps, maxFps);
 
     y += (float)CG_DrawBigDevStringColor(620.0f, y, text, colorWhiteFaded, 6);
 

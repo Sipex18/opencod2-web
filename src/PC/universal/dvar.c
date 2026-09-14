@@ -903,8 +903,17 @@ static void __attribute_regparm__(2) Dvar_StringToColor(const char *string, byte
     colorVec[0] = 0.0f;
     colorVec[1] = 0.0f;
     colorVec[2] = 0.0f;
-    colorVec[3] = 0.0f;
-    sscanf(string, "%g %g %g %g", &colorVec[0], &colorVec[1], &colorVec[2], &colorVec[3]);
+    colorVec[3] = 1.0f;
+
+    /*
+     * sscanf/SDL_sscanf will OOB-trap in WASM if string is NULL or points
+     * outside linear memory. Callers (GetUnpackedColor string path) can hit
+     * this when a color dvar was registered/looked up as a non-COLOR type
+     * with a stale/null current.string pointer.
+     */
+    if (string && string[0]) {
+        sscanf(string, "%g %g %g %g", &colorVec[0], &colorVec[1], &colorVec[2], &colorVec[3]);
+    }
 
     color[0] = Dvar_FloatToColorComponent(colorVec[0]);
     color[1] = Dvar_FloatToColorComponent(colorVec[1]);
@@ -983,8 +992,16 @@ static inline __attribute__((always_inline)) void Dvar_GetUnpackedColor_inl(cons
 
     if (dvar->type == DVAR_TYPE_COLOR) {
         *(int *)color = dvar->current.integer;
-    } else {
+    } else if (dvar->type == DVAR_TYPE_STRING) {
         Dvar_StringToColor(dvar->current.string, color);
+    } else {
+        /*
+         * Unexpected type for a color lookup: do not treat current.string
+         * as a pointer (the DvarValue union may hold an integer/float that
+         * is not a valid address — that path OOB-crashed on WASM via sscanf).
+         * Fall back to packed-integer color interpretation.
+         */
+        *(int *)color = dvar->current.integer;
     }
 
     expanded = (float *)expandedColor;
@@ -1104,6 +1121,19 @@ void Dvar_GetUnpackedColorByName(const char *dvarName, long unsigned int (*expan
     const dvar_t *var;
 
     var = Dvar_FindVar_inl(dvarName);
+#ifdef __EMSCRIPTEN__
+    {
+        static int s_colorDbg;
+        if (s_colorDbg < 4) {
+            Com_Printf("COLOR-DBG: GetUnpackedColorByName name='%s' var=%p type=%d str=%p\n",
+                       dvarName ? dvarName : "(null)",
+                       (const void *)var,
+                       var ? (int)var->type : -1,
+                       var && var->type == DVAR_TYPE_STRING ? (const void *)var->current.string : NULL);
+            s_colorDbg++;
+        }
+    }
+#endif
     if (!var) {
         const float *white = (const float *)imp_colorWhite;
         float *color = (float *)expandedColor;

@@ -2014,11 +2014,6 @@ int BG_AnimScriptEvent(playerState_t *ps, scriptAnimEventTypes_t event, qboolean
                 ((unsigned)condType >= 9u || (unsigned)client >= 64u)) {
                 static int animOobDbg;
                 if (animOobDbg < 16) {
-                    fprintf(stderr,
-                            "[anim-oob] event=%d client=%d condType=%d testType=%d "
-                            "numConds=%d itemIdx=%d cond=%p condIndexVal=%d\n",
-                            event, client, condType, testType, numConds, i,
-                            (void *)condition, condition->index);
                     ++animOobDbg;
                 }
                 allMatch = 0;

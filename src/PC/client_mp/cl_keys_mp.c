@@ -324,7 +324,7 @@ static __attribute_regparm__(1) int Key_StringToKeynum(const char *str)
     }
 
     if (str[1] == '\0') {
-        return (signed char)str[0];
+        return tolower((unsigned char)str[0]);
     }
 
     if (str[0] == '0' && str[1] == 'x' && strlen(str) == 4) {
@@ -1107,6 +1107,12 @@ static inline __attribute__((always_inline)) void CL_ExecuteKeyBinding(int key, 
         return;
 
     binding = keys[key].binding;
+    if ((!binding || !binding[0]) && key >= 'A' && key <= 'Z') {
+        binding = keys[key + 32].binding;
+    }
+    if ((!binding || !binding[0]) && key >= 'a' && key <= 'z') {
+        binding = keys[key - 32].binding;
+    }
     if (!binding || !binding[0]) {
         if (down && key >= 0xc8) {
             Com_Printf("%s is unbound, use controls menu to set.\n", Key_KeynumToString(key, 0));
@@ -1212,6 +1218,9 @@ void CL_KeyEvent(int key, const qboolean down, const unsigned int time)
     if (key < 0 || key >= 256)
         return;
 
+    if (key >= 'A' && key <= 'Z')
+        key += 32;
+
     cl = *(clientActive_t **)imp_cl;
     clc = *(clientConnection_t **)imp_clc;
     keyState = &keys[key];
@@ -1282,13 +1291,17 @@ void CL_KeyEvent(int key, const qboolean down, const unsigned int time)
 
     bypassUi = 0;
     if (keyCatchers & 8) {
+        /*
+         * Source (referencia/cod2-main cl_keys): bypass UI only when
+         * cl_bypassMouseInput is on AND (mouse1-3 OR !UI_checkKeyExec).
+         * The previous else-if (!uiWantsKey) dropped clicks whenever the
+         * focused menu had not registered the key — weapon buttons never
+         * reached scriptMenuResponse.
+         */
         qboolean bypassMouseInput = CL_DvarEnabledFromImport(imp_cl_bypassMouseInput);
-        qboolean uiWantsKey = UI_checkKeyExec(key);
-        if (bypassMouseInput && key >= 0xc8 && key <= 0xca) {
+        if (bypassMouseInput &&
+            ((unsigned)(key - 0xc8) <= 2u || !UI_checkKeyExec(key)))
             bypassUi = 1;
-        } else if (!uiWantsKey) {
-            bypassUi = 1;
-        }
 
         if (!bypassUi) {
             UI_KeyEvent(key, down);

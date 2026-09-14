@@ -185,20 +185,16 @@ void CL_ParseGamestate(msg_t *msg)
     entityState_t nullstate;
 
 #ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: enter\n");
-#endif
+    Com_Printf("CL_ParseGamestate: enter\n");
+    /* Keep console open — Con_Close + sync cgame init made the UI look frozen. */
+#else
     Con_Close();
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: after Con_Close\n");
 #endif
 
     clc = (clientConnection_t *)*clc_ptr;
     clc->connectPacketCount = 0;
 
     CL_ClearState();
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: after CL_ClearState\n");
-#endif
 
     clc->serverCommandSequence = MSG_ReadLong(msg);
 
@@ -260,49 +256,35 @@ void CL_ParseGamestate(msg_t *msg)
 
     clc->checksumFeed = MSG_ReadLong(msg);
 #ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: clientNum=%d checksumFeed=%d\n", clc->clientNum, clc->checksumFeed);
+    Com_Printf("CL_ParseGamestate: clientNum=%d checksumFeed=%d\n", clc->clientNum, clc->checksumFeed);
 #endif
 
     CL_SystemInfoChanged();
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: after SystemInfoChanged\n");
-#endif
 
+#ifdef __EMSCRIPTEN__
+    /* Finish FS/downloads/cgame on later CL_Frame(s) so this EventLoop returns
+     * and the console can paint. */
+    {
+        extern int cl_pendingPostGamestate;
+        cl_pendingPostGamestate = 1;
+    }
+    Com_Printf("CL_ParseGamestate: parsed OK — deferring FS/downloads/cgame\n");
+    return;
+#else
     FS_ConditionalRestart(clc->checksumFeed);
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: after FS_ConditionalRestart\n");
-#endif
 
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: net_lanauthorize=%d\n", net_lanauthorize->current.enabled);
-#endif
     if (net_lanauthorize->current.enabled == 0) {
         if (Sys_IsLANAddress(clc->serverAddress)) {
-#ifdef __EMSCRIPTEN__
-            printf("CL_ParseGamestate: LAN path, before CL_InitDownloads\n");
-#endif
             CL_InitDownloads();
             Dvar_SetInt(cl_paused, 0);
-#ifdef __EMSCRIPTEN__
-            printf("CL_ParseGamestate: LAN path done\n");
-#endif
             return;
         }
     }
 
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: WAN path, before CL_RequestAuthorization\n");
-#endif
     CL_RequestAuthorization();
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: after CL_RequestAuthorization\n");
-#endif
-
     CL_InitDownloads();
 
     Dvar_SetInt(cl_paused, 0);
-#ifdef __EMSCRIPTEN__
-    printf("CL_ParseGamestate: done\n");
 #endif
 }
 
@@ -966,6 +948,44 @@ void CL_ParseSnapshot(msg_t *msg)
     cla = (clientActive_t *)cl;
     cla->oldSnapServerTime = cla->snap.serverTime;
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * Respawn/teleport: rebase the LOCAL viewangles. Only trigger on actual
+     * spawn (dead/spectator -> alive) or extreme teleport (> 512 units),
+     * NOT on normal jumps/stairs/movement (which previously used 64 units and
+     * caused violent viewangle snap/jerking during gameplay).
+     */
+    {
+        int wasNotPlaying = (cla->snap.ps.pm_type != 0);
+        int isPlaying = (newSnap->ps.pm_type == 0);
+        float *prevOrig = cla->snap.ps.origin;
+        float dx = newSnap->ps.origin[0] - prevOrig[0];
+        float dy = newSnap->ps.origin[1] - prevOrig[1];
+        float dz = newSnap->ps.origin[2] - prevOrig[2];
+        float distSq = dx * dx + dy * dy + dz * dz;
+
+        if ((wasNotPlaying && isPlaying) || distSq > 262144.0f) {
+            float newYaw;
+
+            cla->viewangles[0] = (float)newSnap->ps.viewangles[0]
+                - (float)newSnap->ps.delta_angles[0] * (360.0f / 65536.0f);
+
+            newYaw = (float)newSnap->ps.viewangles[1]
+                - (float)newSnap->ps.delta_angles[1] * (360.0f / 65536.0f);
+            /* keep the new yaw near the old one so nothing else trips on a
+             * 360-degree jump */
+            while (newYaw - cla->viewangles[1] > 180.0f)
+                newYaw -= 360.0f;
+            while (newYaw - cla->viewangles[1] < -180.0f)
+                newYaw += 360.0f;
+            cla->viewangles[1] = newYaw;
+
+            cla->viewangles[2] = (float)newSnap->ps.viewangles[2]
+                - (float)newSnap->ps.delta_angles[2] * (360.0f / 65536.0f);
+        }
+    }
+#endif
+
     memcpy(&cla->snap, newSnap, sizeof(clSnapshot_t));
 
     cla->snap.ping = 999;
@@ -1025,9 +1045,6 @@ void CL_ParseServerMessage(msg_t *msg)
     while (!msgCompressed.overflowed) {
 
         cmd = MSG_ReadByte(&msgCompressed);
-#ifdef __EMSCRIPTEN__
-        printf("CL_ParseServerMessage: cmd=%d readcount=%d\n", cmd, msgCompressed.readcount);
-#endif
 
         if (cmd == 7) {
 
@@ -1051,18 +1068,15 @@ void CL_ParseServerMessage(msg_t *msg)
             break;
         case 1: {
 #ifdef __EMSCRIPTEN__
-            printf("CL_ParseServerMessage: cmd=1 CL_ParseGamestate\n");
+            Com_Printf("CL_ParseServerMessage: cmd=1 CL_ParseGamestate\n");
 #endif
             CL_ParseGamestate(&msgCompressed);
 #ifdef __EMSCRIPTEN__
-            printf("CL_ParseServerMessage: after CL_ParseGamestate\n");
+            Com_Printf("CL_ParseServerMessage: after CL_ParseGamestate\n");
 #endif
             break;
         }
         case 4: {
-#ifdef __EMSCRIPTEN__
-            printf("CL_ParseServerMessage: cmd=4 serverCommand\n");
-#endif
             int seq = MSG_ReadLong(&msgCompressed);
             char *str = MSG_ReadString(&msgCompressed);
             clientConnection_t *clc = (clientConnection_t *)*clc_ptr;

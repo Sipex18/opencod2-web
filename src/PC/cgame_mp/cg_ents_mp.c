@@ -53,7 +53,8 @@ extern int BG_GetNumWeapons(void);
 extern int CG_PlaySoundAlias(int entitynum, const vec_t *origin, snd_alias_list_t *aliasList);
 extern int FX_GetBoneIndex(int entNum, unsigned int bone);
 extern void FX_PlayEntityEffect(EffectTemplate *fx, const vec_t *org, vec3_t *axis, const FxBoltInfo *bolt);
-extern void FX_PlayEffect(EffectTemplate *fx, const vec_t *org, const vec_t *fwd, ...);
+/* Must match Fxexport.c — 4-arg/variadic call → WASM unreachable. */
+extern void FX_PlayEffect(EffectTemplate *fx, const vec_t *org, const vec_t *fwd);
 extern void FX_PlaySimpleEffect(EffectTemplate *fx, const vec_t *org);
 extern void Com_Printf(const char *fmt, ...);
 extern void ByteToDir(const int b, vec_t *dir);
@@ -851,7 +852,20 @@ static void CG_PlayLoopedFx(centity_t *cent)
             up[1] += scale * forward[1];
             up[2] += scale * forward[2];
             Vec3Normalize(up);
-            FX_PlayEffect(fx, cent->lerpOrigin, forward, up);
+            {
+                vec3_t axis[3];
+                axis[0][0] = forward[0];
+                axis[0][1] = forward[1];
+                axis[0][2] = forward[2];
+                axis[1][0] = forward[1] * up[2] - forward[2] * up[1];
+                axis[1][1] = forward[2] * up[0] - forward[0] * up[2];
+                axis[1][2] = forward[0] * up[1] - forward[1] * up[0];
+                Vec3Normalize(axis[1]);
+                axis[2][0] = up[0];
+                axis[2][1] = up[1];
+                axis[2][2] = up[2];
+                FX_PlayEntityEffect(fx, cent->lerpOrigin, axis, NULL);
+            }
         } else {
             FX_PlayEffect(fx, cent->lerpOrigin, forward);
         }

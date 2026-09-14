@@ -8,7 +8,7 @@
 
 void Com_Printf(const char *fmt, ...);
 void Com_DPrintf(const char *fmt, ...);
-void FS_CreatePath(const char *path);
+int FS_CreatePath(const char *path);
 
 typedef void CURL;
 typedef void CURLM;

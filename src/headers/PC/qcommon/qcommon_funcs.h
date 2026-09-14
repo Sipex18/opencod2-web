@@ -270,7 +270,7 @@ void MSG_WriteShort(msg_t *msg, int c);
 void MSG_WriteLong(msg_t *msg, int c);
 void MSG_Init(msg_t *buf, byte *data, int length);
 void MSG_WriteString(msg_t *sb, const char *s);
-void MSG_WriteBigString(msg_t *sb, const char *s, msg_t *msg, int key, int oldV, int bits);
+void MSG_WriteBigString(msg_t *sb, const char *s);
 void MSG_ReadDeltaField(msg_t *msg, byte *from, byte *to, const NetField *field, qboolean print);
 qboolean MSG_ReadDeltaClient(msg_t *msg, clientState_t *from, clientState_t *to, int number);
 qboolean MSG_ReadDeltaArchivedEntity(msg_t *msg, archivedEntity_t *from, archivedEntity_t *to, int number);

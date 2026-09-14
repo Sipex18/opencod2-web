@@ -1,6 +1,10 @@
 #include "common_types.h"
 #include "imports.h"
 #include "bytematch.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#include <string.h>
+#endif
 
 extern const dvar_t *r_showGroundLit;
 
@@ -193,92 +197,150 @@ static int R_FinishLoadingAabbTrees_r(byte *tree, int totalTreesUsed)
 
 #endif
 
+#ifdef __EMSCRIPTEN__
+static void R_StripParseQuotes(char *s)
+{
+    size_t n;
+    if (!s || s[0] != '"')
+        return;
+    n = strlen(s);
+    if (n >= 2 && s[n - 1] == '"') {
+        s[n - 1] = '\0';
+        memmove(s, s + 1, n - 1);
+    }
+}
+#endif
+
 const char *R_ParseSunLight(SunLightParseParams *params, const char *text)
 {
-    byte *p = (byte *)params;
+    SunLightParseParams *p = params;
     char keyname[0x800];
     char value[0x800];
     const char *token;
+    char classname[64];
+    int sawSunlight = 0;
+    int sawSuncolor = 0;
+    int sawSundirection = 0;
+    int sawWorldspawn = 0;
+
+    classname[0] = '\0';
 
     while (1) {
         token = Com_Parse(&text);
-        if (!token[0] || token[0] == '}')
+        if (!token[0])
             break;
+        if (token[0] == '}') {
+            /* Vanilla stops at the first entity. Compiled lumps can put
+             * worldspawn later; d3dbsp + demo-viewer search by classname. */
+            if (sawWorldspawn || sawSunlight || sawSuncolor)
+                break;
+            classname[0] = '\0';
+            continue;
+        }
 
         if (token[0] == '{') {
-
-            ((SunLightParseParams *)p)->ambientScale = 0.0f;
-            ((SunLightParseParams *)p)->sunLight = 0.0f;
-            ((SunLightParseParams *)p)->diffuseFraction = 0.5f;
-            ((SunLightParseParams *)p)->diffuseColorHasBeenSet = 0;
-
-            ((SunLightParseParams *)p)->ambientColor[0] = 0;
-            ((SunLightParseParams *)p)->ambientColor[1] = 0;
-            ((SunLightParseParams *)p)->ambientColor[2] = 0;
-            ((SunLightParseParams *)p)->sunColor[0] = 0;
-            ((SunLightParseParams *)p)->sunColor[1] = 0;
-            ((SunLightParseParams *)p)->sunColor[2] = 0;
-            ((SunLightParseParams *)p)->diffuseColor[0] = 0;
-            ((SunLightParseParams *)p)->diffuseColor[1] = 0;
-            ((SunLightParseParams *)p)->diffuseColor[2] = 0;
+            p->ambientScale = 0.0f;
+            p->sunLight = 0.0f;
+            p->diffuseFraction = 0.5f;
+            p->diffuseColorHasBeenSet = 0;
+            p->ambientColor[0] = 0;
+            p->ambientColor[1] = 0;
+            p->ambientColor[2] = 0;
+            p->sunColor[0] = 0;
+            p->sunColor[1] = 0;
+            p->sunColor[2] = 0;
+            p->diffuseColor[0] = 0;
+            p->diffuseColor[1] = 0;
+            p->diffuseColor[2] = 0;
+            classname[0] = '\0';
+            sawSunlight = 0;
+            sawSuncolor = 0;
+            sawSundirection = 0;
             continue;
         }
 
         I_strncpyz(keyname, token, 0x800);
+#ifdef __EMSCRIPTEN__
+        R_StripParseQuotes(keyname);
+#endif
 
         token = Com_Parse(&text);
-        if (!token[0] || token[0] == '}')
-            break;
+        if (!token[0] || token[0] == '}') {
+            if (sawWorldspawn || sawSunlight || sawSuncolor)
+                break;
+            classname[0] = '\0';
+            continue;
+        }
         I_strncpyz(value, token, 0x800);
+#ifdef __EMSCRIPTEN__
+        R_StripParseQuotes(value);
+#endif
 
-        if (!I_stricmp(keyname, "ambient")) {
-            ((SunLightParseParams *)p)->ambientScale = (float)atof(value);
-            if (((SunLightParseParams *)p)->ambientScale > 2.0f) {
+        if (!I_stricmp(keyname, "classname")) {
+            I_strncpyz(classname, value, sizeof(classname));
+            if (!I_stricmp(classname, "worldspawn"))
+                sawWorldspawn = 1;
+        } else if (!I_stricmp(keyname, "ambient")) {
+            p->ambientScale = (float)atof(value);
+            if (p->ambientScale > 2.0f) {
                 Com_Printf("^3WARNING: ambient too big, assuming it uses the old 0-255 scale instead of the proper 0-1 scale (value = '%s')\n", value);
-                ((SunLightParseParams *)p)->ambientScale *= 0.01568627543747425f;
+                p->ambientScale *= 0.01568627543747425f;
             }
         } else if (!I_stricmp(keyname, "_color")) {
-            ((SunLightParseParams *)p)->ambientColor[0] = 0;
-            ((SunLightParseParams *)p)->ambientColor[1] = 0;
-            ((SunLightParseParams *)p)->ambientColor[2] = 0;
-            sscanf(value, "%f %f %f", (float *)&((SunLightParseParams *)p)->ambientColor[0], (float *)&((SunLightParseParams *)p)->ambientColor[1], (float *)&((SunLightParseParams *)p)->ambientColor[2]);
+            p->ambientColor[0] = 0;
+            p->ambientColor[1] = 0;
+            p->ambientColor[2] = 0;
+            sscanf(value, "%f %f %f", &p->ambientColor[0], &p->ambientColor[1], &p->ambientColor[2]);
         } else if (!I_stricmp(keyname, "diffuseFraction")) {
-            ((SunLightParseParams *)p)->diffuseFraction = (float)atof(value);
+            p->diffuseFraction = (float)atof(value);
         } else if (!I_stricmp(keyname, "suncolor")) {
-            float *v = (float *)&((SunLightParseParams *)p)->sunColor[0];
-            v[0] = 0;
-            v[1] = 0;
-            v[2] = 0;
-            sscanf(value, "%f %f %f", &v[0], &v[1], &v[2]);
-            ColorNormalize(v, v);
+            p->sunColor[0] = 0;
+            p->sunColor[1] = 0;
+            p->sunColor[2] = 0;
+            sscanf(value, "%f %f %f", &p->sunColor[0], &p->sunColor[1], &p->sunColor[2]);
+            ColorNormalize(p->sunColor, p->sunColor);
+            sawSuncolor = 1;
         } else if (!I_stricmp(keyname, "sundiffusecolor")) {
-            float *v = (float *)&((SunLightParseParams *)p)->diffuseColor[0];
-            v[0] = 0;
-            v[1] = 0;
-            v[2] = 0;
-            sscanf(value, "%f %f %f", &v[0], &v[1], &v[2]);
-            ColorNormalize(v, v);
-            ((SunLightParseParams *)p)->diffuseColorHasBeenSet = 1;
+            p->diffuseColor[0] = 0;
+            p->diffuseColor[1] = 0;
+            p->diffuseColor[2] = 0;
+            sscanf(value, "%f %f %f", &p->diffuseColor[0], &p->diffuseColor[1], &p->diffuseColor[2]);
+            ColorNormalize(p->diffuseColor, p->diffuseColor);
+            p->diffuseColorHasBeenSet = 1;
         } else if (!I_stricmp(keyname, "sunlight")) {
-            ((SunLightParseParams *)p)->sunLight = (float)atof(value);
+            p->sunLight = (float)atof(value);
+            sawSunlight = 1;
         } else if (!I_stricmp(keyname, "sundirection")) {
-            float *v = (float *)&((SunLightParseParams *)p)->angles[0];
-            v[0] = 0;
-            v[1] = 0;
-            v[2] = 0;
-            sscanf(value, "%f %f %f", &v[0], &v[1], &v[2]);
+            p->angles[0] = 0;
+            p->angles[1] = 0;
+            p->angles[2] = 0;
+            sscanf(value, "%f %f %f", &p->angles[0], &p->angles[1], &p->angles[2]);
+            sawSundirection = 1;
         } else if (!I_stricmp(keyname, "name")) {
-            I_strncpyz((char *)params, value, 0x40);
+            I_strncpyz(p->name, value, 0x40);
         }
     }
+
+#ifdef __EMSCRIPTEN__
+    /* referencia/d3dbsp entities.cpp + demo-viewer ExtractWorldspawnParams:
+     * missing sunlight/suncolor default to 1, otherwise pack is (plane)*0.5 with
+     * no shadow term and GLSL ×2 only restores the indirect plane. */
+    if (!sawSunlight)
+        p->sunLight = 1.0f;
+    if (!sawSuncolor) {
+        p->sunColor[0] = 1.0f;
+        p->sunColor[1] = 1.0f;
+        p->sunColor[2] = 1.0f;
+    }
+#else
+    (void)sawSundirection;
+#endif
 
     return text;
 }
 
 void R_InterpretSunLightParseParamsIntoLights(SunLightParseParams *sunParse, GfxLight *sunLight)
 {
-    byte *sp = (byte *)sunParse;
-    byte *sl = (byte *)sunLight;
     vec_t sunDirection[3];
     float ambient, sunIntensity, sunAngleOverride;
     float *sunColor;
@@ -286,12 +348,12 @@ void R_InterpretSunLightParseParamsIntoLights(SunLightParseParams *sunParse, Gfx
     float scale;
     float diffR, diffG, diffB;
 
-    AngleVectors(((SunLightParseParams *)sp)->angles, sunDirection, NULL, NULL);
+    AngleVectors(sunParse->angles, sunDirection, NULL, NULL);
 
-    ambient = ((SunLightParseParams *)sp)->ambientScale;
-    sunIntensity = ((SunLightParseParams *)sp)->diffuseFraction;
-    sunAngleOverride = ((SunLightParseParams *)sp)->sunLight;
-    sunColor = ((SunLightParseParams *)sp)->ambientColor;
+    ambient = sunParse->ambientScale;
+    sunIntensity = sunParse->diffuseFraction;
+    sunAngleOverride = sunParse->sunLight;
+    sunColor = sunParse->ambientColor;
 
     if (ambient != 0.0f) {
         float normLen = ColorNormalize(sunColor, sunColor);
@@ -307,30 +369,21 @@ void R_InterpretSunLightParseParamsIntoLights(SunLightParseParams *sunParse, Gfx
     }
 
     scale = (sunAngleOverride - ambient) * (1.0f - sunIntensity);
-    diffR = scale * ((SunLightParseParams *)sp)->sunColor[0];
-    diffG = scale * ((SunLightParseParams *)sp)->sunColor[1];
-    diffB = scale * ((SunLightParseParams *)sp)->sunColor[2];
+    diffR = scale * sunParse->sunColor[0];
+    diffG = scale * sunParse->sunColor[1];
+    diffB = scale * sunParse->sunColor[2];
 
-    {
-        static GfxLight sunLightScratch;
-
-        if ((unsigned int)sunLight < 0x1000 ||
-            ((unsigned int)sunLight >= 0x08200000 && (unsigned int)sunLight < 0x08800000)) {
-            sunLight = &sunLightScratch;
-            sl = (byte *)sunLight;
-        }
-    }
     if (sunLight) {
-        (*(float *)&((SunLightParseParams *)sl)->name[4]) = sunDirection[0];
-        (*(float *)&((SunLightParseParams *)sl)->name[8]) = sunDirection[1];
-        (*(float *)&((SunLightParseParams *)sl)->name[12]) = sunDirection[2];
-        (*(float *)&((SunLightParseParams *)sl)->name[16]) = 0.0f;
-        (*(float *)&((SunLightParseParams *)sl)->name[20]) = diffR;
-        (*(float *)&((SunLightParseParams *)sl)->name[24]) = diffG;
-        (*(float *)&((SunLightParseParams *)sl)->name[28]) = diffB;
-        (*(float *)&((SunLightParseParams *)sl)->name[32]) = ambientR;
-        (*(float *)&((SunLightParseParams *)sl)->name[36]) = ambientG;
-        (*(float *)&((SunLightParseParams *)sl)->name[40]) = ambientB;
+        sunLight->position[0] = sunDirection[0];
+        sunLight->position[1] = sunDirection[1];
+        sunLight->position[2] = sunDirection[2];
+        sunLight->position[3] = 0.0f;
+        sunLight->color[0] = diffR;
+        sunLight->color[1] = diffG;
+        sunLight->color[2] = diffB;
+        sunLight->u.dir.ambientColor[0] = ambientR;
+        sunLight->u.dir.ambientColor[1] = ambientG;
+        sunLight->u.dir.ambientColor[2] = ambientB;
     }
 }
 
@@ -783,6 +836,29 @@ finish:
         for (i = 0; i < s_world.cellCount; i++)
             R_SortGfxAabbTree(&s_world, s_world.cells[i].aabbTree);
     }
+
+#ifdef __EMSCRIPTEN__
+    {
+        int cell;
+        int rootSmodels = 0;
+        int leafSmodels = 0;
+        int cellsWithRoot = 0;
+        int cellsMissingTree = 0;
+
+        for (cell = 0; cell < s_world.cellCount; cell++) {
+            GfxAabbTree *tree = s_world.cells[cell].aabbTree;
+            if (!tree) {
+                cellsMissingTree++;
+                continue;
+            }
+            rootSmodels += tree->staticModelCount;
+            if (tree->staticModelCount > 0)
+                cellsWithRoot++;
+            if (tree->childCount <= 0)
+                leafSmodels += tree->staticModelCount;
+        }
+    }
+#endif
 
     Hunk_ClearTempMemory();
 }
@@ -1364,7 +1440,7 @@ void __attribute_regparm__(1) R_LoadSurfaces(GfxBspLoad *load)
         surf->sortGroup = sortGroup;
         surf->tris = tri;
 
-        if (material && (material->info.surfaceFlags & 8)) {
+        if (material && (material->info.gameFlags & 8)) {
             if (skyMaterial && skyMaterial != material)
                 R_Error(1, "map has at least two different skies: %s and %s\nOnly one sky per map is supported\n",
                         skyMaterial->info.name, material->info.name);

@@ -13,7 +13,21 @@ extern const dvar_t *packetDebug;
 static char s[64];
 extern char *netsrcString[2];
 static int net_iProfilingOn;
+#ifdef __EMSCRIPTEN__
+/* Gamestate is ~8–16KB → many 1300B fragments. Stock depth 16 drops mid-GS
+ * on listen/loopback (client sees fragLen=1300 forever). */
+#define MAX_LOOPBACK 64
+static struct {
+    loopmsg_t msgs[MAX_LOOPBACK];
+    int get;
+    int send;
+} s_loopbacks[2];
+#define LOOPBACKS s_loopbacks
+#else
+#define MAX_LOOPBACK 16
 extern loopback_t loopbacks[2];
+#define LOOPBACKS loopbacks
+#endif
 
 COD2_ASSERT_FIELD(dvar_t, current, 0x8);
 COD2_ASSERT_FIELD(LegacyHacks, cl_running, 0x4);
@@ -401,42 +415,34 @@ Bool NET_SendPacket(netsrc_t sock, int length, const void *data, netadr_t to)
     }
 
     if (to.type == 2) {
-
+        /* CoD2rev NET_SendLoopPacket: client→loopbacks[NS_SERVER],
+         * server→loopbacks[to.port] (listen client slot). */
+        int port = 0;
         int idx;
         loopmsg_t *msg;
-        loopback_t *loop;
 
-        if (sock <= 0) {
-
+        if ((int)sock <= 0) {
+            port = (int)sock;
             idx = 1;
-            loop = &loopbacks[idx];
-            int sendSlot = loop->send & 0xf;
-            loop->send++;
-            msg = &loop->msgs[sendSlot];
-            if (length > (int)sizeof(msg->data))
-                length = (int)sizeof(msg->data);
-            memcpy(msg, data, length);
-            msg->datalen = length;
-            msg->port = 0;
-            return 1;
-        } else if (sock == 1) {
-
-            unsigned short portVal = to.port;
-            idx = 0;
-            loop = &loopbacks[idx];
-            int sendSlot = loop->send & 0xf;
-            loop->send++;
-            msg = &loop->msgs[sendSlot];
-            if (length > (int)sizeof(msg->data))
-                length = (int)sizeof(msg->data);
-            memcpy(msg, data, length);
-            msg->datalen = length;
-            msg->port = portVal;
-            return 1;
+        } else if ((int)sock == 1) {
+            idx = (int)to.port;
+            if (idx < 0 || idx > 1)
+                idx = 0;
         } else {
-
             return 0;
         }
+
+        {
+            int sendSlot = LOOPBACKS[idx].send & (MAX_LOOPBACK - 1);
+            LOOPBACKS[idx].send++;
+            msg = &LOOPBACKS[idx].msgs[sendSlot];
+            if (length > (int)sizeof(msg->data))
+                length = (int)sizeof(msg->data);
+            memcpy(msg->data, data, length);
+            msg->datalen = length;
+            msg->port = port;
+        }
+        return 1;
     } else if (to.type == 1 || to.type == 0) {
 
         return 0;
@@ -606,28 +612,25 @@ qboolean NET_CompareBaseAdr(netadr_t a, netadr_t b)
 
 qboolean NET_GetLoopPacket(netsrc_t sock, netadr_t *net_from, msg_t *net_message)
 {
-
-    loopback_t *loop = &loopbacks[(int)sock];
-    int send = loop->send;
-    int get = loop->get;
+    int send = LOOPBACKS[(int)sock].send;
+    int get = LOOPBACKS[(int)sock].get;
     int pending = send - get;
 
-    if (pending > 16) {
-
-        loop->get = send - 16;
-        get = loop->get;
+    if (pending > MAX_LOOPBACK) {
+        LOOPBACKS[(int)sock].get = send - MAX_LOOPBACK;
+        get = LOOPBACKS[(int)sock].get;
     }
 
-    if (get >= loop->send) {
+    if (get >= send) {
         return 0;
     }
 
     {
-        int slot = get & 0xf;
-        loop->get = get + 1;
-        loopmsg_t *m = &loop->msgs[slot];
+        int slot = get & (MAX_LOOPBACK - 1);
+        loopmsg_t *m = &LOOPBACKS[(int)sock].msgs[slot];
+        LOOPBACKS[(int)sock].get = get + 1;
 
-        memcpy(net_message->data, m, m->datalen);
+        memcpy(net_message->data, m->data, m->datalen);
         net_message->cursize = m->datalen;
 
         *(int *)net_from->ip = 0;
@@ -663,11 +666,8 @@ Bool Netchan_TransmitNextFragment(netchan_t *chan)
             fragmentLength = 0x514;
         }
 
-        if (chan->sock == 1) {
-            MSG_WriteLong(&send, fragStart);
-        } else {
-            MSG_WriteShort(&send, fragStart);
-        }
+        /* cod2-main / CoD2 1.3: fragment offset is always a short */
+        MSG_WriteShort(&send, fragStart);
         MSG_WriteShort(&send, fragmentLength);
         MSG_WriteData(&send, chan->unsentBuffer + fragStart, fragmentLength);
     }
@@ -804,12 +804,8 @@ qboolean Netchan_Process(netchan_t *chan, msg_t *msg)
     }
 
     if (fragmented) {
-
-        if (chan->sock == 0) {
-            fragmentStart = MSG_ReadLong(msg);
-        } else {
-            fragmentStart = MSG_ReadShort(msg);
-        }
+        /* cod2-main / CoD2 1.3: fragment offset is always a short */
+        fragmentStart = MSG_ReadShort(msg);
         fragmentLength = MSG_ReadShort(msg);
     } else {
         fragmentStart = 0;
@@ -846,33 +842,30 @@ qboolean Netchan_Process(netchan_t *chan, msg_t *msg)
         }
     }
 
-#define CHAN_INCOMING_SEQUENCE (*(int *)((char *)chan + 0xc))
-#define CHAN_DROPPED (*(int *)((char *)chan + 0x8))
-
-    if (sequence <= CHAN_INCOMING_SEQUENCE) {
+    if (sequence <= chan->incomingSequence) {
         if (showdrop->current.enabled || showpackets->current.enabled) {
             Com_Printf("[client %i] %s:Out of order packet %i at %i\n",
                        1,
                        NET_AdrToString(chan->remoteAddress),
                        sequence,
-                       CHAN_INCOMING_SEQUENCE);
+                       chan->incomingSequence);
         }
         return 0;
     }
 
-    CHAN_DROPPED = sequence - CHAN_INCOMING_SEQUENCE - 1;
-    if (CHAN_DROPPED > 0) {
+    chan->dropped = sequence - chan->incomingSequence - 1;
+    if (chan->dropped > 0) {
         if (showdrop->current.enabled || showpackets->current.enabled) {
             Com_Printf("[client %i] %s: Dropped %i packets at %i\n",
                        1,
                        NET_AdrToString(chan->remoteAddress),
-                       CHAN_DROPPED,
+                       chan->dropped,
                        sequence);
         }
     }
 
     if (!fragmented) {
-        CHAN_INCOMING_SEQUENCE = sequence;
+        chan->incomingSequence = sequence;
         return 1;
     }
 
@@ -882,21 +875,33 @@ qboolean Netchan_Process(netchan_t *chan, msg_t *msg)
     }
 
     if (fragmentStart != chan->fragmentLength) {
+#ifdef __EMSCRIPTEN__
+        Com_Printf("%s:Dropped a message fragment seq=%d start=%d have=%d\n",
+                   NET_AdrToString(chan->remoteAddress), sequence,
+                   fragmentStart, chan->fragmentLength);
+#else
         if (showdrop->current.enabled || showpackets->current.enabled) {
             Com_Printf("%s:Dropped a message fragment\n",
                        NET_AdrToString(chan->remoteAddress),
                        sequence);
         }
+#endif
         return 0;
     }
 
     if (fragmentLength < 0 ||
         msg->readcount + fragmentLength > msg->cursize ||
         fragmentStart + fragmentLength > MAX_MSGLEN) {
+#ifdef __EMSCRIPTEN__
+        Com_Printf("%s:illegal fragment length=%d start=%d cursize=%d read=%d\n",
+                   NET_AdrToString(chan->remoteAddress), fragmentLength,
+                   fragmentStart, msg->cursize, msg->readcount);
+#else
         if (showdrop->current.enabled || showpackets->current.enabled) {
             Com_Printf("%s:illegal fragment length\n",
                        NET_AdrToString(chan->remoteAddress));
         }
+#endif
         return 0;
     }
 
@@ -927,8 +932,6 @@ qboolean Netchan_Process(netchan_t *chan, msg_t *msg)
         MSG_ReadLong(msg);
     }
 
-    CHAN_INCOMING_SEQUENCE = sequence;
+    chan->incomingSequence = sequence;
     return 1;
-#undef CHAN_INCOMING_SEQUENCE
-#undef CHAN_DROPPED
 }

@@ -254,7 +254,7 @@ extern void ListBox_SetEndPos(void *listPtr, int pos);
 extern void ListBox_SetCursorPos(void *listPtr, int pos);
 extern int CL_IsPlayerTalking(int index);
 extern int CL_IsPlayerMuted(int index);
-extern int CL_MutePlayer(int index);
+extern void CL_MutePlayer(int clientIndex);
 extern int Int_Parse(const char **args, int *out);
 extern void CLUI_GetCDKey(char *buf, int bufSize, char *checksum, int checksumSize);
 extern void CLUI_SetCDKey(char *key, char *checksum);
@@ -468,6 +468,15 @@ char *GetMenuBuffer(const char *filename)
     return menuBuf2;
 }
 
+/* WASM workaround: a bare ".menu" string-literal argument at this call site was
+ * observed (o1-strcatdbg-20260808 diagnostic build) to arrive inside I_strncat()
+ * as an empty string (srcLen=0) despite the caller writing ".menu" in source —
+ * a toolchain/constant-merging artifact specific to this short literal used as a
+ * direct call argument in this translation unit, not a logic bug (see MENU-DBG /
+ * STRCAT-DBG traces: ui/default.menu exhibited the identical symptom below).
+ * Routing through a named, addressable static avoids the corrupted-literal path. */
+static const char kScriptMenuExt[] = ".menu";
+
 qboolean Load_ScriptMenu(const char *pszMenu, int imageTrack)
 {
     char szMenuFile[256];
@@ -476,7 +485,7 @@ qboolean Load_ScriptMenu(const char *pszMenu, int imageTrack)
     strcpy(szMenuFile, "ui_mp/scriptmenus/");
 
     I_strncat(szMenuFile, 0x100, pszMenu);
-    I_strncat(szMenuFile, 0x100, ".menu");
+    I_strncat(szMenuFile, 0x100, kScriptMenuExt);
 
     menuList = UI_LoadMenu(szMenuFile, imageTrack);
     if (!menuList)
@@ -3956,9 +3965,7 @@ void UI_RunMenuScript(const char **args)
     if (I_stricmp(name, "LoadMovies") == 0) {
         int numMovies, i;
         char *filePtr;
-        extern int __mh_execute_header;
-
-        numMovies = FS_GetFileList("video", "roq", 0, addr, (int)&__mh_execute_header);
+        numMovies = FS_GetFileList("video", "roq", 0, addr, COD2_MH_EXECUTE_HEADER);
         sharedUiInfo.movieCount = numMovies;
         if (numMovies == 0)
             return;
@@ -5350,10 +5357,30 @@ static void UI_BuildPlayerList(void)
 
 void UI_LoadIngameMenus(void)
 {
+    static const char *const kWeaponAllowDvars[] = {
+        "ui_allow_greasegun", "ui_allow_m1carbine", "ui_allow_m1garand",
+        "ui_allow_springfield", "ui_allow_thompson", "ui_allow_bar",
+        "ui_allow_sten", "ui_allow_enfield", "ui_allow_enfieldsniper",
+        "ui_allow_bren", "ui_allow_pps42", "ui_allow_nagant", "ui_allow_svt40",
+        "ui_allow_nagantsniper", "ui_allow_ppsh", "ui_allow_mp40",
+        "ui_allow_kar98k", "ui_allow_g43", "ui_allow_kar98ksniper",
+        "ui_allow_mp44", "ui_allow_shotgun", "ui_allow_weaponchange",
+        NULL
+    };
+    int i;
+
     if (g_ingameMenusLoaded)
         return;
 
     g_ingameMenusLoaded = 1;
+
+    /*
+     * weapon_*.menu showDvar { "1" } vs { "2" }. If GSC never setClientCvar
+     * these, both button variants stay hidden and clicks hit decorations.
+     * Vanilla _weapons.gsc defaults them to 1; register the same here.
+     */
+    for (i = 0; kWeaponAllowDvars[i]; i++)
+        Dvar_RegisterString_mac(kWeaponAllowDvars[i], "1", 0x1000);
 
     Load_ScriptMenu("ingame", 3);
     Load_ScriptMenu("callvote", 3);
@@ -5897,6 +5924,9 @@ qboolean UI_SetActiveMenu(int menu)
 
     case 5:
         Key_SetCatcher(8);
+#ifdef __EMSCRIPTEN__
+        Menus_CloseAll(uiInfo);
+#endif
         Menus_OpenByName(uiInfo, "team");
         return 1;
 
@@ -5918,8 +5948,15 @@ qboolean UI_SetActiveMenu(int menu)
         pFocus = (menuDef_t *)Menu_GetFocused(uiInfo);
         if (pFocus) {
             int activeMenu = uiInfo->currentMenuType;
-            if (activeMenu != 9 && activeMenu != 10)
+            if (activeMenu != 9 && activeMenu != 10) {
+#ifdef __EMSCRIPTEN__
+                /* Loading/main leftovers must not block weapon/class script popups. */
+                Menus_CloseAll(uiInfo);
+                pFocus = NULL;
+#else
                 return 0;
+#endif
+            }
         }
 
         legacyBase = *(byte **)imp_legacyHacks;
@@ -5936,12 +5973,16 @@ qboolean UI_SetActiveMenu(int menu)
         }
 
         Key_SetCatcher(8);
+        (*(clientActive_t **)imp_cl)->displayHUDWithKeycatchUI = 1;
         Menus_CloseAll(uiInfo);
         strcpy(((LegacyHacks *)legacyBase)->ui_scriptMenu, ((LegacyHacks *)legacyBase)->ui_newScriptMenu);
         ((LegacyHacks *)legacyBase)->ui_scriptMenuIndex = ((LegacyHacks *)legacyBase)->ui_newScriptMenuIndex;
         (*(byte *)&((LegacyHacks *)legacyBase)->ui_newScriptMenu[0]) = 0;
         ((LegacyHacks *)legacyBase)->ui_newScriptMenuIndex = -1;
-        Menus_OpenByName(uiInfo, ((LegacyHacks *)legacyBase)->ui_scriptMenu);
+        {
+            const char *scriptMenu = ((LegacyHacks *)legacyBase)->ui_scriptMenu;
+            Menus_OpenByName(uiInfo, scriptMenu);
+        }
         return 1;
 
     case 11:

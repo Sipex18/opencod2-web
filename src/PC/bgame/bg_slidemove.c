@@ -19,7 +19,10 @@ extern Bool Jump_GetStepHeight(playerState_t *ps, const vec_t *origin, float *st
 extern void Jump_ClampVelocity(playerState_t *ps, const vec_t *origin);
 extern qboolean BG_CheckProne(int passEntityNum, const vec_t *vPos, const float fSize, const float fHeight, const float fYaw, float *pfTorsoHeight, float *pfTorsoPitch, float *pfWaistPitch, const qboolean bAlreadyProne, const qboolean bOnGround, vec_t *vGroundNormal, int handler, proneCheckType_t proneCheckType, float prone_feet_dist);
 
-#define MAX_CLIP_PLANES 5
+/* The slide loop writes planes[numplanes] with numplanes up to 7 (guarded by
+ * "numplanes > 7" below), so the array must hold 8 planes — 5 overflowed the
+ * stack/linear-memory locals and corrupted velocity/end/trace in corners. */
+#define MAX_CLIP_PLANES 8
 #define PM_SLIDEMOVE_ABI COD2_REGPARM(3) BM_NOINLINE
 
 static qboolean PM_SLIDEMOVE_ABI PM_SlideMove(pmove_t *pm, pml_t *pml, qboolean gravity);
@@ -94,19 +97,6 @@ static qboolean PM_SLIDEMOVE_ABI PM_SlideMove(pmove_t *pm, pml_t *pml, qboolean 
 #endif
 
         if (trace.allsolid) {
-#ifdef PM_STUCKTRACE
-            {
-                static int n;
-                if (n++ < 40 || (n % 60) == 0)
-                    fprintf(stderr, "[stuck] allsolid org=(%.1f,%.1f,%.1f) vel=(%.1f,%.1f,%.1f) "
-                                    "frac=%.3f startsolid=%d contents=0x%x surf=0x%x ent=%d mat='%s'\n",
-                            ps->origin[0], ps->origin[1], ps->origin[2],
-                            ps->velocity[0], ps->velocity[1], ps->velocity[2],
-                            trace.fraction, trace.startsolid, trace.contents, trace.surfaceFlags,
-                            trace.entityNum, trace.material ? trace.material : "(null)");
-                fflush(stderr);
-            }
-#endif
             ps->velocity[2] = 0;
             return 1;
         }

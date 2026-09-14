@@ -29,7 +29,7 @@ extern void XAnimBlend(struct XAnim_s *anims, unsigned int animIndex, const char
 extern XAnimParts *XAnimPrecache(const char *name, void *Alloc);
 extern void XAnimCreate(struct XAnim_s *anims, unsigned int animIndex, const char *name);
 extern void *XAnimCreateTree(void *anims, void *Alloc);
-extern void XAnimClearTreeGoalWeights(void *tree, int animIndex, int recursive);
+extern void XAnimClearTreeGoalWeights(void *tree, unsigned int animIndex, float blendTime);
 extern int XAnimSetGoalWeight(void *tree, unsigned int animIndex, float goalWeight, float goalTime, float rate, unsigned int notifyName, unsigned int notifyType, int bRestart);
 extern void XAnimSetTime(void *tree, int animIndex, float time);
 extern int XAnimIsLooped(struct XAnim_s *anims, int animIndex);
@@ -96,6 +96,7 @@ extern int CG_PlayClientSoundAlias(snd_alias_list_t *aliasList);
 extern int stricmp(const char *s1, const char *s2);
 extern void AxisCopy(vec3_t *in, vec3_t *out);
 extern void AxisToAngles(vec3_t *axis, vec_t *angles);
+extern float AngleNormalize360(float angle);
 extern void AnglesToAxis(const vec_t *angles, vec3_t *axis);
 extern void MatrixMultiply(const float (*in1)[3], const float (*in2)[3], float (*out)[3]);
 extern void AddLeanToPosition(vec_t *position, float viewAngle, float leanFrac, float maxStand, float maxCrouch);
@@ -660,10 +661,11 @@ void CG_RegisterWeapon(int weaponNum)
     weapInfo->iPrevAnim = -1;
 
     if (weapDef->szGunXModel[0]) {
-        if (!CG_HasAssetName(weapDef->szHandXModel))
+        if (!CG_HasAssetName(weapDef->szHandXModel)) {
             Com_Error(1, "\x15"
                          "CG_RegisterWeapon: No hand model specified for [%s]",
                       weapDef->szDisplayName);
+        }
 
         dobjModels[0].boneName = 0;
         dobjModels[0].ignoreCollision = 0;
@@ -679,10 +681,11 @@ void CG_RegisterWeapon(int weaponNum)
         if (XModelBad(dobjModels[0].model) || XModelBad(dobjModels[1].model))
             CG_Weapons_SetToDefault(weaponNum, dobjModels);
 
-        if (!CG_HasAssetName(weapDef->szXAnims[1]))
+        if (!CG_HasAssetName(weapDef->szXAnims[1])) {
             Com_Error(1, "\x15"
                          "CG_RegisterWeapon: No idle anim specified for [%s]",
                       weapDef->szDisplayName);
+        }
 
         pAnims = XAnimCreateAnims("VIEWMODEL", 0x17, imp_Hunk_AllocXAnimClient);
         XAnimBlend(pAnims, 0, "root", 1, 0x16, 0);
@@ -799,8 +802,9 @@ void CG_RegisterWeapon(int weaponNum)
 
     if (weapDef->szProjectileModel[0]) {
         weapInfo->missileSurfModel = CL_RegisterModel(weapDef->szProjectileModel);
-        if (!weapInfo->missileSurfModel)
+        if (!weapInfo->missileSurfModel) {
             Com_Error(1, "\x15Weapon %s does not specify a valid projectile model (%s)\n", weapDef->szInternalName, weapDef->szWorldModel);
+        }
     }
 
     if (weapDef->szProjExplosionEffect[0])
@@ -1267,8 +1271,8 @@ void CG_AddViewWeapon(playerState_t *ps)
     ws.vLastMoveAng[1] = cg->playerEntity.vLastMoveAng[1];
     ws.vLastMoveAng[2] = cg->playerEntity.vLastMoveAng[2];
     ws.fLastIdleFactor = cg->playerEntity.fLastIdleFactor;
-    ws.time = cg->time - playerState->commandTime;
-    ws.damageTime = cg->damageTime;
+    ws.time = cg->time - playerState->deltaTime;
+    ws.damageTime = cg->damageTime ? (cg->damageTime - playerState->deltaTime) : 0;
     ws.v_dmg_pitch = cg->v_dmg_pitch;
     ws.v_dmg_roll = cg->v_dmg_roll;
     ws.vGunOffset[0] = cg->vGunOffset[0];
@@ -1299,8 +1303,10 @@ void CG_AddViewWeapon(playerState_t *ps)
     CG_Madd(hand.origin, finalAxis[2], cg->swayOffset[2] + cg->vGunOffset[2] + CG_DvarValue(imp_cg_gun_z));
 
     if (BG_IsAimDownSightWeapon(weaponIndex) && playerState->fWeaponPosFrac > 0.0f) {
-        cg->gunPitch = weaponAngles[0];
-        cg->gunYaw = weaponAngles[1];
+        vec3_t finalAngles;
+        AxisToAngles(finalAxis, finalAngles);
+        cg->gunPitch = AngleNormalize360(finalAngles[0]);
+        cg->gunYaw = AngleNormalize360(finalAngles[1]);
         cg->gunXOfs = (hand.origin[0] - cg->refdef.vieworg[0]) * playerState->fWeaponPosFrac;
         cg->gunYOfs = (hand.origin[1] - cg->refdef.vieworg[1]) * playerState->fWeaponPosFrac;
         cg->gunZOfs = (hand.origin[2] - cg->refdef.vieworg[2]) * playerState->fWeaponPosFrac;
@@ -1900,7 +1906,11 @@ void CG_WeaponRunXModelAnims(playerState_t *ps, weaponInfo_t *weapInfo)
     qboolean adsIn;
 
     psBytes = (byte *)ps;
+    if (!weapInfo || !weapInfo->viewModelDObj)
+        return;
     pAnimTree = DObjGetTree(weapInfo->viewModelDObj);
+    if (!pAnimTree)
+        return;
     weaponIndex = BG_GetViewmodelWeaponIndex(ps);
     weapDef = (WeaponDef *)BG_GetWeaponDef(weaponIndex);
 
@@ -1947,7 +1957,11 @@ static inline __attribute__((always_inline)) void CG_ResetViewWeaponAnimTree(byt
     int clip;
     int activeAnim;
 
+    if (!weapInfo || !weapInfo->viewModelDObj)
+        return;
     tree = DObjGetTree(weapInfo->viewModelDObj);
+    if (!tree)
+        return;
     XAnimClearTreeGoalWeights(tree, 0, 0);
     XAnimSetGoalWeight(tree, 0, 1.0f, 0.0f, weapInfo->viewModelAnimRates[0], 0, 1, 0);
 
@@ -2015,6 +2029,8 @@ void CG_UpdateViewWeaponAnim(playerState_t *ps)
     CG_WeaponRunXModelAnims(ps, weapInfo);
 
     obj = weapInfo->viewModelDObj;
+    if (!obj)
+        return;
     DObjUpdateClientInfo(obj, (float)cg->frametime * 0.0010000000474974513f);
 
     partBits[0] = -1;
@@ -2032,6 +2048,8 @@ void CG_UpdateViewWeaponAnim(playerState_t *ps)
         return;
 
     weapInfo = &weapInfoBase[weaponIndex];
+    if (!weapInfo->viewModelDObj)
+        return;
     CG_PlayViewWeaponNotetrackSounds(weapInfo);
 }
 

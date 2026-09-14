@@ -455,21 +455,14 @@ void PlayerCmd_OpenMenu(scr_entref_t entref)
     pSelf = PlayerCmd_GetPlayerEntity(entref);
     menuName = Scr_GetString(0);
     if (pSelf->client->sess.connected != CON_CONNECTED) {
-        if (traceCount++ < 16) {
-            if (getenv("MTRACE"))
-                Com_Printf("[menu-trace] openMenu client=%u connected=%d menu='%s' rejected\n",
-                           entref.entnum, pSelf->client->sess.connected, menuName);
-        }
-        Scr_AddInt(0);     }
+        Scr_AddInt(0);
+        return;
+    }
 
     menuIndex = GScr_GetScriptMenuIndex(menuName);
-    if (traceCount++ < 16) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] openMenu client=%u connected=%d menu='%s' index=%d send='t %d'\n",
-                       entref.entnum, pSelf->client->sess.connected, menuName, menuIndex, menuIndex);
-    }
     SV_GameSendServerCommand(entref.entnum, 1, va("%c %i", 0x74, menuIndex));
-    Scr_AddInt(1); }
+    Scr_AddInt(1);
+}
 
 void PlayerCmd_OpenMenuNoMouse(scr_entref_t entref)
 {
@@ -477,25 +470,19 @@ void PlayerCmd_OpenMenuNoMouse(scr_entref_t entref)
     const char *menuName;
     int menuIndex;
     static int traceCount;
+    (void)traceCount;
 
     pSelf = PlayerCmd_GetPlayerEntity(entref);
     menuName = Scr_GetString(0);
     if (pSelf->client->sess.connected != CON_CONNECTED) {
-        if (traceCount++ < 16) {
-            if (getenv("MTRACE"))
-                Com_Printf("[menu-trace] openMenuNoMouse client=%u connected=%d menu='%s' rejected\n",
-                           entref.entnum, pSelf->client->sess.connected, menuName);
-        }
-        Scr_AddInt(0);     }
+        Scr_AddInt(0);
+        return;
+    }
 
     menuIndex = GScr_GetScriptMenuIndex(menuName);
-    if (traceCount++ < 16) {
-        if (getenv("MTRACE"))
-            Com_Printf("[menu-trace] openMenuNoMouse client=%u connected=%d menu='%s' index=%d send='t %d 1'\n",
-                       entref.entnum, pSelf->client->sess.connected, menuName, menuIndex, menuIndex);
-    }
     SV_GameSendServerCommand(entref.entnum, 1, va("%c %i 1", 0x74, menuIndex));
-    Scr_AddInt(1); }
+    Scr_AddInt(1);
+}
 
 void PlayerCmd_CloseMenu(scr_entref_t entref)
 {
@@ -735,10 +722,6 @@ void PlayerCmd_SetClientDvar(scr_entref_t entref)
     }
 
     PlayerCmd_CleanDvarValue(pszText, szOutString, sizeof(szOutString));
-    if (strncmp(pszDvar, "ui_allow_join", 13) == 0) {
-        Com_Printf("setClientCvar client=%u %s='%s'\n",
-                   entref.entnum, pszDvar, szOutString);
-    }
     SV_GameSendServerCommand(entref.entnum, 1, va("%c %s \"%s\"", 0x76, pszDvar, szOutString));
 }
 

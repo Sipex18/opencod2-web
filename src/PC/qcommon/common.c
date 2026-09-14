@@ -1431,10 +1431,6 @@ int Com_EventLoop(void)
     data = (byte *)LargeLocal_GetBuf(&bufData_ll);
     MSG_Init(&buf, data, MAX_MSGLEN);
 
-#ifdef __EMSCRIPTEN__
-    printf("Com_EventLoop: enter\n");
-#endif
-
     for (;;) {
         int evType, evValue, evValue2, evPtrLength;
         void *evPtr;
@@ -1466,28 +1462,13 @@ int Com_EventLoop(void)
 
         switch (evType) {
         case 0:
-#ifdef __EMSCRIPTEN__
-            printf("Com_EventLoop: evType=0 processing loopback\n");
-#endif
             while (NET_GetLoopPacket(0, &evFrom, &buf)) {
-#ifdef __EMSCRIPTEN__
-                printf("Com_EventLoop: before CL_PacketEvent\n");
-#endif
                 CL_PacketEvent(evFrom, &buf, evTime);
-#ifdef __EMSCRIPTEN__
-                printf("Com_EventLoop: after CL_PacketEvent\n");
-#endif
             }
             while (NET_GetLoopPacket(1, &evFrom, &buf)) {
                 CL_SwitchToLocalClient(0);
                 if (com_sv_running->current.enabled) {
-#ifdef __EMSCRIPTEN__
-                    printf("Com_EventLoop: before SV_PacketEvent\n");
-#endif
                     SV_PacketEvent(evFrom, &buf);
-#ifdef __EMSCRIPTEN__
-                    printf("Com_EventLoop: after SV_PacketEvent\n");
-#endif
                 } else {
                     CL_PacketEvent(evFrom, &buf, evTime);
                 }
@@ -1638,6 +1619,20 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
         minMsec = 1;
     }
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * rAF (emscripten_set_main_loop) paces frames to the display refresh,
+     * but high-refresh displays (144/240/360 Hz) push too many frames,
+     * causing very small time steps that break player physics.
+     * Enforce com_maxfps by skipping frames that arrive too early.
+     */
+    com_frameTime = Com_EventLoop();
+    if (com_frameTime < com_lastFrameTime)
+        com_lastFrameTime = com_frameTime;
+    rawMsec = com_frameTime - com_lastFrameTime;
+    if (rawMsec < minMsec)
+        return;
+#else
     do {
         com_frameTime = Com_EventLoop();
         if (com_frameTime < com_lastFrameTime)
@@ -1646,6 +1641,7 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
         if (rawMsec < minMsec)
             NET_Sleep(0);
     } while (rawMsec < minMsec);
+#endif
 
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
@@ -1707,7 +1703,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after SV_Frame #%d\n", web_frame_dbg);
     }
-    printf("SVDONE: after SV_Frame dedicated=%d\n", com_dedicated->current.integer);
 #endif
 
     if (!(com_dedicated->flags & 0x40)) {
@@ -1732,24 +1727,12 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     if (com_dedicated->current.integer)
         return;
 
-#ifdef __EMSCRIPTEN__
-    printf("SVDONE: before CL_RunOnce\n");
-#endif
     CL_SwitchToLocalClient(0);
     CL_RunOncePerClientFrame(maxMsec);
-#ifdef __EMSCRIPTEN__
-    printf("SVDONE: after CL_RunOnce\n");
-#endif
     CL_SwitchToLocalClient(0);
     Com_EventLoop();
-#ifdef __EMSCRIPTEN__
-    printf("SVDONE: after EventLoop\n");
-#endif
     CL_SwitchToLocalClient(0);
     Cbuf_Execute();
-#ifdef __EMSCRIPTEN__
-    printf("SVDONE: after Cbuf\n");
-#endif
     CL_SwitchToLocalClient(0);
     SND_UpdateLoopingSounds();
     SND_Update();
@@ -1757,7 +1740,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after SND #%d\n", web_frame_dbg);
     }
-    printf("SVDONE: after SND\n");
 #endif
     CL_SwitchToLocalClient(0);
     CL_Frame(maxMsec);
@@ -1765,7 +1747,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after CL_Frame #%d\n", web_frame_dbg);
     }
-    printf("SVDONE: after CL_Frame\n");
 #endif
     CL_SwitchToLocalClient(0);
     SCR_UpdateScreenInternal();
@@ -2322,8 +2303,15 @@ void Com_Init_Try_Block_Function(char *commandLine)
             needApply = 1;
         }
         if (needApply) {
+            /*
+             * Must stay on Cbuf — CL_Vid_Restart_f calls Web_TryResizeCanvas /
+             * EM_ASM proxies that need the browser event loop. Running it
+             * inside Com_Init (before emscripten_set_main_loop) can deadlock.
+             */
             Com_Printf("webdbg: queuing vid_restart for archived display settings\n");
             Cbuf_AddText("vid_restart\n");
+        } else {
+            Com_Printf("webdbg: boot display settings already applied — no vid_restart\n");
         }
     }
 #endif

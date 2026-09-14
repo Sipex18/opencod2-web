@@ -1,6 +1,7 @@
 #include "common_types.h"
 #include "imports.h"
 #include "bytematch.h"
+#include <string.h>
 
 extern void Com_Error(int code, const char *fmt, ...);
 
@@ -40,7 +41,13 @@ extern void SV_GetConfigstring(int index, char *buffer, int bufferLength);
 extern qboolean SV_MapExists(const char *name);
 extern void Scr_AddString(const char *value);
 extern void Scr_Notify(gentity_t *ent, unsigned short stringValue, int paramcount);
-extern unsigned int Scr_VoteCalled(gentity_t *self, char *command, char *param1, char *param2);
+extern int Scr_CountNotifyWaiters(int entnum, int classnum, unsigned int stringValue);
+extern int G_GetWeaponIndexForName(const char *name);
+extern WeaponDef *BG_GetWeaponDef(int iWeaponIndex);
+extern qboolean BG_IsWeaponValid(const playerState_t *ps, int iWeaponIndex);
+extern char *SL_ConvertToString(unsigned int stringValue);
+extern void ClientSpawn(gentity_t *ent, const vec_t *spawn_origin, const vec_t *spawn_angles);
+extern void Scr_VoteCalled(gentity_t *self, char *command, char *param1, char *param2);
 extern qboolean Scr_IsValidGameType(const char *pszGameType);
 extern const char *Scr_GetGameTypeNameForScript(const char *pszGameTypeScript);
 extern void G_GetPlayerViewOrigin(const gentity_t *ent, vec_t *origin);
@@ -590,6 +597,103 @@ void Cmd_SetViewpos_f(gentity_t *ent)
     TeleportPlayer(ent, origin, angles);
 }
 
+#ifdef __EMSCRIPTEN__
+static int G_WebIsWeaponMenuResponse(const char *menu, const char *response)
+{
+    size_t n;
+
+    if (!menu || !response || !response[0])
+        return 0;
+    if (!strstr(menu, "weapon"))
+        return 0;
+    if (!I_stricmp(response, "restricted") || !I_stricmp(response, "open") ||
+        !I_stricmp(response, "close") || !I_stricmp(response, "autoassign") ||
+        !I_stricmp(response, "allies") || !I_stricmp(response, "axis") ||
+        !I_stricmp(response, "spectator") || !I_stricmp(response, "team_americangerman"))
+        return 0;
+    n = strlen(response);
+    if (n < 4 || I_stricmp(response + (int)n - 3, "_mp"))
+        return 0;
+    return 1;
+}
+
+static int G_WebFindDeathmatchSpawn(vec3_t origin, vec3_t angles)
+{
+    gentity_t *ent;
+    int i;
+    int found = 0;
+
+    origin[0] = origin[1] = origin[2] = 0;
+    angles[0] = angles[1] = angles[2] = 0;
+
+    ent = g_entities;
+    for (i = 0; i < level.num_entities; ++i, ++ent) {
+        const char *cn;
+
+        if (!ent->r.inuse || !ent->classname)
+            continue;
+        cn = SL_ConvertToString(ent->classname);
+        if (!cn)
+            continue;
+        if (strcmp(cn, "mp_dm_spawn") && strcmp(cn, "mp_tdm_spawn"))
+            continue;
+        origin[0] = ent->r.currentOrigin[0];
+        origin[1] = ent->r.currentOrigin[1];
+        origin[2] = ent->r.currentOrigin[2];
+        angles[0] = ent->r.currentAngles[0];
+        angles[1] = ent->r.currentAngles[1];
+        angles[2] = ent->r.currentAngles[2];
+        found = 1;
+        break;
+    }
+    return found;
+}
+
+/* Heuristic: vanilla spawn is GSC menuWeapon -> spawnPlayer. Used only when
+ * waittill("menuresponse") has no waiter after the script-var freelist break. */
+static void G_WebFallbackWeaponSpawn(gentity_t *ent, const char *weaponName)
+{
+    vec3_t origin;
+    vec3_t angles;
+    int weaponIndex;
+    int clientNum;
+    WeaponDef *weapDef;
+    int ammoToAdd;
+
+    if (!ent || !ent->client || !weaponName)
+        return;
+    if (ent->client->sess.sessionState != SESS_STATE_SPECTATOR)
+        return;
+
+    weaponIndex = G_GetWeaponIndexForName(weaponName);
+    if (!weaponIndex) {
+        return;
+    }
+
+    clientNum = (int)(ent - g_entities);
+    G_WebFindDeathmatchSpawn(origin, angles);
+
+    SV_GameSendServerCommand(clientNum, 1, va("%c", 0x75));
+    SV_GameSendServerCommand(clientNum, 1, va("%c", 0x4b));
+
+    ent->client->sess.sessionState = SESS_STATE_PLAYING;
+    ClientSpawn(ent, origin, angles);
+
+    G_GivePlayerWeapon(&ent->client->ps, weaponIndex);
+    weapDef = BG_GetWeaponDef(weaponIndex);
+    if (weapDef) {
+        ammoToAdd = weapDef->iStartAmmo - ent->client->ps.ammo[weapDef->iAmmoIndex];
+        if (ammoToAdd > 0)
+            Add_Ammo(ent, weaponIndex, ammoToAdd, 1);
+    }
+    if (BG_IsWeaponValid(&ent->client->ps, weaponIndex)) {
+        ent->client->ps.weapon = weaponIndex;
+        ent->client->ps.weaponstate = 0;
+        G_SelectWeaponIndex(clientNum, weaponIndex);
+    }
+}
+#endif
+
 void Cmd_MenuResponse_f(gentity_t *pEnt)
 {
     char szServerId[1024];
@@ -602,9 +706,7 @@ void Cmd_MenuResponse_f(gentity_t *pEnt)
 
         SV_Cmd_ArgvBuffer(1, szServerId, sizeof(szServerId));
         serverId = atoi(szServerId);
-        if (serverId != Dvar_GetInt("sv_serverId")) {
-            return;
-        }
+        (void)serverId;
 
         SV_Cmd_ArgvBuffer(2, szMenuName, sizeof(szMenuName));
         menuIndex = atoi(szMenuName);
@@ -617,6 +719,26 @@ void Cmd_MenuResponse_f(gentity_t *pEnt)
         szMenuName[0] = '\0';
         strcpy(szResponse, "bad");
     }
+
+#ifdef __EMSCRIPTEN__
+    {
+        unsigned short menuNotify = ((const scr_const_t *)imp_scr_const)->menuresponse;
+        int waiters = Scr_CountNotifyWaiters((int)(pEnt - g_entities), 0, menuNotify);
+
+        Scr_AddString(szResponse);
+        Scr_AddString(szMenuName);
+        Scr_Notify(pEnt, menuNotify, 2);
+
+        if (G_WebIsWeaponMenuResponse(szMenuName, szResponse) &&
+            pEnt->client &&
+            pEnt->client->sess.sessionState == SESS_STATE_SPECTATOR) {
+            if (waiters == 0 || waiters == -2) {
+                G_WebFallbackWeaponSpawn(pEnt, szResponse);
+            }
+        }
+        return;
+    }
+#endif
 
     Scr_AddString(szResponse);
     Scr_AddString(szMenuName);

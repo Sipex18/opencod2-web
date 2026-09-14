@@ -23,7 +23,7 @@ extern void RB_ChangedWorldMatrix(float worldScale);
 extern void Com_Memcpy(void *dest, const void *src, int count);
 extern int XSurfaceGetNumVerts(const XSurface *surface);
 extern int XSurfaceGetNumTris(const XSurface *surface);
-extern long unsigned int XSurfaceGetTris(const XSurface *surface, r_index_t *dstIndices, int offset);
+extern void XSurfaceGetTris(const XSurface *surface, r_index_t *dstIndices, int offset);
 extern float Vec3Normalize(vec3_t v);
 extern void Vec3Cross(const vec3_t v0, const vec3_t v1, vec3_t cross);
 extern int VecNCompareCustomEpsilon(const vec_t *v0, const vec_t *v1, float epsilon, int coordCount);
@@ -1058,6 +1058,22 @@ void RB_TessStaticModelCached(const surfaceType_t *surfType)
     baseVertIndex = ((materialCommands_t *)tess)->optimizedIndexCount;
     dest = (*(char **)&((materialCommands_t *)tess)->optimizedIndices) + baseVertIndex * 2;
     ((materialCommands_t *)tess)->optimizedIndexCount = baseVertIndex + triIndexCount;
+
+#ifdef __EMSCRIPTEN__
+    {
+        int smcBase = *(int *)(*(void **)((byte *)surfType + 8));
+        if (smcBase < 0 || smcBase * 12 + triIndexCount * 2 > 0xc0000) {
+            static int smcOob;
+            if (smcOob < 10) {
+                smcOob++;
+                printf("[o1-smc] OOB read blocked: base=%d triIdx=%d cache=0xc0000 [o1-smc]\n",
+                       smcBase, triIndexCount);
+            }
+            ((materialCommands_t *)tess)->optimizedIndexCount = baseVertIndex;
+            return;
+        }
+    }
+#endif
 
     src = (char *)dx.smodelCacheIndices + *(int *)(*(void **)((byte *)surfType + 8)) * 12;
     Com_Memcpy(dest, src, triIndexCount * 2);

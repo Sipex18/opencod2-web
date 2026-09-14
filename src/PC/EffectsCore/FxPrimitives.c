@@ -154,7 +154,7 @@ void Cylinder_Cylinder(const Cylinder *_this);
 void OrientedParticle_OrientedParticle(const OrientedParticle *_this);
 void ZN16OrientedParticleD1Ev(void *_this);
 void ZN16OrientedParticleD0Ev(void *_this);
-void Cloud_Cloud(const Cloud *_this, const Cloud *_this_1);
+void Cloud_Cloud(const Cloud *_this);
 void ZN5CloudD1Ev(void *_this);
 void ZN5CloudD0Ev(void *_this);
 void Line_Line(const Line *_this);
@@ -940,7 +940,8 @@ const FxBoltFramePtr FxBoltFrame_Acquire(const FxBoltInfo *bolt)
 }
 
 extern float flrand(float min, float max);
-extern void FxScheduler_PlayEffect(void *scheduler, void *fx, float *origin, float *dir);
+/* Must match FxScheduler.c (5 args) — 4-arg calls → WASM unreachable in FX_WarpTime updates. */
+extern void FxScheduler_PlayEffect(void *scheduler, void *fx, float *origin, float *dir, void *bolt);
 void Particle_Die(const Particle *_this)
 {
     byte *p = (byte *)_this;
@@ -981,7 +982,7 @@ void Particle_Die(const Particle *_this)
     }
 
     scheduler = *(void **)imp_theFxScheduler;
-    FxScheduler_PlayEffect(scheduler, (*(void **)&((Particle *)p)->base.emitEffect), (float *)(p + 4), norm);
+    FxScheduler_PlayEffect(scheduler, (*(void **)&((Particle *)p)->base.emitEffect), (float *)(p + 4), norm, NULL);
 }
 
 void Tail_CalcNewEndpoint(const Tail *_this, const orientation_t *or_)
@@ -1712,7 +1713,7 @@ void Emitter_UpdateEmitFx(const Emitter *_this, vec_t *bindVelocity, const orien
             boltInfo = (byte *)((*(byte **)&((Effect *)(self))->mBolt.value)) + 0x3c;
 
         void *emitEffect = (((Emitter *)(self))->emitFx);
-        FxScheduler_PlayEffect(*(void **)imp_theFxScheduler, emitEffect, spawnPos, NULL);
+        FxScheduler_PlayEffect(*(void **)imp_theFxScheduler, emitEffect, spawnPos, NULL, boltInfo);
 
         float velLenSq = velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2];
         float dF = (velLenSq + velLenSq) * ftime;
@@ -1905,7 +1906,7 @@ Bool Particle_UpdateOrigin(const Particle *_this, const orientation_t *or_)
                 endpos[0] = start_pt[0] + (end_pt[0] - start_pt[0]) * fraction;
                 endpos[1] = start_pt[1] + (end_pt[1] - start_pt[1]) * fraction;
                 endpos[2] = start_pt[2] + (end_pt[2] - start_pt[2]) * fraction;
-                FxScheduler_PlayEffect(*(void **)imp_theFxScheduler, (*(void **)&((Effect *)self)->deathEffect), endpos, (vec_t *)(trace + 0x04));
+                FxScheduler_PlayEffect(*(void **)imp_theFxScheduler, (*(void **)&((Effect *)self)->deathEffect), endpos, (vec_t *)(trace + 0x04), NULL);
             }
 
             if (flags & 0x400) {
@@ -2902,14 +2903,13 @@ void ZN16OrientedParticleD0Ev(void *_this)
 }
 
 extern float Vec3Normalize(float *v);
-void Cloud_Cloud(const Cloud *_this, const Cloud *_this_1)
+void Cloud_Cloud(const Cloud *_this)
 {
     extern void *__ZTV5Cloud;
     extern float flrand(float min, float max);
     byte *p = (byte *)_this;
     float *dir = (float *)&((Cloud *)p)->randomDirection[0];
     int attempts = 4;
-    (void)_this_1;
     Particle_Particle((const Particle *)_this);
     *(int *)p = (int)&__ZTV5Cloud + 8;
 

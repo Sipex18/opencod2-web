@@ -20,6 +20,10 @@ extern void G_Damage(gentity_t *target, gentity_t *inflictor, gentity_t *attacke
                      const vec_t *dir, const vec_t *point, int damage, int dflags,
                      int mod, int hitLoc, int timeOffset);
 extern void G_FreeEntityDelay(gentity_t *ent);
+extern gentity_t *G_Spawn(void);
+extern int CM_ContentsOfModel(int handle);
+extern void Scr_SetString(scr_string_t *to, unsigned int value);
+extern unsigned int SL_GetString(const char *str, int type);
 
 extern const char *va(const char *fmt, ...);
 extern void Com_Error(int code, const char *fmt, ...);
@@ -124,6 +128,37 @@ void SP_trigger_hurt(gentity_t *self)
         byte sf = (byte)spawnflags;
         sf = (byte)(-sf);
         self->handler = (byte)(sf + 3);
+    }
+    /* SV_SetBrushModel already linked with contents=-1; re-link like
+     * SP_trigger_damage / SP_trigger_multiple after the real mask. */
+    SV_LinkEntity(self);
+}
+
+/*
+ * Auto-spawn trigger_hurt for inline lava brushes (CONTENTS_LAVA = 8).
+ * Two sources: CM_ContentsOfModel (clip contents) and SP_trigger_hurt
+ * (0x405c0008 includes bit 3). Map-placed trigger_hurt still comes from
+ * the entity string via G_InvokeSpawnFunc.
+ */
+void G_SpawnTriggerHurt(int numBrushModels)
+{
+    int i;
+    gentity_t *ent;
+    unsigned int classname;
+
+    if (numBrushModels < 2)
+        return;
+
+    classname = SL_GetString("trigger_hurt", 0);
+    for (i = 1; i < numBrushModels; i++) {
+        if ((CM_ContentsOfModel(i) & 8) == 0)
+            continue;
+        ent = G_Spawn();
+        if (!ent)
+            continue;
+        ent->s.index.brushmodel = i;
+        Scr_SetString(&ent->classname, classname);
+        SP_trigger_hurt(ent);
     }
 }
 

@@ -83,6 +83,9 @@ qboolean Item_EnableShowViaDvar(const itemDef_t *item, int flag)
         return 1;
 
     testValue = Dvar_GetVariantString(item->dvarTest);
+    if ((!testValue || testValue[0] == '\0') &&
+        item->dvarTest && !strncmp(item->dvarTest, "ui_allow_", 9))
+        testValue = "1";
 
     I_strncat(script, 1024, item->enableDvar);
     p = script;

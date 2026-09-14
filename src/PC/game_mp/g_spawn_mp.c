@@ -167,6 +167,7 @@ extern void Scr_GetHudElemField(int entnum, int offset);
 extern void Scr_SetClientField(gclient_t *client, int offset);
 extern void Scr_GetClientField(gclient_t *client, int offset);
 extern qboolean G_ParseSpawnVars(SpawnVar *spawnVar);
+extern const char *CM_EntityString(void);
 extern gentity_t *G_Spawn(void);
 extern unsigned char G_SetOrigin(gentity_t *ent, const vec_t *origin);
 extern unsigned char G_SetAngle(gentity_t *ent, const vec_t *angle);
@@ -654,49 +655,75 @@ void Scr_GetGenericField(byte *b, fieldtype_t type, int ofs)
     }
 }
 
+static const ent_field_t *G_FindStringEntField(const char *key, int offset)
+{
+    const ent_field_t *field;
+    int i;
+
+    if (offset >= 0 && offset < 10 && fields[offset].name && fields[offset].type == F_STRING)
+        return &fields[offset];
+
+    if (!key || !key[0])
+        return NULL;
+
+    for (i = 0; fields[i].name; ++i) {
+        if (fields[i].type == F_STRING && !I_stricmp(fields[i].name, key))
+            return &fields[i];
+    }
+
+    return NULL;
+}
+
+static qboolean G_EntStringFieldEquals(gentity_t *ent, const ent_field_t *field,
+                                       unsigned int nameId, const char *nameStr)
+{
+    scr_string_t fieldValue;
+    const char *fieldStr;
+
+    fieldValue = *(scr_string_t *)((byte *)ent + field->ofs);
+    if (!fieldValue)
+        return 0;
+    if ((unsigned int)fieldValue == nameId)
+        return 1;
+    if (!nameStr)
+        return 0;
+    fieldStr = SL_ConvertToString(fieldValue);
+    return fieldStr && !strcmp(fieldStr, nameStr);
+}
+
 void Scr_GetEnt(void)
 {
-    scr_string_t name;
-    int offset;
+    unsigned int nameId;
+    const char *nameStr;
     const ent_field_t *field;
     gentity_t *found;
     int i;
     gentity_t *ent;
 
-    name = (scr_string_t)Scr_GetConstString(0);
-    offset = Scr_GetOffset(0, Scr_GetString(1));
-    if (offset < 0) {
-        return;
-    }
-
-    field = &fields[offset];
-    if (field->type != F_STRING) {
+    nameId = Scr_GetConstString(0);
+    nameStr = SL_ConvertToString(nameId);
+    field = G_FindStringEntField(Scr_GetString(1), Scr_GetOffset(0, Scr_GetString(1)));
+    if (!field) {
+        Scr_AddUndefined();
         return;
     }
 
     found = NULL;
     ent = G_Entities();
     for (i = 0; i < G_Level()->num_entities; ++i, ++ent) {
-        scr_string_t fieldValue;
-
-        if (!ent->r.inuse) {
+        if (!ent->r.inuse)
             continue;
-        }
-
-        fieldValue = *(scr_string_t *)((byte *)ent + field->ofs);
-        if (!fieldValue || fieldValue != name) {
+        if (!G_EntStringFieldEquals(ent, field, nameId, nameStr))
             continue;
-        }
-
-        if (found) {
+        if (found)
             Scr_Error((const char *)"getent used with more than one entity");
-        }
         found = ent;
     }
 
-    if (found) {
+    if (found)
         Scr_AddEntityNum(found->s.number, 0);
-    }
+    else
+        Scr_AddUndefined();
 }
 
 void Scr_GetEntArray(void)
@@ -708,9 +735,8 @@ void Scr_GetEntArray(void)
         Scr_MakeArray();
         ent = G_Entities();
         for (i = 0; i < G_Level()->num_entities; ++i, ++ent) {
-            if (!ent->r.inuse) {
+            if (!ent->r.inuse)
                 continue;
-            }
             Scr_AddEntityNum(ent->s.number, 0);
             Scr_AddArray();
         }
@@ -718,35 +744,32 @@ void Scr_GetEntArray(void)
     }
 
     {
-        scr_string_t name = (scr_string_t)Scr_GetConstString(0);
-        int offset = Scr_GetOffset(0, Scr_GetString(1));
-        const ent_field_t *field;
+        unsigned int nameId = Scr_GetConstString(0);
+        const char *key = Scr_GetString(1);
+        const char *nameStr = SL_ConvertToString(nameId);
+        int offset = Scr_GetOffset(0, key);
+        const ent_field_t *field = G_FindStringEntField(key, offset);
+        int matches = 0;
 
-        if (offset < 0) {
-            return;
-        }
-
-        field = &fields[offset];
-        if (field->type != F_STRING) {
-            return;
-        }
-
+        /*
+         * Original returns without a value if the class-field lookup fails,
+         * which makes GSC `.size` throw "undefined is not a field object"
+         * and then "NO mp_dm_spawn SPAWNPOINTS IN MAP". Always yield an
+         * array; match by interned id or by string contents.
+         */
         Scr_MakeArray();
+        if (!field)
+            return;
+
         ent = G_Entities();
         for (i = 0; i < G_Level()->num_entities; ++i, ++ent) {
-            scr_string_t fieldValue;
-
-            if (!ent->r.inuse) {
+            if (!ent->r.inuse)
                 continue;
-            }
-
-            fieldValue = *(scr_string_t *)((byte *)ent + field->ofs);
-            if (!fieldValue || fieldValue != name) {
+            if (!G_EntStringFieldEquals(ent, field, nameId, nameStr))
                 continue;
-            }
-
             Scr_AddEntityNum(ent->s.number, 0);
             Scr_AddArray();
+            matches++;
         }
     }
 }
@@ -833,6 +856,7 @@ void G_LoadStructs(void)
     scr_thread_t threadId;
     SpawnVar *spawnVar;
     unsigned int initHandle = G_ScrData()->initstructs;
+    int structCount = 0;
 
     Com_Printf("G_LoadStructs: initstructs=%u\n", initHandle);
     if (initHandle) {
@@ -843,15 +867,17 @@ void G_LoadStructs(void)
         Com_Printf("G_LoadStructs: initstructs missing — skipping script init\n");
     }
 
+    SV_ResetEntityParsePoint();
     for (spawnVar = G_LevelSpawnVar(); G_ParseSpawnVars(spawnVar); spawnVar = G_LevelSpawnVar()) {
         G_SpawnStringInternal(spawnVar, (const char *)"classname", (const char *)"", &classname);
         if (!strcmp("script_struct", classname)) {
             G_SpawnStruct(spawnVar);
+            structCount++;
         }
     }
 
     SV_ResetEntityParsePoint();
-    Com_Printf("G_LoadStructs: spawn parse done\n");
+    (void)structCount;
 }
 
 void Scr_SetGenericField(byte *b, fieldtype_t type, int ofs)
@@ -933,64 +959,95 @@ void G_CallSpawn(void)
         return;
     }
 
-    Com_Printf("webdbg: G_CallSpawn classname='%s'\n", classname);
-
     item = G_GetItemForClassname(classname);
     if (item) {
-        Com_Printf("webdbg: G_CallSpawn before G_Spawn (item)\n");
         ent = G_Spawn();
-        Com_Printf("webdbg: G_CallSpawn before G_ParseEntityFields (item)\n");
         G_ParseEntityFields(ent);
-        Com_Printf("webdbg: G_CallSpawn before G_SpawnItem\n");
         G_SpawnItem(ent, item);
-        Com_Printf("webdbg: G_CallSpawn after G_SpawnItem\n");
         return;
     }
 
     kind = G_SpawnFuncKind(classname);
     if (kind == 0) {
-        Com_Printf("webdbg: G_CallSpawn skip classname='%s'\n", classname);
         return;
     }
     if (kind == 2) {
-        Com_Printf("webdbg: G_CallSpawn unmatched classname, before G_Spawn\n");
         ent = G_Spawn();
         G_ParseEntityFields(ent);
-        Com_Printf("webdbg: G_CallSpawn unmatched classname done\n");
         return;
     }
 
-    Com_Printf("webdbg: G_CallSpawn before G_Spawn '%s'\n", classname);
     ent = G_Spawn();
-    Com_Printf("webdbg: G_CallSpawn before G_ParseEntityFields '%s'\n", classname);
     G_ParseEntityFields(ent);
-    Com_Printf("webdbg: G_CallSpawn before direct spawn '%s'\n", classname);
     G_InvokeSpawnFunc(classname, ent);
-    Com_Printf("webdbg: G_CallSpawn after direct spawn '%s'\n", classname);
 }
 
 void G_SpawnEntitiesFromString(void)
 {
     SpawnVar *spawnVar;
     int iter = 0;
+    int dmSpawns = 0;
+    int tdmSpawns = 0;
+    int scriptModels = 0;
+    int scriptBrushes = 0;
+    int scriptOrigins = 0;
+    int inuse = 0;
+    int i;
+    gentity_t *ent;
+    const char *ents;
+    int lumpDm = 0;
+    const char *p;
 
-    Com_Printf("webdbg: G_SpawnEntitiesFromString before first G_ParseSpawnVars\n");
+    SV_ResetEntityParsePoint();
+    ents = CM_EntityString();
+    if (ents) {
+        for (p = ents; (p = strstr(p, "mp_dm_spawn")) != NULL; p += 11)
+            lumpDm++;
+    }
+    (void)lumpDm;
+
     if (!G_ParseSpawnVars(G_LevelSpawnVar())) {
         Com_Error(1, (const char *)"\x15SpawnEntities: no entities");
     }
-    Com_Printf("webdbg: G_SpawnEntitiesFromString before SP_worldspawn\n");
 
     SP_worldspawn();
-    Com_Printf("webdbg: G_SpawnEntitiesFromString after SP_worldspawn\n");
 
     spawnVar = G_LevelSpawnVar();
     while (G_ParseSpawnVars(spawnVar)) {
-        Com_Printf("webdbg: G_SpawnEntitiesFromString iter=%d before G_CallSpawn\n", iter);
         G_CallSpawn();
-        Com_Printf("webdbg: G_SpawnEntitiesFromString iter=%d after G_CallSpawn\n", iter);
         iter++;
     }
-    Com_Printf("webdbg: G_SpawnEntitiesFromString loop done iters=%d\n", iter);
+
+    ent = G_Entities();
+    for (i = 0; i < G_Level()->num_entities; ++i, ++ent) {
+        const char *cn;
+        if (!ent->r.inuse)
+            continue;
+        inuse++;
+        if (!ent->classname)
+            continue;
+        cn = SL_ConvertToString(ent->classname);
+        if (!cn)
+            continue;
+        if (!strcmp(cn, "mp_dm_spawn")) {
+            dmSpawns++;
+        } else if (!strcmp(cn, "mp_tdm_spawn")) {
+            tdmSpawns++;
+        } else if (!strcmp(cn, "script_model")) {
+            scriptModels++;
+        } else if (!strcmp(cn, "script_brushmodel")) {
+            scriptBrushes++;
+        } else if (!strcmp(cn, "script_origin")) {
+            scriptOrigins++;
+        }
+    }
+    (void)iter;
+    (void)inuse;
+    (void)dmSpawns;
+    (void)tdmSpawns;
+    (void)scriptModels;
+    (void)scriptBrushes;
+    (void)scriptOrigins;
 }
 
 spawn_t spawns[24] = {

@@ -1,5 +1,8 @@
 #include "common_types.h"
 #include "imports.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 extern char *va(const char *format, ...);
 extern int FS_ReadFile(const char *filename, void **buffer);

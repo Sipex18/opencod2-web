@@ -4,6 +4,9 @@ extern refimport_t ri;
 extern GfxScene scene;
 #include "imports.h"
 #include "bytematch.h"
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 COD2_ASSERT_FIELD(GfxScene, viewCount, 0x0);
 COD2_ASSERT_FIELD(GfxScene, def, 0x4);
@@ -451,13 +454,49 @@ static void R_DPVS_REGPARM3_ABI R_GetSidePlaneNormals(vec3_t *winding, int verte
     R_GetSidePlaneNormals_impl(winding, vertexCount, normals);
 }
 
+#ifdef __EMSCRIPTEN__
+static int s_smodelSeen;
+static int s_smodelAdded;
+static int s_smodelSurfs;
+static int s_smodelLogFrames;
+static int s_smodelBadIndex;
+#endif
+
+static int R_SmodelIndexOk(int smodelIndex)
+{
+    GfxWorld *world = rgp.world;
+
+    if (smodelIndex < 0)
+        return 0;
+    if (!world || !world->smodelInsts || world->smodelCount <= 0)
+        return 0;
+    if ((unsigned)smodelIndex >= (unsigned)world->smodelCount)
+        return 0;
+    if (!rg.smodelDyncs)
+        return 0;
+    return 1;
+}
+
 static void R_DPVS_REGPARM3_ABI R_AddStaticModelWithCull_impl(int smodelIndex, const DpvsPlane *planes, int planeCount, int stackLevel)
 {
-    int *smodelDync = (int *)((byte *)rg.smodelDyncs + smodelIndex * 8);
-    int viewCount = scene.viewCount;
+    int *smodelDync;
+    int viewCount;
+
+    if (!R_SmodelIndexOk(smodelIndex)) {
+#ifdef __EMSCRIPTEN__
+        s_smodelBadIndex++;
+#endif
+        return;
+    }
+
+    smodelDync = (int *)((byte *)rg.smodelDyncs + smodelIndex * 8);
+    viewCount = scene.viewCount;
 
     if (smodelDync[0] == viewCount)
         return;
+#ifdef __EMSCRIPTEN__
+    s_smodelSeen++;
+#endif
 
     GfxStaticModelInstance *smodelInst = &rgp.world->smodelInsts[smodelIndex];
 
@@ -496,6 +535,10 @@ static void R_DPVS_REGPARM3_ABI R_AddStaticModelWithCull_impl(int smodelIndex, c
     sceneEnt->cullState = 5;
 
     R_AddXModelSurfaces(entIndex);
+#ifdef __EMSCRIPTEN__
+    s_smodelAdded++;
+    s_smodelSurfs += sceneEnt->surfCount;
+#endif
 }
 
 static void R_DPVS_REGPARM3_ABI R_AddStaticModelWithCull(int smodelIndex, const DpvsPlane *planes, int planeCount, int stackLevel)
@@ -568,8 +611,18 @@ static void R_DPVS_REGPARM3_ABI R_AddWorldSurfaceWithCull(int surfIndex, const D
 
 static void R_AddStaticModelDirect(int smodelIndex)
 {
-    int *smodelDync = (int *)((byte *)rg.smodelDyncs + smodelIndex * 8);
-    int viewCount = scene.viewCount;
+    int *smodelDync;
+    int viewCount;
+
+    if (!R_SmodelIndexOk(smodelIndex)) {
+#ifdef __EMSCRIPTEN__
+        s_smodelBadIndex++;
+#endif
+        return;
+    }
+
+    smodelDync = (int *)((byte *)rg.smodelDyncs + smodelIndex * 8);
+    viewCount = scene.viewCount;
 
     if (smodelDync[0] == viewCount)
         return;
@@ -684,8 +737,12 @@ static void R_DPVS_REGPARM3_ABI R_AddAabbTreeSurfaces_r_impl(GfxAabbTree *tree, 
 
             byte smodelFlag = dpvsG.drawSmodels;
 
-            if (smodelFlag && tree->staticModelCount > 0) {
-                for (i = 0; i < tree->staticModelCount; i++)
+            if (smodelFlag && tree->staticModelCount > 0 && tree->staticModels) {
+                int n = tree->staticModelCount;
+                int maxS = (rgp.world && rgp.world->smodelCount > 0) ? rgp.world->smodelCount : 0;
+                if (maxS > 0 && n > maxS)
+                    n = maxS;
+                for (i = 0; i < n; i++)
                     R_AddStaticModelWithCull_impl(tree->staticModels[i], (const DpvsPlane *)planes, planeCount, childStackLevel);
             }
 
@@ -696,8 +753,12 @@ static void R_DPVS_REGPARM3_ABI R_AddAabbTreeSurfaces_r_impl(GfxAabbTree *tree, 
 
         byte smodelFlag = dpvsG.drawSmodels;
 
-        if (smodelFlag && tree->staticModelCount > 0) {
-            for (i = 0; i < tree->staticModelCount; i++)
+        if (smodelFlag && tree->staticModelCount > 0 && tree->staticModels) {
+            int n = tree->staticModelCount;
+            int maxS = (rgp.world && rgp.world->smodelCount > 0) ? rgp.world->smodelCount : 0;
+            if (maxS > 0 && n > maxS)
+                n = maxS;
+            for (i = 0; i < n; i++)
                 R_AddStaticModelDirect(tree->staticModels[i]);
         }
 
@@ -839,6 +900,26 @@ extern void LargeLocal_LargeLocal(const LargeLocal *_this, int size);
 extern void *LargeLocal_GetBuf(const LargeLocal *_this);
 extern void ZN10LargeLocalD1Ev(LargeLocal *_this);
 
+static void R_AddAabbTreeSmodelsWithCull(GfxAabbTree *tree, const DpvsPlane *planes, int planeCount, int stackLevel)
+{
+    int i;
+    int count;
+    int maxSmodels;
+
+    if (!dpvsG.drawSmodels || !tree || !tree->staticModels)
+        return;
+    count = tree->staticModelCount;
+    if (count <= 0)
+        return;
+    maxSmodels = (rgp.world && rgp.world->smodelCount > 0) ? rgp.world->smodelCount : 0;
+    if (maxSmodels <= 0)
+        return;
+    if (count > maxSmodels)
+        count = maxSmodels;
+    for (i = 0; i < count; i++)
+        R_AddStaticModelWithCull_impl(tree->staticModels[i], planes, planeCount, stackLevel);
+}
+
 static void R_DPVS_REGPARM3_ABI R_AddVisibleSurfacesInCell_impl(const GfxCell *cell, const DpvsPlane *planes, int planeCount)
 {
     int i;
@@ -848,18 +929,30 @@ static void R_DPVS_REGPARM3_ABI R_AddVisibleSurfacesInCell_impl(const GfxCell *c
         if (tree && tree->childCount > 0) {
 
             if ((*(const dvar_t **)imp_r_portalFineCull)->current.enabled) {
+                /*
+                 * Vanilla walks children for world + smodels. Insert always writes
+                 * the smodel index onto this cell-root node first
+                 * (R_AddStaticModelToAabbTree_r). If the push-into-children step
+                 * misses, fine-cull would drop every bush/prop. Emit the root list
+                 * with per-model frustum cull; dync viewCount skips duplicates from
+                 * descendant leaves. referencia/cod2-main source.c R_AddVisibleSurfacesInCell
+                 * else-branch (no fine-cull) does the same root emit.
+                 */
+                R_AddAabbTreeSmodelsWithCull(tree, planes, planeCount, 0);
                 for (i = 0; i < tree->childCount; i++) {
                     GfxAabbTree *child = (GfxAabbTree *)((byte *)(intptr_t)tree->children + i * sizeof(GfxAabbTree));
                     R_AddAabbTreeSurfaces_r_impl(child, (DpvsPlane *)planes, planeCount, 0);
                 }
             } else {
 
+                R_AddAabbTreeSmodelsWithCull(tree, planes, planeCount, 0);
                 int startSurf = tree->startSurfIndex;
                 for (i = 0; i < tree->surfaceCount; i++)
                     R_AddWorldSurfaceWithCull_impl(startSurf + i, planes, planeCount, 0);
             }
         } else if (tree) {
 
+            R_AddAabbTreeSmodelsWithCull(tree, planes, planeCount, 0);
             int startSurf = tree->startSurfIndex;
             for (i = 0; i < tree->surfaceCount; i++)
                 R_AddWorldSurfaceWithCull_impl(startSurf + i, planes, planeCount, 0);
@@ -1749,8 +1842,6 @@ static inline int R_CullBoundsAgainstFrustumAndOccluders(const float *bounds, co
 }
 
 extern void R_AddBModelSurfaces(void *sceneEnt, int entIndex);
-extern int __mh_execute_header;
-
 static void R_AddWorldSurfacesDpvs_impl(const GfxViewParms *viewParms, int cameraCellIndex)
 {
     LargeLocal activeOccluderBuffer_large_local;
@@ -1759,7 +1850,7 @@ static void R_AddWorldSurfacesDpvs_impl(const GfxViewParms *viewParms, int camer
     int frustumPlaneCount;
     int i;
 
-    LargeLocal_LargeLocal(&activeOccluderBuffer_large_local, (int)&__mh_execute_header);
+    LargeLocal_LargeLocal(&activeOccluderBuffer_large_local, COD2_MH_EXECUTE_HEADER);
     byte *activeOccluderBuf = (byte *)LargeLocal_GetBuf(&activeOccluderBuffer_large_local);
     LargeLocal_LargeLocal(&occluderPlaneBuffer_large_local, 0x1e000);
     byte *occluderPlaneBuf = (byte *)LargeLocal_GetBuf(&occluderPlaneBuffer_large_local);
@@ -1777,6 +1868,12 @@ static void R_AddWorldSurfacesDpvs_impl(const GfxViewParms *viewParms, int camer
     dpvsG.drawSmodels = drawSModels;
     byte drawXModels = ((*(const dvar_t **)imp_r_drawXModels)->current.integer && drawEntities) ? 1 : 0;
     dpvsG.drawXmodels = drawXModels;
+#ifdef __EMSCRIPTEN__
+    s_smodelSeen = 0;
+    s_smodelAdded = 0;
+    s_smodelSurfs = 0;
+    s_smodelBadIndex = 0;
+#endif
 
     dpvsG.occluderCount = 0;
 
@@ -2004,11 +2101,14 @@ static void R_AddWorldSurfacesDpvs_impl(const GfxViewParms *viewParms, int camer
     {
         GfxWorld *world = rgp.world;
         int skySurfCount = world->skySurfCount;
-        if (dpvsG.farPlanePtr != 0 && skySurfCount > 0) {
+        if (skySurfCount > 0) {
             int *skyStartSurfs = world->skyStartSurfs;
+            int planeCount = frustumPlaneCount;
+            if (dpvsG.farPlanePtr)
+                planeCount = frustumPlaneCount - 1;
             for (i = 0; i < skySurfCount; i++) {
                 int surfIndex = skyStartSurfs[i];
-                R_AddWorldSurfaceWithCull_impl(surfIndex, frustumPlanes, frustumPlaneCount - 1, 0);
+                R_AddWorldSurfaceWithCull_impl(surfIndex, frustumPlanes, planeCount, 0);
             }
         }
     }

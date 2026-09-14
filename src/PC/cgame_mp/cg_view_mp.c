@@ -3,6 +3,9 @@
 #include "imports.h"
 #include "headers/PC/cgame_mp/cg_local.h"
 #include <math.h>
+#ifdef __EMSCRIPTEN__
+#include <stdio.h>
+#endif
 
 vec3_t maxs = { 4.0f, 4.0f, 4.0f };
 
@@ -77,9 +80,31 @@ extern float BG_GetVerticalBobFactor(const void *ps, float bobCycle, float xyspe
 extern float BG_GetHorizontalBobFactor(const void *ps, float bobCycle, float xyspeed, float bobMax);
 extern void BG_CalculateViewAngles(viewState_t *vs, vec_t *angles);
 extern void AddLeanToPosition(vec_t *origin, float viewAngle, float leanFrac, float maxStand, float maxCrouch);
-extern void CG_ShakeCamera(void);
+/* Must match cg_draw_mp.c — void vs unsigned return → WASM unreachable in CG_InitView. */
+extern unsigned int CG_ShakeCamera(void);
 extern void CG_PerturbCamera(void);
 extern void AnglesToAxis(const vec_t *angles, void *axis);
+extern void CL_GetScreenDimensions(int *width, int *height, float *aspect);
+
+void CG_SyncScreenDimensions(void)
+{
+    int sw, sh;
+    float sa;
+
+    if (!cgs)
+        return;
+    CL_GetScreenDimensions(&sw, &sh, &sa);
+    if (sw <= 0 || sh <= 0)
+        return;
+    cgs->viewX = 0;
+    cgs->viewY = 0;
+    cgs->viewWidth = sw;
+    cgs->viewHeight = sh;
+    if (sa > 0.1f)
+        cgs->viewAspect = sa;
+    else
+        cgs->viewAspect = (float)sw / (float)sh;
+}
 
 void CG_FxRestart(void);
 void CG_FxTest(void);
@@ -453,10 +478,18 @@ static void CG_CalcViewValues(void)
         framerate = cg_viewsize->current.integer;
 
     {
-        int screenX = cgs->viewX;
-        int screenY = cgs->viewY;
-        int screenW = cgs->viewWidth;
-        int screenH = cgs->viewHeight;
+        int screenX;
+        int screenY;
+        int screenW;
+        int screenH;
+
+        if (cgs->viewWidth <= 0 || cgs->viewHeight <= 0 || cgs->viewAspect <= 0.1f)
+            CG_SyncScreenDimensions();
+
+        screenX = cgs->viewX;
+        screenY = cgs->viewY;
+        screenW = cgs->viewWidth;
+        screenH = cgs->viewHeight;
 
         bobX = (framerate * screenW) / 100;
         bobX &= ~1;
@@ -554,9 +587,9 @@ static void CG_CalcViewValues(void)
             float hbob = BG_GetHorizontalBobFactor(ps, bobCycle, speed, bobMax);
             float forward[3], right[3], up[3];
             AngleVectors(cg->refdefViewAngles, forward, right, up);
-            cg->refdef.vieworg[0] += hbob * forward[0];
-            cg->refdef.vieworg[1] += hbob * forward[1];
-            cg->refdef.vieworg[2] += hbob * forward[2];
+            cg->refdef.vieworg[0] += hbob * right[0];
+            cg->refdef.vieworg[1] += hbob * right[1];
+            cg->refdef.vieworg[2] += hbob * right[2];
         }
 
         {

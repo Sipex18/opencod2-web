@@ -587,12 +587,14 @@ char g_ri[64] __attribute__((aligned(4))) = { 0 };
 
 extern void Com_Printf(const char *fmt, ...);
 
+void GScr_LoadAnimScripts(void) __attribute__((weak));
 void GScr_LoadAnimScripts(void)
 {
     Com_Printf("GScr_LoadAnimScripts: stub — animscripts not loaded\n");
 }
 void GScr_PostResetTimeout(void) {}
 char g_sNextDmgTableId[64] __attribute__((aligned(4))) = { 0 };
+void G_SpawnTriggerHurt(int numBrushModels) __attribute__((weak));
 void G_SpawnTriggerHurt(int numBrushModels)
 {
     Com_Printf("G_SpawnTriggerHurt(%d): stub — auto trigger_hurt brushes skipped\n", numBrushModels);

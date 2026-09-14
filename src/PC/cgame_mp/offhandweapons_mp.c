@@ -11,8 +11,10 @@ extern int BG_GetFirstEquippedOffhand(void *ps, int weaponType);
 extern float CG_FadeHudMenu(void *hud, int val, int time);
 extern void UI_DrawText(const char *text, int maxChars, void *font, float x, float y, int horzAlign, int vertAlign, float scale, const float *color, int textStyle);
 extern const char *UI_SafeTranslateString(const char *str);
-extern void CG_PlayEntitySoundAlias(int entNum, int soundAlias);
-extern int CG_PlaySoundAlias(int entNum, float *origin, int soundAlias);
+/* Must match cg_main_mp.c: return int. void(i32,i32) vs i32(i32,i32) makes wasm-ld
+ * replace ALL mismatched CG_PlayEntitySoundAlias calls (incl. cg_event) with unreachable. */
+extern int CG_PlayEntitySoundAlias(int entNum, snd_alias_list_t *aliasList);
+extern int CG_PlaySoundAlias(int entNum, const vec_t *origin, snd_alias_list_t *aliasList);
 extern qboolean CG_DObjGetWorldTagPos(void *cent, void *dobj, unsigned short tag, float *origin);
 extern int CG_DObjGetViewModelTagPos(void *dobj, unsigned short tag, float *origin);
 extern void BG_EvaluateTrajectory(void *trajectory, int time, float *result);
@@ -96,12 +98,12 @@ void CG_DrawOffHandName(rectDef_s *rect, struct Font_s *font, float scale, vec_t
 void CG_PrepOffHand(entityState_t *ent, int event, int eventParam)
 {
     weaponInfo_s *wi;
-    int soundAlias;
+    snd_alias_list_t *soundAlias;
 
     wi = &((*(weaponInfo_s **)imp_cg_weapons))[eventParam];
-    soundAlias = (int)(intptr_t)wi->pullbackSound;
+    soundAlias = wi->pullbackSound;
 
-    if (soundAlias != 0) {
+    if (soundAlias != NULL) {
         CG_PlayEntitySoundAlias(ent->number, soundAlias);
     }
 }
@@ -109,15 +111,15 @@ void CG_PrepOffHand(entityState_t *ent, int event, int eventParam)
 void CG_UseOffHand(centity_t *cent, int event, int eventParam)
 {
     weaponInfo_s *wi;
-    int soundAlias;
+    snd_alias_list_t *soundAlias;
     int clientNum;
     float origin[3];
     void *dobj;
 
     wi = &((*(weaponInfo_s **)imp_cg_weapons))[eventParam];
-    soundAlias = (int)(intptr_t)wi->flashSound;
+    soundAlias = wi->flashSound;
 
-    if (soundAlias == 0)
+    if (soundAlias == NULL)
         return;
 
     clientNum = cent->nextState.number;
@@ -143,7 +145,7 @@ void CG_UseOffHand(centity_t *cent, int event, int eventParam)
     BG_EvaluateTrajectory((void *)&cent->nextState.pos, cg->time, origin);
 
 play_sound:
-    CG_PlaySoundAlias(cent->nextState.number, origin, (int)(intptr_t)wi->flashSound);
+    CG_PlaySoundAlias(cent->nextState.number, origin, soundAlias);
 }
 
 void CG_SetEquippedOffHand(int offHandIndex)

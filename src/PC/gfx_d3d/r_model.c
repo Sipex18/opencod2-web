@@ -44,6 +44,10 @@ extern const struct trXSkin_t *XModelGetSkins(const struct XModel *model);
 extern struct XModel *XModelPrecache(const char *name, Alloc_t Alloc, Alloc_t AllocColl);
 extern Bool R_ValidXModelName(const char *name);
 extern refimport_t ri;
+#ifdef __EMSCRIPTEN__
+extern const char *XModelGetName(struct XModel *model);
+extern void Com_Printf(const char *fmt, ...);
+#endif
 
 #ifdef GFX_REAL_D3D9
 int g_smc_hit, g_smc_new;
@@ -261,6 +265,15 @@ void R_OptimizeAllModels(void)
     int v = r_optimizeXModels->current.integer;
     if (!v)
         return;
+#ifdef __EMSCRIPTEN__
+    {
+        /* Optimization must only run once during loading, never mid-game */
+        static int s_modelsOptimized;
+        if (s_modelsOptimized)
+            return;
+        s_modelsOptimized = 1;
+    }
+#endif
     DB_EnumXAssets(1, R_OptimizeModel, 0, 1);
 }
 
@@ -276,8 +289,24 @@ void *Model_Alloc(int size)
 
 static void R_OptimizeModel(XAssetHeader header, void *data)
 {
+    if (!header.model)
+        return;
     if (XModelBad(header))
         return;
+#ifdef __EMSCRIPTEN__
+    {
+        XModel *m = header.model;
+        if (!m->name || m->numLods <= 0 || m->numLods > 4) {
+            return;
+        }
+        int lodIdx;
+        for (lodIdx = 0; lodIdx < m->numLods; lodIdx++) {
+            if (!m->lodInfo[lodIdx].surfs) {
+                return;
+            }
+        }
+    }
+#endif
     XModelOptimize(header);
 }
 
@@ -832,9 +861,8 @@ void R_SkinSceneDObj(GfxSceneEntity *sceneEnt, GfxEntity *ent)
 
     {
         int startIndex = InterlockedExchangeAdd((volatile int *)&scene.sceneEntMaterialCount, surfaceCount);
-        extern int __mh_execute_header;
-        if (startIndex + surfaceCount > (int)(unsigned int)&__mh_execute_header) {
-            scene.sceneEntMaterialCount = (int)(unsigned int)&__mh_execute_header;
+        if (startIndex + surfaceCount > COD2_MH_EXECUTE_HEADER) {
+            scene.sceneEntMaterialCount = COD2_MH_EXECUTE_HEADER;
             {
                 GfxBackEndData *fed = frontEndDataOut;
                 if (*(int *)fed != warnCount) {
@@ -1140,9 +1168,8 @@ void R_SkinXModel(GfxSceneEntity *sceneEnt, GfxEntity *ent, int smodelIndex)
 
     {
         int startIdx = InterlockedExchangeAdd((volatile int *)&scene.sceneEntMaterialCount, surfaceCount);
-        extern int __mh_execute_header;
-        if (startIdx + surfaceCount > (int)(unsigned int)&__mh_execute_header) {
-            scene.sceneEntMaterialCount = (int)(unsigned int)&__mh_execute_header;
+        if (startIdx + surfaceCount > COD2_MH_EXECUTE_HEADER) {
+            scene.sceneEntMaterialCount = COD2_MH_EXECUTE_HEADER;
             GfxBackEndData *fed = frontEndDataOut;
             if (*(int *)fed != warnCount) {
                 warnCount = *(int *)fed;

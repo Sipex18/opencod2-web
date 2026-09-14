@@ -69,6 +69,16 @@ int R_PrepareStaticModelLightingCache(GfxWorld *world, int smodelCount)
 {
     int rendererType = r_rendererInUse->current.integer;
 
+#ifdef __EMSCRIPTEN__
+    /* Web GLSL has no HLSL codeConsts: RB_SetupLighting drives the DX7
+     * ambient lights from these tables even when the renderer is not 2.
+     * Without them the scene entity's lighting union holds baseCoords
+     * floats that the draw path dereferences as a pointer -> wasm OOB
+     * trap in RB_DeriveEntityLights. Allocate them for every renderer. */
+    (void)rendererType;
+    world->smodelLightingColorTable = (vec4_t(*)[6])ri.Hunk_AllocInternal(smodelCount * 3 * 32);
+    world->smodelLightingSunVisTable = (float *)ri.Hunk_AllocInternal(smodelCount * 4);
+#else
     if (rendererType == 2) {
         world->smodelLightingColorTable = (vec4_t(*)[6])ri.Hunk_AllocInternal(smodelCount * 3 * 32);
         world->smodelLightingSunVisTable = (float *)ri.Hunk_AllocInternal(smodelCount * 4);
@@ -95,6 +105,7 @@ int R_PrepareStaticModelLightingCache(GfxWorld *world, int smodelCount)
         ((void **)&smodelLoadGlob)[4] = Hunk_AllocateTempMemoryInternal(size);
         memset(((void **)&smodelLoadGlob)[4], 0x80, size);
     }
+#endif
 }
 
 extern int XModelGetNumLods(struct XModel *model);
@@ -260,10 +271,14 @@ static int COD2_REGPARM(3) R_FilterStaticModelIntoCells_r(GfxWorld *world, mnode
 
         if (cellIndex < 0)
             return (int)(intptr_t)world;
+        if (cellIndex >= world->cellCount)
+            return (int)(intptr_t)world;
 
         smodelIndex = (int)(smodelInst - world->smodelInsts);
 
         aabb = world->cells[cellIndex].aabbTree;
+        if (!aabb)
+            return (int)(intptr_t)world;
         count = aabb->staticModelCount;
 
         if (count != 0 && smodelIndex == aabb->staticModels[count - 1])
@@ -317,6 +332,10 @@ static int COD2_REGPARM(3) R_FilterStaticModelIntoCells_r(GfxWorld *world, mnode
 
 int R_FinishStaticModelLightingCache(GfxWorld *world)
 {
+#ifdef __EMSCRIPTEN__
+    /* Web uses the DX7-style tables, not the 3D lighting image. */
+    (void)world;
+#else
     if (r_rendererInUse->current.integer != 2) {
         GfxImage *image;
 
@@ -344,6 +363,7 @@ int R_FinishStaticModelLightingCache(GfxWorld *world)
         ((int *)&smodelLoadGlob)[3] = 0;
         ((int *)&smodelLoadGlob)[4] = 0;
     }
+#endif
 }
 int R_GetStaticModelLightingFromGround(const vec_t *groundLight, float *sunVisibility, vec4_t *colorForDir)
 {
@@ -375,6 +395,7 @@ extern int XSurfaceGetNumVerts(const XSurface *surface);
 extern unsigned long XSurfaceGetVerts(const XSurface *surf, DObjSkelMat *boneMatrix,
                                       float *pVert, float *pTexCoord, float *pNormal);
 extern float XModelGetLodOutDist(const struct XModel *model);
+extern void XModelOptimize(struct XModel *model);
 
 void R_CreateStaticModel(GfxWorld *world, struct XModel *model,
                          const vec_t *origin, const vec_t *angles,
@@ -498,6 +519,10 @@ void R_CreateStaticModel(GfxWorld *world, struct XModel *model,
 
     smodelInst->cullDist = scale * XModelGetLodOutDist(model);
 
+    /* Map xmodels sit in hunk file cache, not always in DB_EnumXAssets.
+     * Vanilla rigid VB upload is R_FinishLoadingModels → XModelOptimize. */
+    XModelOptimize(model);
+
     R_FilterStaticModelIntoCells_r(world, world->nodes, smodelInst,
                                    smodelInst->mins, smodelInst->maxs);
 }
@@ -509,11 +534,22 @@ void R_CacheStaticModelLighting(const GfxWorld *world, GfxStaticModelInstance *s
     float fbase;
     int z, y, x, c;
 
+#ifdef __EMSCRIPTEN__
+    /* Web always allocates the DX7-style tables (R_PrepareStaticModel-
+     * LightingCache) and the draw path reads them via the entity's
+     * lighting.dx7 pointer. Cache there for every renderer type. */
+    if (world->smodelLightingColorTable && world->smodelLightingSunVisTable) {
+        memcpy((byte *)world->smodelLightingColorTable + idx * 96, colorForDir, 96);
+        world->smodelLightingSunVisTable[idx] = sunVisibility;
+    }
+    return;
+#else
     if (r_rendererInUse->current.integer == 2) {
         memcpy(world->smodelLightingColorTable + idx, colorForDir, 96);
         world->smodelLightingSunVisTable[idx] = sunVisibility;
         return;
     }
+#endif
 
     x0 = 2 * (idx % ((int *)&smodelLoadGlob)[0]);
     y0 = 2 * (idx / ((int *)&smodelLoadGlob)[0]);

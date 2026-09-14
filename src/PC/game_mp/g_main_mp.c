@@ -170,8 +170,8 @@ int G_GetClientScore(int clientNum);
 int G_GetClientArchiveTime(int clientNum);
 void G_SetClientArchiveTime(int clientNum, int time);
 clientState_t *G_GetClientState(int clientNum);
-static int G_CreateDObj(DObjModel_s *dobjModels, int numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci);
-int *Hunk_AllocXAnimServer(int size);
+static void G_CreateDObj(DObjModel_s *dobjModels, unsigned short numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci);
+void *Hunk_AllocXAnimServer(int size);
 static int SortRanks(const int *a, const int *b);
 void CalculateRanks(void);
 void G_LogPrintf(const char *fmt, ...);
@@ -224,15 +224,13 @@ clientState_t *G_GetClientState(int clientNum)
     return &level.clients[clientNum].sess.cs;
 }
 
-static int G_CreateDObj(DObjModel_s *dobjModels, int numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci)
+static void G_CreateDObj(DObjModel_s *dobjModels, unsigned short numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci)
 {
-    numModels = (unsigned short)numModels;
     (void)ci;
     Com_ServerDObjCreate(dobjModels, numModels, tree, handle);
-    return 0;
 }
 
-int *Hunk_AllocXAnimServer(int size)
+void *Hunk_AllocXAnimServer(int size)
 {
     return Hunk_AllocLowInternal(size);
 }
@@ -417,7 +415,7 @@ extern unsigned char scrVmPub[];
 extern void Scr_AddEntity(void *ent);
 extern void Scr_Notify(void *ent, int stringValue, unsigned int paramcount);
 extern void BG_LoadAnim(void);
-extern int Com_FindSoundAlias(const char *name);
+extern snd_alias_list_t *Com_FindSoundAlias(const char *name);
 extern int G_AnimScriptSound(int client, snd_alias_list_t *aliasList);
 extern void *XAnimCreateTree(void *anims, void *Alloc);
 
@@ -455,10 +453,10 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
 
     G_ProcessIPBans();
 
-    level_bgs.GetXModel    = (struct XModel *(*)())imp_SV_XModelGet;
-    level_bgs.CreateDObj   = (void (*)())G_CreateDObj;
-    level_bgs.SafeDObjFree = (void (*)())imp_Com_SafeServerDObjFree;
-    level_bgs.AllocXAnim   = (void *(*)())Hunk_AllocXAnimServer;
+    level_bgs.GetXModel    = (struct XModel *(*)(const char *))imp_SV_XModelGet;
+    level_bgs.CreateDObj   = G_CreateDObj;
+    level_bgs.SafeDObjFree = (void (*)(int))imp_Com_SafeServerDObjFree;
+    level_bgs.AllocXAnim   = Hunk_AllocXAnimServer;
     level_bgs.anim_user    = 1;
 
     logFile = g_log->current.string;
@@ -509,8 +507,8 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     DBG_PrintFreeVars(str_dbg_endload);
 
     *(void **)imp_bgs = (void *)&level_bgs;
-    level_bgs.animScriptData.soundAlias = (snd_alias_list_t * (*)()) Com_FindSoundAlias;
-    level_bgs.animScriptData.playSoundAlias = (int (*)())G_AnimScriptSound;
+    level_bgs.animScriptData.soundAlias = Com_FindSoundAlias;
+    level_bgs.animScriptData.playSoundAlias = G_AnimScriptSound;
 
     if (!restart) {
         BG_LoadAnim();
@@ -730,16 +728,31 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     G_RegisterDvars_impl();
     BG_RegisterDvars();
     Com_Printf("webdbg: G_InitGame after RegisterDvars\n");
+    {
+        static const char *const kScrAllow[] = {
+            "scr_allow_greasegun", "scr_allow_m1carbine", "scr_allow_m1garand",
+            "scr_allow_springfield", "scr_allow_thompson", "scr_allow_bar",
+            "scr_allow_sten", "scr_allow_enfield", "scr_allow_enfieldsniper",
+            "scr_allow_bren", "scr_allow_pps42", "scr_allow_nagant",
+            "scr_allow_svt40", "scr_allow_nagantsniper", "scr_allow_ppsh",
+            "scr_allow_mp40", "scr_allow_kar98k", "scr_allow_g43",
+            "scr_allow_kar98ksniper", "scr_allow_mp44", "scr_allow_shotgun",
+            "scr_allow_fraggrenades", "scr_allow_smokegrenades", NULL
+        };
+        int ai;
+        for (ai = 0; kScrAllow[ai]; ai++)
+            Dvar_RegisterInt(kScrAllow[ai], 1, 0, 1, 0x1000);
+    }
 
     level.maxclients = g_maxclients->current.integer;
 
     G_ProcessIPBans();
     Com_Printf("webdbg: G_InitGame after G_ProcessIPBans\n");
 
-    level_bgs.GetXModel    = (struct XModel *(*)())imp_SV_XModelGet;
-    level_bgs.CreateDObj   = (void (*)())G_CreateDObj;
-    level_bgs.SafeDObjFree = (void (*)())imp_Com_SafeServerDObjFree;
-    level_bgs.AllocXAnim   = (void *(*)())Hunk_AllocXAnimServer;
+    level_bgs.GetXModel    = (struct XModel *(*)(const char *))imp_SV_XModelGet;
+    level_bgs.CreateDObj   = G_CreateDObj;
+    level_bgs.SafeDObjFree = (void (*)(int))imp_Com_SafeServerDObjFree;
+    level_bgs.AllocXAnim   = Hunk_AllocXAnimServer;
     level_bgs.anim_user    = 1;
 
     logFile = g_log->current.string;
@@ -773,16 +786,10 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
 
     Com_Printf("webdbg: G_InitGame before SV_LocateGameData\n");
     SV_LocateGameData((gentity_t *)g_entities, 0x48, sizeof(gentity_t), (playerState_t *)g_clients, sizeof(gclient_t));
-    Com_Printf("webdbg: G_InitGame before G_SpawnEntitiesFromString\n");
-    G_SpawnEntitiesFromString();
-    Com_Printf("webdbg: G_InitGame after G_SpawnEntitiesFromString\n");
-    DBG_PrintFreeVars(str_dbg_spawn);
-    level.initializing = 0;
 
     G_LogPrintf("gametype: %s\n", g_gametype->current.string);
 
     G_InitTurrets();
-    G_SpawnTriggerHurt(SV_GetBrushModelCount() + 1);
     GScr_PostResetTimeout();
     Com_Printf("webdbg: G_InitGame before G_SetupWeaponDef#2\n");
     G_SetupWeaponDef();
@@ -798,8 +805,8 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     DBG_PrintFreeVars(str_dbg_endload);
 
     *(void **)imp_bgs = (void *)&level_bgs;
-    level_bgs.animScriptData.soundAlias = (snd_alias_list_t * (*)()) Com_FindSoundAlias;
-    level_bgs.animScriptData.playSoundAlias = (int (*)())G_AnimScriptSound;
+    level_bgs.animScriptData.soundAlias = Com_FindSoundAlias;
+    level_bgs.animScriptData.playSoundAlias = G_AnimScriptSound;
 
     if (!restart) {
         Com_Printf("webdbg: G_InitGame before BG_LoadAnim\n");
@@ -823,6 +830,16 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     Com_Printf("G_InitGame: after GScr_LoadAnimScripts\n");
     Scr_EndLoadAnimScripts();
     G_RegisterDvars_impl();
+
+    /*
+     * Source order (referencia/cod2-main G_InitGame): GScr_LoadScripts →
+     * BG_LoadAnim → GScr_LoadConsts → entity setup → G_SpawnEntitiesFromString.
+     * Spawning before consts left classname intern IDs out of sync with GSC,
+     * so spawnPlayer never left spectator (pm_type=4 at map center).
+     */
+    G_SpawnEntitiesFromString();
+    G_SpawnTriggerHurt(SV_GetBrushModelCount() + 1);
+    DBG_PrintFreeVars(str_dbg_spawn);
 
     Com_Printf(str_dbg_vmtop_fmt, *(void **)((byte *)&scrVmPub + 16));
     Com_Printf("G_InitGame: before Scr_FreeEntityList\n");
@@ -855,9 +872,6 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     Com_Printf("G_InitGame: before Scr_StartupGameType\n");
     Scr_StartupGameType();
     Com_Printf("G_InitGame: after Scr_StartupGameType\n");
-#ifdef __EMSCRIPTEN__
-    puts("SYNC-DBG: after Scr_StartupGameType reached next line");
-#endif
     Com_Printf("webdbg: restart=%d savepersist=%d\n", restart, savepersist);
     if (restart && !savepersist) {
         Com_Printf("webdbg: before RestoreBody\n");
@@ -883,13 +897,7 @@ void G_InitGame(int levelTime, int randomSeed, qboolean restart, qboolean savepe
     }
 
     Com_Printf("webdbg: G_InitGame before CalculateRanks\n");
-#ifdef __EMSCRIPTEN__
-    puts("SYNC-DBG: before CalculateRanks");
-#endif
     CalculateRanks();
-#ifdef __EMSCRIPTEN__
-    puts("SYNC-DBG: after CalculateRanks");
-#endif
     Com_Printf("webdbg: G_InitGame after CalculateRanks\n");
     level.initializing = 0;
     Com_Printf("webdbg: G_InitGame done\n");
@@ -951,11 +959,6 @@ static inline __attribute__((always_inline)) int G_RunThink_core(gentity_t *ent)
         Com_Error(1, "\x15NULL ent->think");
     }
 #ifdef __EMSCRIPTEN__
-    {
-        extern int printf(const char *, ...);
-        printf("SYNC-DBG: G_RunThink_core handler=%d think=%p ent=%d\n",
-               ent->handler, (void *)think, ent->s.number);
-    }
     ((void (*)(gentity_t *))think)(ent);
     return 0;
 #else
@@ -970,13 +973,9 @@ int G_RunThink(gentity_t *ent)
 
 void G_TraceCapsule(trace_t *results, const vec_t *start, const vec_t *mins, const vec_t *maxs, const vec_t *end, int passEntityNum, int contentmask)
 {
-    extern void Com_Printf(const char *fmt, ...);
     extern clipMap_t cm;
 
-    Com_Printf("G_TraceCapsule: enter pass=%d mask=0x%x cm.nodes=%p numLeafs=%d leafs=%p\n",
-               passEntityNum, contentmask, (void *)cm.nodes, cm.numLeafs, (void *)cm.leafs);
     if (!cm.nodes || !cm.leafs || cm.numLeafs <= 0) {
-        Com_Printf("G_TraceCapsule: clipmap not ready — returning empty trace\n");
         if (results) {
             results->fraction = 1.0f;
             results->entityNum = 0x3ff;
@@ -986,7 +985,6 @@ void G_TraceCapsule(trace_t *results, const vec_t *start, const vec_t *mins, con
         return;
     }
     SV_Trace(results, start, mins, maxs, end, passEntityNum, contentmask, 0, 0, 0);
-    Com_Printf("G_TraceCapsule: done frac=%.3f\n", results ? results->fraction : -1.0f);
 }
 
 qboolean G_TraceCapsuleComplete(const vec_t *start, const vec_t *mins, const vec_t *maxs, const vec_t *end, int passEntityNum, int contentmask)
@@ -1195,14 +1193,6 @@ int G_RunFrame(int levelTime)
     unsigned short entNum, otherNum;
     int savedTriggerCount;
 
-#ifdef __EMSCRIPTEN__
-    {
-        static int g_runframe_count = 0;
-        extern int printf(const char *, ...);
-        printf("SYNC-DBG: G_RunFrame enter #%d levelTime=%d num_entities=%d\n",
-               g_runframe_count++, levelTime, level.num_entities);
-    }
-#endif
     level.framenum += 1;
     level.previousTime = level.time;
     level.time = levelTime;
@@ -1310,9 +1300,6 @@ int G_RunFrame(int levelTime)
     Scr_IncTime();
 
     level.currentEntityThink = 0;
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: G_RunFrame before entity loop num_entities=%d\n", level.num_entities);
-#endif
     for (i = 0; i < level.num_entities; i++) {
         entPtr = &g_entities[i];
         if (entPtr->r.inuse) {
@@ -1327,9 +1314,6 @@ int G_RunFrame(int levelTime)
         level.currentEntityThink = i + 1;
     }
     level.currentEntityThink = -1;
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: G_RunFrame after entity loop\n");
-#endif
 
     {
         int numClients = level.maxclients;
@@ -1373,34 +1357,16 @@ int G_RunFrame(int levelTime)
         for (i = 0; i < numClients; i++) {
             entPtr = &g_entities[i];
             if (entPtr->r.inuse) {
-#ifdef __EMSCRIPTEN__
-                printf("SYNC-DBG: before ClientEndFrame client=%d\n", i);
-#endif
                 ClientEndFrame(entPtr);
-#ifdef __EMSCRIPTEN__
-                printf("SYNC-DBG: after ClientEndFrame client=%d\n", i);
-#endif
             }
         }
     }
 
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: before CheckTeamStatus\n");
-#endif
     CheckTeamStatus();
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: after CheckTeamStatus\n");
-#endif
 
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: before CheckVote oldVoting=%d\n", g_oldVoting->current.integer);
-#endif
     if (g_oldVoting->current.integer) {
         CheckVote();
     }
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: after CheckVote\n");
-#endif
 
     if (level.bUpdateScoresForIntermission) {
         int numClients = level.maxclients;
@@ -1445,9 +1411,6 @@ int G_RunFrame(int levelTime)
     }
 
     *(void **)imp_bgs = NULL;
-#ifdef __EMSCRIPTEN__
-    printf("SYNC-DBG: G_RunFrame returning\n");
-#endif
     return (int)imp_bgs;
 }
 

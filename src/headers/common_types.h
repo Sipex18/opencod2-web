@@ -12729,8 +12729,9 @@ struct challenge_t {
 struct netchan_t {
     int outgoingSequence;
     netsrc_t sock;
-    int incomingSequence;
+    /* CoD2rev/cod2-main order: dropped precedes incomingSequence */
     int dropped;
+    int incomingSequence;
     struct netadr_t remoteAddress;
     int qport;
     int fragmentSequence;
@@ -13579,8 +13580,13 @@ struct refexport_t {
 };
 
 struct refimport_t {
+#ifdef __EMSCRIPTEN__
+    void (*Printf)(int print_level, const char *fmt, ...);
+    void (*Error)(int level, const char *fmt, ...);
+#else
     void (*Printf)();
     void (*Error)();
+#endif
     int (*Milliseconds)();
     void * (*Hunk_AllocInternal)();
     void * (*Hunk_AllocateTempMemoryInternal)();
@@ -13645,10 +13651,18 @@ struct refimport_t {
     void (*Cmd_RemoveCommand)();
     int (*Cmd_Argc)();
     char * (*Cmd_Argv)();
+#ifdef __EMSCRIPTEN__
+    void (*Cbuf_ExecuteText)(int exec_when, const char *text);
+#else
     void (*Cbuf_ExecuteText)();
+#endif
     qboolean (*Com_SaveDvarsToBuffer)();
     qboolean (*Com_LoadDvarsFromBuffer)();
+#ifdef __EMSCRIPTEN__
+    const dheader_s * (*Com_GetBsp)(int *fileSize, unsigned int *checksum);
+#else
     const dheader_s * (*Com_GetBsp)();
+#endif
     unsigned int (*SEH_ReadCharFromString)();
     void (*CL_UpdateDebugData)();
     void (*CL_FlushDebugData)();
@@ -13952,8 +13966,8 @@ struct animScriptData_t {
     short unsigned int torsoAnim;
     short unsigned int legsAnim;
     short unsigned int turningAnim;
-    snd_alias_list_t * (*soundAlias)();
-    int (*playSoundAlias)();
+    snd_alias_list_t *(*soundAlias)(const char *name);
+    int (*playSoundAlias)(int clientNum, snd_alias_list_t *aliasList);
 };
 
 struct bgs_t {
@@ -13963,10 +13977,10 @@ struct bgs_t {
     int latestSnapshotTime;
     int frametime;
     int anim_user;
-    struct XModel * (*GetXModel)();
-    void (*CreateDObj)();
-    void (*SafeDObjFree)();
-    void * (*AllocXAnim)();
+    struct XModel *(*GetXModel)(const char *name);
+    void (*CreateDObj)(DObjModel_s *dobjModels, unsigned short numModels, struct XAnimTree_s *tree, int handle, clientInfo_t *ci);
+    void (*SafeDObjFree)(int handle);
+    void *(*AllocXAnim)(int size);
     clientInfo_t clientinfo[64];
 };
 
