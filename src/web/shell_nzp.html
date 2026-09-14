@@ -698,6 +698,25 @@
 
     function setDiag(t) { if (diagEl) diagEl.textContent = t || ''; }
 
+    var storageInfo = null;   /* last navigator.storage.estimate() result */
+    var storageInfoAt = 0;
+
+    /*
+     * estimate() walks the origin's storage, so on a multi-GB OPFS it is not
+     * cheap - and updateDiagnostics runs several times while the launcher
+     * comes up. Keep the last reading and only re-ask when it is stale;
+     * refreshStorageInfo(true) forces it after an ingest or a cache clear.
+     */
+    function refreshStorageInfo(force) {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+      if (!force && storageInfo && (Date.now() - storageInfoAt) < 15000) return;
+      navigator.storage.estimate().then(function (e) {
+        storageInfo = e || {};
+        storageInfoAt = Date.now();
+        updateDiagnostics();
+      }).catch(function () {});
+    }
+
     function updateDiagnostics() {
       var parts = [];
       try {
@@ -709,16 +728,14 @@
         parts.push('wasmfs: ' + (runtimeReady ? (isWasmfsBuild() ? 'yes' : 'no') : '…'));
         parts.push('target: ' + beginTarget);
         parts.push('remote: ' + (remoteCfg ? 'yes' : (runtimeReady ? 'no' : '…')));
-        if (navigator.storage && navigator.storage.estimate) {
-          navigator.storage.estimate().then(function (e) {
-            var q = e && e.quota ? (e.quota / 1073741824).toFixed(1) + ' GB' : '?';
-            var u = e && e.usage ? (e.usage / 1048576).toFixed(0) + ' MB' : '?';
-            setDiag(parts.join(' | ') + ' | storage: ' + u + ' / ' + q);
-          }).catch(function () { setDiag(parts.join(' | ')); });
-          return;
+        if (storageInfo) {
+          var q = storageInfo.quota ? (storageInfo.quota / 1073741824).toFixed(1) + ' GB' : '?';
+          var u = storageInfo.usage ? (storageInfo.usage / 1048576).toFixed(0) + ' MB' : '?';
+          parts.push('storage: ' + u + ' / ' + q);
         }
       } catch (e) {}
       setDiag(parts.join(' | '));
+      refreshStorageInfo(false);
     }
 
     function armFatalRetry() {
@@ -1006,6 +1023,7 @@
       setBusy(true);
       try {
         var meta = await Cod2Fs.ingestRemote(remoteCfg, onProgress);
+        refreshStorageInfo(true);
         savedMeta = meta;
         await bootFromCache(meta);
       } catch (err) {
@@ -1026,6 +1044,7 @@
           return;
         }
         var meta = await Cod2Fs.ingestHandle(handle, onProgress);
+        refreshStorageInfo(true);
         await bootFromCache(meta);
       } catch (err) {
         setBusy(false);
@@ -1164,6 +1183,7 @@
       setBusy(true);
       try { await Cod2Fs.clearCache(); await Cod2Fs.forgetHandle(); }
       catch (e) { setMsg((e && e.message) || String(e), true); setBusy(false); return; }
+      refreshStorageInfo(true);
       savedHandle = null; savedMeta = null;
       /* Keep local re-pick visible; dropzone only matters for fallback browsers. */
       changeBtn.style.display = 'inline-block';
