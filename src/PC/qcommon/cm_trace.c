@@ -63,6 +63,10 @@ static float CM_DotProduct(const vec_t *a, const vec_t *b)
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+/* Q3/CoD keep the trace box this far off the splitting plane so a box that
+ * grazes it is still tested against both children. */
+#define CM_DIST_EPSILON 0.03125f
+
 static float CM_AbsFloat(float value)
 {
     return value < 0.0f ? -value : value;
@@ -386,6 +390,108 @@ static void CM_TraceLeaf(const traceWork_t *tw, cLeaf_t *leaf, trace_t *trace)
         CM_TraceLeafTerrain(tw, leaf, trace);
 }
 
+/*
+ * Descend the world BSP along the trace, visiting the front child first and
+ * splitting the segment at every plane the box straddles.
+ *
+ * The previous body listed the leaves whose bounding box overlaps the whole
+ * trace and walked that list in whatever order CM_BoxLeafnums returned. Two
+ * things go wrong with that: the list is capped (4096 entries), so a long
+ * trace - a fall, a sprint down a street - drops the leaves furthest along the
+ * ray, which is how a player ends up inside the floor; and the list is not
+ * ordered along the ray, so the nearest surface is not necessarily seen first.
+ * The original walks the tree (FUN_0041dc70 / FUN_0041fe50): front child,
+ * then the split point, then the back child with the shortened segment.
+ *
+ * Leaf encoding matches CM_BoxLeafnums_r: a negative nodenum is leaf ~nodenum.
+ */
+static void CM_TraceThroughTree_r(const traceWork_t *tw, int num, float p1f, float p2f,
+                                  const vec_t *p1, const vec_t *p2, trace_t *trace)
+{
+    cNode_t *node;
+    cplane_t *plane;
+    float t1, t2, offset;
+    float frac, frac2, idist, midf;
+    vec3_t mid;
+    int side, i;
+
+    if (trace->fraction <= p1f)
+        return; /* something nearer was already hit */
+
+    if (num < 0) {
+        int leafNum = ~num;
+        if (leafNum >= 0 && leafNum < cm.numLeafs)
+            CM_TraceLeaf(tw, &cm.leafs[leafNum], trace);
+        return;
+    }
+
+    node = &cm.nodes[num];
+    plane = node->plane;
+    if (!plane)
+        return; /* corrupt node: stop instead of reading a null plane */
+
+    if (plane->type <= 2) {
+        t1 = p1[plane->type] - plane->dist;
+        t2 = p2[plane->type] - plane->dist;
+        offset = tw->size[plane->type];
+    } else {
+        t1 = plane->normal[0] * p1[0] + plane->normal[1] * p1[1] +
+             plane->normal[2] * p1[2] - plane->dist;
+        t2 = plane->normal[0] * p2[0] + plane->normal[1] * p2[1] +
+             plane->normal[2] * p2[2] - plane->dist;
+        offset = tw->size[0] * CM_AbsFloat(plane->normal[0]) +
+                 tw->size[1] * CM_AbsFloat(plane->normal[1]) +
+                 tw->size[2] * CM_AbsFloat(plane->normal[2]);
+    }
+
+    if (t1 >= offset && t2 >= offset) {
+        CM_TraceThroughTree_r(tw, node->children[0], p1f, p2f, p1, p2, trace);
+        return;
+    }
+    if (t1 < -offset && t2 < -offset) {
+        CM_TraceThroughTree_r(tw, node->children[1], p1f, p2f, p1, p2, trace);
+        return;
+    }
+
+    if (t1 < t2) {
+        idist = 1.0f / (t1 - t2);
+        side = 1;
+        frac2 = (t1 + offset + CM_DIST_EPSILON) * idist;
+        frac = (t1 - offset - CM_DIST_EPSILON) * idist;
+    } else if (t1 > t2) {
+        idist = 1.0f / (t1 - t2);
+        side = 0;
+        frac2 = (t1 - offset - CM_DIST_EPSILON) * idist;
+        frac = (t1 + offset + CM_DIST_EPSILON) * idist;
+    } else {
+        side = 0;
+        frac = 1.0f;
+        frac2 = 0.0f;
+    }
+
+    if (frac < 0.0f)
+        frac = 0.0f;
+    if (frac > 1.0f)
+        frac = 1.0f;
+
+    midf = p1f + (p2f - p1f) * frac;
+    for (i = 0; i < 3; i++)
+        mid[i] = p1[i] + frac * (p2[i] - p1[i]);
+
+    CM_TraceThroughTree_r(tw, node->children[side], p1f, midf, p1, mid, trace);
+
+    if (frac2 < 0.0f)
+        frac2 = 0.0f;
+    if (frac2 > 1.0f)
+        frac2 = 1.0f;
+
+    midf = p1f + (p2f - p1f) * frac2;
+    for (i = 0; i < 3; i++)
+        mid[i] = p1[i] + frac2 * (p2[i] - p1[i]);
+
+    CM_TraceThroughTree_r(tw, node->children[side ^ 1], midf, p2f, mid, p2, trace);
+}
+
 #if defined(__EMSCRIPTEN__)
 static int CM_Trace(trace_t *results, const vec_t *start, const vec_t *end,
                     const vec_t *mins, const vec_t *maxs, clipHandle_t model, int brushmask)
@@ -412,22 +518,9 @@ static int __attribute_regparm__(3) CM_Trace(trace_t *results, const vec_t *star
         return 0;
     }
 
-    {
-        static int s_traceLeafs[4096];
-        int maxLeafs = 4096;
-        int lastLeaf = 0;
-        int leafCount;
-        int i;
+    if (cm.nodes && cm.numNodes > 0 && tw.extents.start && tw.extents.end)
+        CM_TraceThroughTree_r(&tw, 0, 0.0f, 1.0f, tw.extents.start, tw.extents.end, results);
 
-        leafCount = CM_BoxLeafnums(tw.bounds[0], tw.bounds[1], s_traceLeafs, maxLeafs, &lastLeaf);
-        for (i = 0; i < leafCount; i++) {
-            int leafIndex = s_traceLeafs[i];
-            if (leafIndex >= 0 && leafIndex < cm.numLeafs)
-                CM_TraceLeaf(&tw, &cm.leafs[leafIndex], results);
-            if (results->allsolid || results->fraction == 0.0f)
-                break;
-        }
-    }
     return 0;
 }
 
