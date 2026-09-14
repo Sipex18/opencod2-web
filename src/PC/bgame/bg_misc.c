@@ -14,6 +14,7 @@ extern const dvar_t *bg_fallDamageMinHeight;
 extern const dvar_t *bg_fallDamageMaxHeight;
 extern const dvar_t *inertiaMax;
 extern const dvar_t *inertiaDebug;
+extern const dvar_t *bg_pmoveDebug;
 extern const dvar_t *inertiaAngle;
 extern const dvar_t *friction;
 extern const dvar_t *stopspeed;
@@ -126,6 +127,10 @@ void BG_RegisterDvars(void)
     bg_fallDamageMaxHeight = Dvar_RegisterFloat("bg_fallDamageMaxHeight", 480.0f, 1.0f, 3.4028235e+38f, 0x1188);
     inertiaMax = Dvar_RegisterFloat("inertiaMax", 50.0f, 0.0f, 1000.0f, 0x1180);
     inertiaDebug = Dvar_RegisterBool("inertiaDebug", 0, 0x1180);
+    /* Ground-contact dump from Pmove; see the block in bg_pmove.c. Off by
+     * default, toggleable at runtime so a slide/jitter report can be traced
+     * without a rebuild. */
+    bg_pmoveDebug = Dvar_RegisterBool("bg_pmoveDebug", 0, 0x1180);
     inertiaAngle = Dvar_RegisterFloat("inertiaAngle", 0.0f, -1.0f, 1.0f, 0x1180);
     friction = Dvar_RegisterFloat("friction", 5.5f, 0.0f, 100.0f, 0x1180);
     stopspeed = Dvar_RegisterFloat("stopspeed", 100.0f, 0.0f, 1000.0f, 0x1180);

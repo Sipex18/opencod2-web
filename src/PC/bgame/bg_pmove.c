@@ -36,6 +36,7 @@ extern const dvar_t *stopspeed;
 extern const dvar_t *inertiaMax;
 extern const dvar_t *inertiaAngle;
 extern const dvar_t *inertiaDebug;
+extern const dvar_t *bg_pmoveDebug;
 extern const dvar_t *player_view_pitch_up;
 extern const dvar_t *player_view_pitch_down;
 extern const dvar_t *player_spectateSpeedScale;
@@ -2080,6 +2081,31 @@ void Pmove(pmove_t *pm)
             PM_GroundTrace(pm, &pml);
             PM_Footsteps(pm, &pml);
             PM_Weapon(pm, &pml);
+
+            /*
+             * Ground-contact dump, off unless `bg_pmoveDebug 1`. The slide
+             * report ("keeps sliding after the key is released, one jump
+             * clears it") is the signature of pml.walking flapping between
+             * frames: PM_Friction only runs when it is set, so friction is
+             * applied one frame and skipped the next. This prints the values
+             * that decide it, once a second, so the flap is visible in the
+             * console log rather than inferred.
+             */
+            if (bg_pmoveDebug && bg_pmoveDebug->current.enabled) {
+                static int lastDump;
+                if (ps->commandTime - lastDump >= 1000) {
+                    lastDump = ps->commandTime;
+                    Com_Printf("[pmdbg] walk=%d gplane=%d gent=%d frac=%.3f nz=%.3f "
+                               "surf=0x%x vel=(%.1f %.1f %.1f) org=(%.1f %.1f %.1f) "
+                               "pm_flags=0x%x pm_type=%d\n",
+                               pml.walking, pml.groundPlane, ps->groundEntityNum,
+                               pml.groundTrace.fraction, pml.groundTrace.normal[2],
+                               pml.groundTrace.surfaceFlags,
+                               ps->velocity[0], ps->velocity[1], ps->velocity[2],
+                               ps->origin[0], ps->origin[1], ps->origin[2],
+                               ps->pm_flags, ps->pm_type);
+                }
+            }
         } else {
             ps->groundEntityNum = ENTITYNUM_NONE;
             PM_NoclipMove(pm, &pml);
