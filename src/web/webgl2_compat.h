@@ -43,6 +43,8 @@ void webgl2_glDrawElements(unsigned int mode, int count, unsigned int type, cons
 void webgl2_glDrawRangeElements(unsigned int mode, unsigned int start, unsigned int end, int count, unsigned int type, const void *indices);
 void webgl2_glEnable(unsigned int cap);
 
+void webgl2_set_ff_light(int index, int enable, const float *ambient_rgb);
+
 #endif
 
 #endif

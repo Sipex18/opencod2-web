@@ -27,6 +27,10 @@ extern void Sys_QueEvent(int time, sysEventType_t type, int value, int value2,
                          int ptrLength, void *ptr);
 extern void CL_MouseEventAbsolute(int x, int y, int dx, int dy);
 
+/* After pointer-lock engage, SDL often emits a huge xrel/yrel (cursor jump to
+ * lock center). That slams pitch to ±85 and makes the world look like sky. */
+static int s_ignoreRelMouseFrames;
+
 typedef struct LinuxInputEvent {
     int type;
     int value;
@@ -196,8 +200,13 @@ int SDL_PumpInputEvents(void)
     for (eventCount = 0; eventCount < 256 && SDL_PollEvent(&ev); ++eventCount) {
         switch (ev.type) {
         case SDL_MOUSEMOTION: {
-            CL_MouseEventAbsolute(ev.motion.x, ev.motion.y,
-                                  ev.motion.xrel, ev.motion.yrel);
+            int dx = ev.motion.xrel;
+            int dy = ev.motion.yrel;
+            if (s_ignoreRelMouseFrames > 0) {
+                dx = 0;
+                dy = 0;
+            }
+            CL_MouseEventAbsolute(ev.motion.x, ev.motion.y, dx, dy);
             ++inputEventCount;
             break;
         }
@@ -301,26 +310,35 @@ void IN_Frame(void)
         int keyCatchers = cl ? *(int *)(cl + 4) : -1;
         static int grabbed = 0;
         int wantGrab = (cl && keyCatchers == 0) ? 1 : 0;
+        int wasRelative = SDL_GetRelativeMouseMode() ? 1 : 0;
 
         if (wantGrab) {
             /* On web, pointer lock can be lost asynchronously (Esc,
              * tab switch, browser policy).  Poll SDL_GetRelativeMouseMode
              * every frame; when lock is lost, retry the request — the
              * browser will honour it on the next user-gesture frame. */
-            if (!SDL_GetRelativeMouseMode()) {
+            if (!wasRelative) {
                 if (sdl_gl_window)
                     SDL_SetWindowGrab(sdl_gl_window, SDL_TRUE);
-                if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0)
+                if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                     grabbed = 1;
+                    s_ignoreRelMouseFrames = 8;
+                }
             } else {
                 grabbed = 1;
             }
-        } else if (grabbed) {
+        } else {
+            /* Weapon/class UI needs a free cursor. Always drop relative
+             * mouse when any keyCatcher is set — not only when we think
+             * we grabbed, because the browser can hold pointer lock. */
             if (sdl_gl_window)
                 SDL_SetWindowGrab(sdl_gl_window, SDL_FALSE);
             SDL_SetRelativeMouseMode(SDL_FALSE);
             grabbed = 0;
+            s_ignoreRelMouseFrames = 0;
         }
+        if (s_ignoreRelMouseFrames > 0)
+            s_ignoreRelMouseFrames--;
     }
 
     if (SDL_PumpInputEvents() > 0) {

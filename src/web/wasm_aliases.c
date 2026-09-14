@@ -21,7 +21,13 @@ int refEntIsInWorldSpace = 0;
 float sign[4];
 
 qkey_t *keys = 0;
-int __mh_execute_header = 0;
+/*
+ * Do NOT define __mh_execute_header as data here. Native/Win32 link with
+ * -Wl,--defsym,__mh_execute_header=0x1000 so COD2_MH_EXECUTE_HEADER == 0x1000
+ * (ADS button bit, DPVS LargeLocal size, dvar flags, etc.). A real data symbol
+ * makes &__mh_execute_header a huge linear-memory address → world DPVS OOB and
+ * empty map with skewed viewmodel.
+ */
 char name[64] __attribute__((aligned(4))) = {0};
 
 void *TheStringPackage = 0;
@@ -201,6 +207,32 @@ static void Web_InitWasmAliases(void)
 {
     keys = playerKeys[0].keys;
     Web_FixBgItemlistRelocs();
+
+    /*
+     * build/web_gen/data.c cannot express `.long <symbol>` relocations from
+     * data.S and emits zeros instead. Restore the critical ones here — the
+     * NULL theFxHelper made FX_WarpTime write the game time to address 0
+     * ("corrupted its heap memory area (address zero)"), and the NULL FX
+     * list/cluster pointers OOB'd during effect updates.
+     */
+    {
+        extern unsigned char theFxHelper[4];
+        extern unsigned char theFxHelpers[252];
+        extern unsigned char effectListNonBolt[4];
+        extern unsigned char effectListArrayNonBolt[7296];
+        extern unsigned char effectListBolt[4];
+        extern unsigned char effectListArrayBolt[7296];
+        extern unsigned char effectClusters[16];
+        extern unsigned char effectClusterArray[28800];
+        extern unsigned char cmd_text[32];
+        extern unsigned char cmd_texts[12];
+
+        *(void **)&theFxHelper[0] = theFxHelpers;
+        *(void **)&effectListNonBolt[0] = effectListArrayNonBolt;
+        *(void **)&effectListBolt[0] = effectListArrayBolt;
+        *(void **)&effectClusters[0] = effectClusterArray;
+        *(void **)&cmd_text[0] = cmd_texts;
+    }
 
     cg_dvar1 = imp_cg_nopredict;
     cg_dvar2 = imp_cg_synchronousClients;

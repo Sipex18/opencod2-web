@@ -662,6 +662,69 @@
     return 0;
   }
 
+  var rawNodes = [];
+  var rawSampleTime = 0;
+  var rawRate = 22050;
+
+  function playRaw(samples, rate, width, channels, bytes) {
+    var c = getCtx();
+    if (!c || !bytes || !bytes.length) return;
+    autoResume();
+    if (rate > 0) rawRate = rate;
+    var nCh = channels === 2 ? 2 : 1;
+    var buf = c.createBuffer(nCh, samples, rawRate);
+    var i, s, ch, src, idx;
+    if (width === 2) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      for (ch = 0; ch < nCh; ch++) {
+        var data = buf.getChannelData(ch);
+        for (s = 0; s < samples; s++) {
+          idx = (s * nCh + ch) * 2;
+          if (idx + 1 >= bytes.length) break;
+          data[s] = dv.getInt16(idx, true) / 32768;
+        }
+      }
+    } else {
+      for (ch = 0; ch < nCh; ch++) {
+        var data8 = buf.getChannelData(ch);
+        for (s = 0; s < samples; s++) {
+          i = s * nCh + ch;
+          if (i >= bytes.length) break;
+          data8[s] = (bytes[i] - 128) / 128;
+        }
+      }
+    }
+    src = c.createBufferSource();
+    src.buffer = buf;
+    var g = c.createGain();
+    g.gain.value = 0.5;
+    src.connect(g);
+    g.connect(masterGain || c.destination);
+    src.onended = function () {
+      var k = rawNodes.indexOf(src);
+      if (k >= 0) rawNodes.splice(k, 1);
+    };
+    try {
+      src.start();
+    } catch (e) {}
+    rawNodes.push(src);
+    rawSampleTime += (samples / rawRate) * 1000;
+  }
+
+  function rawTimeMs() {
+    return rawSampleTime | 0;
+  }
+
+  function endRaw() {
+    var i;
+    for (i = 0; i < rawNodes.length; i++) {
+      try {
+        rawNodes[i].stop();
+      } catch (e) {}
+    }
+    rawNodes.length = 0;
+  }
+
   var snd = {
     preload: preload,
     getDurationMs: getDurationMs,
@@ -683,6 +746,9 @@
     getChannelDurationMs: getChannelDurationMs,
     setRoomType: setRoomType,
     setReverbSend: setReverbSend,
+    playRaw: playRaw,
+    rawTimeMs: rawTimeMs,
+    endRaw: endRaw,
   };
 
   bindUnlock();

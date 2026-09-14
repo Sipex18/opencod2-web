@@ -23,7 +23,8 @@ bool CDirect3DSurface_IsDirty(const CDirect3DSurface *_this);
 #define GL_TEXTURE_WRAP_S 0x2802
 #define GL_TEXTURE_WRAP_T 0x2803
 #define GL_LINEAR 0x2601
-#define GL_REPEAT 0x2901
+#define GL_CLAMP_TO_EDGE 0x812F
+#define GL_TEXTURE_WRAP_R 0x8072
 #define GL_TEXTURE_BINDING_CUBE_MAP 0x8514
 #define MAX_MIP_LEVELS 16
 
@@ -126,7 +127,7 @@ HRESULT CDirect3DCubeTexture_UnlockRect(const CDirect3DCubeTexture *_this, D3DCU
         int prevTex = 0;
         glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &prevTex);
         glBindTexture(GL_TEXTURE_CUBE_MAP, tex->texIDStorage);
-        CDirect3DSurface_UpdateOpenGLSurfaceObject(surface, 0);
+        CDirect3DSurface_UpdateOpenGLSurfaceObject(surface, 1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, prevTex);
     }
     return 0;
@@ -239,8 +240,8 @@ void CDirect3DCubeTexture_CDirect3DCubeTexture(const CDirect3DCubeTexture *_this
     tex->primaryVtable = vtbl_CDirect3DCubeTexture;
     tex->secondaryVtable = vtbl_CDirect3DCubeTexture_secondary;
     tex->mpTexID = &tex->texIDStorage;
-    tex->mTexWrapS = GL_REPEAT;
-    tex->mTexWrapT = GL_REPEAT;
+    tex->mTexWrapS = GL_CLAMP_TO_EDGE;
+    tex->mTexWrapT = GL_CLAMP_TO_EDGE;
     tex->mTexMinFilter = GL_LINEAR;
     tex->mTexMagFilter = GL_LINEAR;
     tex->mTexAniso = 1.0f;
@@ -265,8 +266,9 @@ void CDirect3DCubeTexture_CDirect3DCubeTexture(const CDirect3DCubeTexture *_this
     glBindTexture(GL_TEXTURE_CUBE_MAP, tex->texIDStorage);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
     totalSize = 0;
     w = EdgeLength;
@@ -300,7 +302,23 @@ void CDirect3DCubeTexture_CDirect3DCubeTexture(const CDirect3DCubeTexture *_this
 
 void CDirect3DCubeTexture_UpdateOpenGLSurfaces(const CDirect3DCubeTexture *_this)
 {
-    (void)_this;
+    CDirect3DCubeTextureClean *tex = (CDirect3DCubeTextureClean *)_this;
+    UINT32 i;
+    UINT32 total;
+    int prevTex = 0;
+
+    if (!tex || !tex->surfaces || !tex->texIDStorage)
+        return;
+
+    total = tex->levelCount * 6;
+    glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &prevTex);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, tex->texIDStorage);
+    for (i = 0; i < total; i++) {
+        CDirect3DSurface *surf = (CDirect3DSurface *)tex->surfaces[i];
+        if (surf && CDirect3DSurface_IsDirty(surf))
+            CDirect3DSurface_UpdateOpenGLSurfaceObject(surf, 1);
+    }
+    glBindTexture(GL_TEXTURE_CUBE_MAP, prevTex);
 }
 
 HRESULT CDirect3DCubeTexture_GetDevice(const CDirect3DCubeTexture *_this, void (*ppDevice)())

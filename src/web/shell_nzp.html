@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta property="og:title" content="Call of Duty 2 — Web" />
   <meta property="og:description" content="Call of Duty 2 in the browser — WebGL client." />
@@ -34,17 +36,23 @@
     }
     canvas {
       border: 0 none;
-      width: 100% !important;
-      height: 100% !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
+      position: fixed !important;
+      left: 0 !important;
+      top: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      max-width: 100vw !important;
+      max-height: 100vh !important;
       object-fit: contain;
       object-position: center;
       background: #000;
       display: none;
       outline: none;
-      margin: 0;
-      padding: 0;
+      margin: 0 !important;
+      padding: 0 !important;
+      box-sizing: border-box !important;
     }
     #overlay {
       position: fixed; inset: 0; z-index: 10;
@@ -337,7 +345,20 @@
       <div id="extra">
         <button id="changeBtn" type="button" style="display:none" aria-hidden="true">Change folder</button>
         <button id="clearBtn" type="button" style="display:none">Clear cache</button>
+        <button id="fsBtn" type="button" style="display:none">Fullscreen</button>
       </div>
+      <div id="srcRow" style="display:none;margin-top:10px;font-size:13px;color:var(--muted)">
+        <span>Source:</span>
+        <button id="srcLocalBtn" type="button">Local folder</button>
+        <button id="srcCacheBtn" type="button">Cache</button>
+        <button id="srcRemoteBtn" type="button">Remote</button>
+      </div>
+      <div id="diag" style="margin-top:12px;font-size:12px;color:var(--faint);white-space:pre-wrap"></div>
+      <div id="mpStatus" style="margin-top:8px;font-size:12px;color:var(--faint)"></div>
+      <details id="helpBox" style="margin-top:12px;font-size:13px;color:var(--muted);text-align:left">
+        <summary style="cursor:pointer;color:var(--ink)">Controls &amp; help</summary>
+        <div>WASD move, mouse look (click canvas for pointer lock), LMB fire, R reload, E use, Shift sprint, Space jump, Esc menu. Audio starts on first click (browser autoplay policy).</div>
+      </details>
       <div id="dropzone" style="display:none" aria-hidden="true"></div>
       <div id="pickFallback"><input id="folderIn" type="file" webkitdirectory multiple></div>
     </div>
@@ -349,9 +370,14 @@
   </div>
   <div id="bootLog"></div>
 
-  <script>var ENGINE_ASSET_VER = 'o1-ping17-20260729';</script>
-  <script src="remote-config.js?v=o1-ping17-20260729"></script>
-  <script src="cod2_fs.js?v=o1-ping17-20260729"></script>
+  <script>var ENGINE_ASSET_VER = 'o1-plan-20260910';</script>
+  <script>
+  (function () {
+    var v = (typeof ENGINE_ASSET_VER === 'string' && ENGINE_ASSET_VER) ? ENGINE_ASSET_VER : 'dev';
+    document.write('<script src="remote-config.js?v=' + encodeURIComponent(v) + '"><\/script>');
+    document.write('<script src="cod2_fs.js?v=' + encodeURIComponent(v) + '"><\/script>');
+  })();
+  </script>
   <script>
   (function () {
     'use strict';
@@ -364,6 +390,12 @@
     var beginBtn = document.getElementById('beginBtn');
     var changeBtn = document.getElementById('changeBtn');
     var clearBtn = document.getElementById('clearBtn');
+    var fsBtn = document.getElementById('fsBtn');
+    var srcRow = document.getElementById('srcRow');
+    var srcLocalBtn = document.getElementById('srcLocalBtn');
+    var srcCacheBtn = document.getElementById('srcCacheBtn');
+    var srcRemoteBtn = document.getElementById('srcRemoteBtn');
+    var diagEl = document.getElementById('diag');
     var dropzone = document.getElementById('dropzone');
     var folderIn = document.getElementById('folderIn');
     var bootLogEl = document.getElementById('bootLog');
@@ -490,6 +522,16 @@
     }
     function fmtMB(n) { return (n / (1024 * 1024)).toFixed(1) + ' MB'; }
 
+    var bootLogDomTimer = 0;
+    function flushBootLogDom() {
+      bootLogDomTimer = 0;
+      if (!bootLogEl) return;
+      if (isErrPending) bootLogEl.classList.add('err');
+      isErrPending = false;
+      bootLogEl.textContent = bootLogLines.join('\n');
+      if (bootLogVisible) bootLogEl.scrollTop = bootLogEl.scrollHeight;
+    }
+    var isErrPending = false;
     function appendBootLog(line, isErr) {
       if (!bootLogEl) return;
       var s = String(line == null ? '' : line).replace(/\s+$/, '');
@@ -497,11 +539,24 @@
       bootLogLines.push(s);
       if (bootLogLines.length > 120) bootLogLines.shift();
       pushConsoleLog(s, isErr);
+      /* Never touch the DOM every stdout line — that freezes the tab under WASM spam.
+       * Still keep the ring + localStorage warm so Download log works after a freeze.
+       * Always surface post-boot breadcrumbs even if the overlay was hidden. */
+      if (overlayHiddenForGame && !isErr &&
+          !/webdbg:|vid_restart:|Sys_WebFrame|freelist|AllocVariable|script vars:|StartServer|CS_CONNECTED|LOADING/i.test(s)) {
+        return;
+      }
       if (bootLogBar) bootLogBar.style.display = 'block';
       if (bootLogVisible) bootLogEl.style.display = 'block';
-      if (isErr) bootLogEl.classList.add('err');
-      bootLogEl.textContent = bootLogLines.join('\n');
-      if (bootLogVisible) bootLogEl.scrollTop = bootLogEl.scrollHeight;
+      if (isErr) {
+        isErrPending = true;
+        flushBootLogDom();
+        try { persistConsoleLog(); } catch (e) {}
+        return;
+      }
+      if (!bootLogDomTimer) {
+        bootLogDomTimer = setTimeout(flushBootLogDom, 250);
+      }
     }
 
     function pushConsoleLog(line, isErr) {
@@ -549,11 +604,19 @@
     }
     function schedulePersistConsoleLog() {
       if (consoleLogPersistTimer) return;
+      /* Persist often: if WASM blocks the main thread, the last successful
+       * write is the only post-freeze evidence. */
       consoleLogPersistTimer = setTimeout(function () {
         consoleLogPersistTimer = 0;
         try { persistConsoleLog(); } catch (e) {}
-      }, 1500);
+      }, 400);
     }
+
+    /* Emergency flush while the tab is still responsive (before hard freeze). */
+    setInterval(function () {
+      if (consoleLogRing.length)
+        try { persistConsoleLog(); } catch (e) {}
+    }, 2000);
 
     window.__cod2DownloadLog = downloadConsoleLog;
     window.__cod2GetLog = getConsoleLogText;
@@ -574,6 +637,15 @@
 
     window.addEventListener('error', function (ev) {
       pushConsoleLog('window.onerror: ' + ((ev && ev.message) || String(ev)), true);
+      try {
+        var err = ev && ev.error;
+        if (err && err.stack) {
+          /* -g2 keeps wasm function names: the stack names the exact trap site. */
+          var st = String(err.stack);
+          if (st.length > 8000) st = st.substring(0, 8000) + '...<truncated>';
+          pushConsoleLog('error.stack: ' + st, true);
+        }
+      } catch (e) {}
       try { persistConsoleLog(); } catch (e) {}
     });
     window.addEventListener('unhandledrejection', function (ev) {
@@ -584,6 +656,42 @@
 
     if (consoleDownloadBtn) {
       consoleDownloadBtn.addEventListener('click', function () { downloadConsoleLog(); });
+    }
+
+    function setDiag(t) { if (diagEl) diagEl.textContent = t || ''; }
+
+    function updateDiagnostics() {
+      var parts = [];
+      try {
+        var fsa = (typeof Cod2Fs !== 'undefined' && Cod2Fs.hasFsAccess) ? Cod2Fs.hasFsAccess() : false;
+        var opfs = (typeof Cod2Fs !== 'undefined' && Cod2Fs.hasOpfs) ? Cod2Fs.hasOpfs() : false;
+        parts.push('FSA: ' + (fsa ? 'yes' : 'no'));
+        parts.push('OPFS: ' + (opfs ? 'yes' : 'no'));
+        parts.push('workerfs: ' + (runtimeReady ? (isWorkerfsBuild() ? 'yes' : 'no') : '…'));
+        parts.push('wasmfs: ' + (runtimeReady ? (isWasmfsBuild() ? 'yes' : 'no') : '…'));
+        parts.push('target: ' + beginTarget);
+        parts.push('remote: ' + (remoteCfg ? 'yes' : (runtimeReady ? 'no' : '…')));
+        if (navigator.storage && navigator.storage.estimate) {
+          navigator.storage.estimate().then(function (e) {
+            var q = e && e.quota ? (e.quota / 1073741824).toFixed(1) + ' GB' : '?';
+            var u = e && e.usage ? (e.usage / 1048576).toFixed(0) + ' MB' : '?';
+            setDiag(parts.join(' | ') + ' | storage: ' + u + ' / ' + q);
+          }).catch(function () { setDiag(parts.join(' | ')); });
+          return;
+        }
+      } catch (e) {}
+      setDiag(parts.join(' | '));
+    }
+
+    function armFatalRetry() {
+      // WASM cannot be re-entered after abort: only a full reload is safe.
+      beginBtn.disabled = false;
+      beginBtn.textContent = 'Reload & retry';
+    }
+
+    function requestReload() {
+      try { persistConsoleLog(); } catch (e) {}
+      location.reload();
     }
 
     function showFatal(msg) {
@@ -597,21 +705,26 @@
       setMsg(msg || 'Engine failed to start.', true);
       appendBootLog(msg || 'fatal', true);
       try { persistConsoleLog(); } catch (e) {}
-      beginBtn.disabled = false;
-      beginBtn.textContent = 'Retry';
+      armFatalRetry();
     }
 
     function forceCanvasFullBleed() {
       if (!canvas || !canvas.style) return;
-      canvas.style.setProperty('width', '100%', 'important');
-      canvas.style.setProperty('height', '100%', 'important');
-      canvas.style.setProperty('max-width', '100%', 'important');
-      canvas.style.setProperty('max-height', '100%', 'important');
+      canvas.style.setProperty('position', 'fixed', 'important');
+      canvas.style.setProperty('left', '0', 'important');
+      canvas.style.setProperty('top', '0', 'important');
+      canvas.style.setProperty('right', '0', 'important');
+      canvas.style.setProperty('bottom', '0', 'important');
+      canvas.style.setProperty('width', '100vw', 'important');
+      canvas.style.setProperty('height', '100vh', 'important');
+      canvas.style.setProperty('max-width', '100vw', 'important');
+      canvas.style.setProperty('max-height', '100vh', 'important');
       canvas.style.setProperty('object-fit', 'contain', 'important');
       canvas.style.setProperty('object-position', 'center', 'important');
       canvas.style.setProperty('display', 'block', 'important');
       canvas.style.setProperty('margin', '0', 'important');
       canvas.style.setProperty('padding', '0', 'important');
+      canvas.style.setProperty('box-sizing', 'border-box', 'important');
     }
 
     function revealCanvas(reason) {
@@ -624,9 +737,12 @@
       appendBootLog('UI hidden (' + (reason || 'ready') + ') — log stays visible');
     }
 
+    canvas.addEventListener('mousedown', function () { canvas.focus(); });
+    canvas.addEventListener('click', function () { canvas.focus(); });
+
     function maybeRevealCanvas(line) {
-      // Do NOT auto-hide on early lines like "Working directory" — that made the
-      // boot log vanish while the canvas was still black / crashing.
+      // Fallback if the engine-ready hook is missing (older wasm). Do NOT
+      // hide on early lines like "Working directory".
       if (fatalLatched || overlayHiddenForGame) return;
       var s = String(line || '');
       if (/GL_VERSION=/i.test(s) || /Game window created/i.test(s)) sawGl = true;
@@ -634,6 +750,13 @@
       if (sawGl && sawClientInit) {
         revealCanvas('gl+client');
       }
+    }
+
+    function onEngineReady() {
+      if (fatalLatched) return;
+      sawGl = true;
+      sawClientInit = true;
+      revealCanvas('engine-ready');
     }
 
     if (consoleToggleBtn) {
@@ -648,6 +771,15 @@
 
     function setBusy(b) {
       busy = b;
+      if (fatalLatched) {
+        armFatalRetry();
+        changeBtn.disabled = true;
+        clearBtn.disabled = true;
+        if (srcLocalBtn) srcLocalBtn.disabled = true;
+        if (srcCacheBtn) srcCacheBtn.disabled = true;
+        if (srcRemoteBtn) srcRemoteBtn.disabled = true;
+        return;
+      }
       beginBtn.disabled = b || !runtimeReady;
       changeBtn.disabled = b || !runtimeReady;
       clearBtn.disabled = b || !runtimeReady;
@@ -666,7 +798,8 @@
     }
 
     function isWasmfsBuild() {
-      return typeof Module._cod2_mount_opfs === 'function';
+      return !!(typeof Module !== 'undefined' && Module &&
+                typeof Module._cod2_mount_opfs === 'function');
     }
     function isWorkerfsBuild() {
       // Emscripten leaves a string stub when -lworkerfs.js is not linked:
@@ -884,14 +1017,20 @@
       canvas.style.opacity = '0';
       setMsg('Starting engine… (indexing IWDs can take a while)');
       appendBootLog('callMain...');
+      try {
+        if (window.cod2Audio && typeof window.cod2Audio.unlock === 'function')
+          window.cod2Audio.unlock();
+      } catch (e) {}
       try { Module.callMain(GAME_ARGS); }
       catch (e) {
         console.error(e);
         canvas.style.opacity = '1';
         showFatal((e && e.message) ? e.message : String(e));
       }
-      setTimeout(function () { window.applyMonitorHzLimit(); }, 500);
-      setTimeout(function () { window.applyMonitorHzLimit(); }, 2000);
+      /* Defer until after PROXY_TO_PTHREAD main() has entered the browser loop.
+       * Early ccall during Com_Init races mailbox/EM_ASM proxy setup. */
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 2500);
+      setTimeout(function () { window.applyMonitorHzLimit(); }, 5000);
     }
 
     function onEngineLine(t, isErr) {
@@ -911,14 +1050,38 @@
 
     // ---- UI flow --------------------------------------------------------
 
+    function setSource(target, label) {
+      if (fatalLatched || busy || !runtimeReady || started) return;
+      beginTarget = target;
+      beginBtn.textContent = label;
+      updateDiagnostics();
+    }
+
     async function pickAndBoot() {
-      if (!Cod2Fs.hasFsAccess()) { folderIn.click(); return; }
-      var handle = await Cod2Fs.pickDirectory();
+      if (!Cod2Fs.hasFsAccess()) {
+        // Reset busy so a cancelled fallback picker does not wedge the UI.
+        setBusy(false);
+        folderIn.click();
+        return;
+      }
+      var handle;
+      try {
+        handle = await Cod2Fs.pickDirectory();
+      } catch (err) {
+        // User dismissed the picker: stay idle instead of wedging on busy.
+        setBusy(false);
+        if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
+          setMsg('Folder selection cancelled. Pick a folder or use cache/remote.', false);
+          return;
+        }
+        throw err;
+      }
       savedHandle = handle; savedMeta = null; beginTarget = 'resume';
       await ingestAndBoot(handle);
     }
 
     async function runBegin() {
+      if (fatalLatched) { requestReload(); return; }
       if (busy || !runtimeReady) return;
       setBusy(true);
       try {
@@ -946,18 +1109,46 @@
     }
 
     beginBtn.addEventListener('click', runBegin);
+    if (fsBtn) fsBtn.addEventListener('click', function () {
+      try {
+        var el = document.documentElement;
+        if (document.fullscreenElement) { document.exitFullscreen(); return; }
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (canvas.requestFullscreen) canvas.requestFullscreen();
+      } catch (e) { setMsg('Fullscreen blocked: ' + (e && e.message || e), true); }
+      try { canvas.focus(); } catch (e) {}
+    });
+    if (srcLocalBtn) srcLocalBtn.addEventListener('click', function () { setSource('pick', 'Enter — Local folder'); });
+    if (srcCacheBtn) srcCacheBtn.addEventListener('click', function () {
+      if (savedMeta) setSource('cache', 'Play from cache');
+      else setMsg('No cached assets yet. Pick a folder or use remote first.', true);
+    });
+    if (srcRemoteBtn) srcRemoteBtn.addEventListener('click', function () {
+      if (remoteCfg) setSource('remote', 'Download & Play');
+      else setMsg('No remote asset config on this server. Use a local folder.', true);
+    });
+    // Keyboard: Enter activates the primary action when idle.
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && !started && !busy && runtimeReady &&
+          document.activeElement !== folderIn) {
+        runBegin();
+      }
+    });
     changeBtn.addEventListener('click', function () {
+      if (fatalLatched) { requestReload(); return; }
       if (busy || !runtimeReady) return;
       pickAndBoot().catch(function (err) { setMsg((err && err.message) || String(err), true); });
     });
     clearBtn.addEventListener('click', async function () {
       if (busy || !runtimeReady) return;
+      if (!confirm('Clear cached game assets and forget the saved folder?')) return;
       setBusy(true);
       try { await Cod2Fs.clearCache(); await Cod2Fs.forgetHandle(); }
       catch (e) { setMsg((e && e.message) || String(e), true); setBusy(false); return; }
       savedHandle = null; savedMeta = null;
-      changeBtn.style.display = 'none';
-      dropzone.style.display = 'none';
+      /* Keep local re-pick visible; dropzone only matters for fallback browsers. */
+      changeBtn.style.display = 'inline-block';
+      dropzone.style.display = Cod2Fs.hasFsAccess() ? 'none' : 'block';
       clearBtn.style.display = remoteCfg ? 'inline-block' : 'none';
       if (remoteCfg) {
         beginTarget = 'remote';
@@ -969,13 +1160,17 @@
         setMsg('Cache cleared. Click Enter to select your CoD2 folder.');
       }
       setBusy(false);
+      if (srcCacheBtn) srcCacheBtn.disabled = true;
+      updateDiagnostics();
     });
 
     // ---- Fallback for non-Chromium browsers -----------------------------
 
     folderIn.addEventListener('change', function () {
       var files = Array.prototype.slice.call(folderIn.files || []);
-      if (!files.length) return;
+      // Picker dismissed: clear value and release the busy latch.
+      folderIn.value = '';
+      if (!files.length) { setBusy(false); return; }
       (async function () {
         setBusy(true);
         mkdirTree(FS_BASEPATH); mkdirTree(FS_HOMEPATH);
@@ -1005,6 +1200,8 @@
         setMsg('Starting…');
         startGame();
       })().catch(function (err) { setBusy(false); setMsg((err && err.message) || String(err), true); });
+      // Always reset the file input so re-picking the same folder fires change.
+      try { folderIn.value = ''; } catch (e) {}
     });
 
     // ---- Drag & drop ----------------------------------------------------
@@ -1096,6 +1293,22 @@
 
     // ---- Runtime hook ---------------------------------------------------
 
+    function showLauncherChrome() {
+      if (fsBtn) fsBtn.style.display = 'inline-block';
+      if (srcRow) srcRow.style.display = 'block';
+      /* Local folder stays available even on remote/VPS (source row + Change). */
+      changeBtn.style.display = 'inline-block';
+      changeBtn.removeAttribute('aria-hidden');
+      if (!Cod2Fs.hasFsAccess()) {
+        dropzone.style.display = 'block';
+        dropzone.removeAttribute('aria-hidden');
+        dropzone.textContent = '…or drop your CoD2 folder here (fallback browsers).';
+      } else {
+        dropzone.style.display = 'none';
+        dropzone.setAttribute('aria-hidden', 'true');
+      }
+    }
+
     async function afterRuntime() {
       runtimeReady = true;
       configureFsBackend();
@@ -1106,21 +1319,22 @@
       var workerfs = isWorkerfsBuild();
       var subline = document.getElementById('subline');
 
+      showLauncherChrome();
+      updateDiagnostics();
+
       remoteCfg = null;
       try { remoteCfg = await Cod2Fs.detectRemoteConfig(); } catch (e) { remoteCfg = null; }
+      updateDiagnostics();
 
       var handle = fsa ? await Cod2Fs.getSavedHandle() : null;
       var perm = handle ? await Cod2Fs.queryHandlePermission(handle) : 'denied';
       var meta = (!workerfs && opfs) ? await Cod2Fs.getCacheMeta() : null;
 
-      /* Never show Change Folder / drop zone on the play shell. */
-      changeBtn.style.display = 'none';
-      clearBtn.style.display = 'none';
-      dropzone.style.display = 'none';
+      showLauncherChrome();
+      if (srcLocalBtn) srcLocalBtn.disabled = false;
 
       /*
-       * Remote/VPS deploy: keep the cleaner Play-from-cache UX.
-       * Local folder pick still works via Enter (hidden file input) when needed.
+       * Remote/VPS: default to cache/download, but keep Change folder + Local.
        */
       if (remoteCfg) {
         savedHandle = null;
@@ -1150,9 +1364,16 @@
         beginBtn.textContent = 'Enter';
         setMsg('Select your Call of Duty 2 folder to start.');
       }
+      if (srcLocalBtn) srcLocalBtn.disabled = false;
+      if (srcCacheBtn) srcCacheBtn.disabled = !savedMeta;
+      if (srcRemoteBtn) srcRemoteBtn.disabled = !remoteCfg;
+      updateDiagnostics();
     }
 
-    var ENGINE_ASSET_VER = 'o1-ping17-20260729';
+    var ENGINE_ASSET_VER = (typeof window.ENGINE_ASSET_VER === 'string' && window.ENGINE_ASSET_VER)
+      ? window.ENGINE_ASSET_VER
+      : 'o1-plan-20260910';
+    /* Same-origin /play/api/* — provided locally by tools/serve_web_local.py */
     var COD2_MASTER_DEFAULT = (typeof window.COD2_MASTER_URL === 'string' && window.COD2_MASTER_URL)
       ? window.COD2_MASTER_URL
       : '/play/api/masterlist/cod2/1.3';
@@ -1162,7 +1383,15 @@
       : ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/play/api/gamews');
     window.COD2_RELAY_URL = COD2_RELAY_DEFAULT;
 
-    window.Module = {
+    function bindEngineUiHooks(M) {
+      if (!M) return M;
+      M.onCod2Fatal = function (msg) { showFatal(msg); };
+      M.onCod2Quit = function () { showFatal('Engine quit.'); };
+      M.onCod2Ready = function () { onEngineReady(); };
+      return M;
+    }
+
+    window.Module = bindEngineUiHooks({
       noInitialRun: true,
       canvas: canvas,
       arguments: GAME_ARGS,
@@ -1176,17 +1405,21 @@
       },
       print: function (t) { onEngineLine(t, false); },
       printErr: function (t) { onEngineLine(t, true); },
-      onCod2Fatal: function (msg) { showFatal(msg); },
-      onCod2Quit: function () { showFatal('Engine quit.'); },
       onRuntimeInitialized: function () {
+        bindEngineUiHooks(window.Module);
         appendBootLog('engine assets ' + ENGINE_ASSET_VER + ' (if missing this line, hard-refresh)');
         afterRuntime().catch(function (err) {
           console.warn(err);
           setMsg((err && err.message) || String(err), true);
           runtimeReady = true; setBusy(false); beginBtn.disabled = false;
+          showLauncherChrome();
+          updateDiagnostics();
         });
       }
-    };
+    });
+
+    /* Capability/storage diag + chrome before wasm/remote finish. */
+    try { showLauncherChrome(); updateDiagnostics(); } catch (e) {}
   })();
   </script>
   {{{ SCRIPT }}}

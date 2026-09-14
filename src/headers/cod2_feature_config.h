@@ -68,4 +68,16 @@
   #define COD2_IS_XENON 0
 #endif
 
+/*
+ * Original Mach-O absolute symbol at 0x1000. Native/Win32 link with
+ * -Wl,--defsym,__mh_execute_header=0x1000 so (int)&__mh_execute_header == 0x1000.
+ * wasm-ld has no --defsym; use the literal on EMSCRIPTEN instead.
+ */
+#ifdef __EMSCRIPTEN__
+#define COD2_MH_EXECUTE_HEADER 0x1000
+#else
+extern int __mh_execute_header;
+#define COD2_MH_EXECUTE_HEADER ((int)&__mh_execute_header)
+#endif
+
 #endif

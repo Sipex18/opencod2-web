@@ -130,31 +130,16 @@ int Web_GetMonitorMaxHz(void)
     return hz;
 }
 
-static void Web_ForceCanvasFullBleedCss(void)
+/* Proxied via library_cod2_vid.js — keeps CSS full-viewport after SDL resize. */
+extern void web_force_canvas_fullbleed_main(void);
+
+void Web_ForceCanvasFullBleedCss(void)
 {
-    MAIN_THREAD_EM_ASM({
-        function force(c) {
-            if (!c || !c.style) return;
-            c.style.setProperty('width', '100%', 'important');
-            c.style.setProperty('height', '100%', 'important');
-            c.style.setProperty('max-width', '100%', 'important');
-            c.style.setProperty('max-height', '100%', 'important');
-            c.style.setProperty('object-fit', 'contain', 'important');
-            c.style.setProperty('object-position', 'center', 'important');
-            c.style.setProperty('border', '0', 'important');
-            c.style.setProperty('display', 'block', 'important');
-            c.style.setProperty('margin', '0', 'important');
-            c.style.setProperty('padding', '0', 'important');
-        }
-        if (typeof document !== 'undefined') {
-            force(document.getElementById('canvas'));
-            try {
-                if (typeof Module !== 'undefined' && Module['canvas'])
-                    force(Module['canvas']);
-            } catch (e) {}
-        }
-    });
+    web_force_canvas_fullbleed_main();
 }
+
+/* Proxied via src/web/library_cod2_vid.js (__proxy: sync) — not ASM_CONSTS. */
+extern int web_try_resize_canvas_main(int wantW, int wantH);
 
 int Web_TryResizeCanvas(int wantW, int wantH)
 {
@@ -171,74 +156,21 @@ int Web_TryResizeCanvas(int wantW, int wantH)
      * Resize DOM canvas + offscreen FBO on the browser UI thread, then report
      * drawingBuffer size. Do not use stock emscripten_set_canvas_element_size
      * (returns -4 when controlTransferredOffscreen is set for OFFSCREEN_FRAMEBUFFER).
+     *
+     * Prefer the js-library proxied call so graphics Apply keeps working even if
+     * MAIN_THREAD_EM_ASM / ASM_CONSTS receive is guarded or mismatched.
      */
-    ok = MAIN_THREAD_EM_ASM_INT({
-        var wantW = $0 | 0;
-        var wantH = $1 | 0;
-        var outOk = 0;
-        try {
-            var c = null;
-            if (typeof document !== 'undefined')
-                c = document.getElementById('canvas');
-            if (!c && typeof Module !== 'undefined')
-                c = Module['canvas'];
-            if (!c) {
-                console.warn('[cod2-vid] resize: no canvas on main thread');
-                return 0;
-            }
+    ok = web_try_resize_canvas_main(wantW, wantH);
 
-            c.width = wantW;
-            c.height = wantH;
-
-            var ctxObj = c.GLctxObject || null;
-            if (!ctxObj && typeof GL !== 'undefined' && GL.currentContext) {
-                var cur = GL.currentContext;
-                if (cur && typeof cur === 'object' && cur.GLctx)
-                    ctxObj = cur;
-                else if (typeof cur === 'number' && GL.contexts && GL.contexts[cur])
-                    ctxObj = GL.contexts[cur];
-            }
-            if (ctxObj && typeof GL !== 'undefined' && typeof GL.resizeOffscreenFramebuffer === 'function') {
-                try { GL.resizeOffscreenFramebuffer(ctxObj); } catch (e1) {
-                    console.warn('[cod2-vid] resizeOffscreenFramebuffer', e1);
-                }
-            }
-
-            /* Keep display full-bleed; backing store is wantW x wantH (sharp). */
-            if (c.style) {
-                c.style.setProperty('width', '100%', 'important');
-                c.style.setProperty('height', '100%', 'important');
-                c.style.setProperty('max-width', '100%', 'important');
-                c.style.setProperty('max-height', '100%', 'important');
-                c.style.setProperty('object-fit', 'contain', 'important');
-                c.style.setProperty('object-position', 'center', 'important');
-                c.style.setProperty('display', 'block', 'important');
-                c.style.setProperty('margin', '0', 'important');
-                c.style.setProperty('padding', '0', 'important');
-            }
-
-            var gl = (ctxObj && ctxObj.GLctx) ? ctxObj.GLctx : null;
-            var dw = gl && gl.drawingBufferWidth ? (gl.drawingBufferWidth | 0) : (c.width | 0);
-            var dh = gl && gl.drawingBufferHeight ? (gl.drawingBufferHeight | 0) : (c.height | 0);
-            outOk = (dw === wantW && dh === wantH) ? 1 : 0;
-            if (!outOk)
-                console.warn('[cod2-vid] resize mismatch want=' + wantW + 'x' + wantH +
-                             ' got=' + dw + 'x' + dh + ' canvas=' + c.width + 'x' + c.height);
-            else
-                console.log('[cod2-vid] resized drawable to ' + dw + 'x' + dh);
-        } catch (e) {
-            console.warn('[cod2-vid] resize threw', e);
-            outOk = 0;
-        }
-        return outOk;
-    }, wantW, wantH);
-
+    /*
+     * Offscreen FBO drawable queries can lag one frame. If the proxied resize
+     * reported success (canvas attrs + FBO retargeted), trust it — otherwise
+     * soft vid_restart collapses every mode back to 640x480.
+     */
     Web_GetDrawableSize(&gotW, &gotH);
-    if (ok && gotW == wantW && gotH == wantH)
-        return 1;
-
-    /* One more CSS pass even on failure so we never leave a 640px CSS box. */
     Web_ForceCanvasFullBleedCss();
+    if (ok)
+        return 1;
     return (gotW == wantW && gotH == wantH) ? 1 : 0;
 }
 

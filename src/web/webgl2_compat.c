@@ -1,6 +1,7 @@
 #ifdef __EMSCRIPTEN__
 
 #include <GLES3/gl3.h>
+#include <emscripten.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,6 +18,9 @@
 #endif
 #ifndef GL_PROJECTION
 #define GL_PROJECTION 0x1701
+#endif
+#ifndef GL_TEXTURE
+#define GL_TEXTURE 0x1702
 #endif
 #ifndef GL_TEXTURE_ENV
 #define GL_TEXTURE_ENV 0x2300
@@ -54,6 +58,9 @@
 #ifndef GL_TEXTURE1
 #define GL_TEXTURE1 0x84C1
 #endif
+#ifndef GL_TEXTURE_CUBE_MAP
+#define GL_TEXTURE_CUBE_MAP 0x8513
+#endif
 #ifndef GL_QUADS
 #define GL_QUADS 0x0007
 #endif
@@ -77,12 +84,13 @@ typedef struct {
 typedef struct {
     float xyz[3];
     float color[4];
-    float tex0[2];
+    float tex0[3];
     float tex1[2];
 } WebGL2Vertex;
 
 typedef struct {
     GLuint program;
+    GLuint program_cube;
     GLuint vbo;
     GLuint ibo;
     GLuint vao;
@@ -92,26 +100,49 @@ typedef struct {
     GLint u_alpha_test;
     GLint u_alpha_func;
     GLint u_alpha_ref;
+    GLint u_texmat;
+    GLint u_lmap_scale;
+    GLint u_use_light;
+    GLint u_light;
+    GLint u_fog_enable;
+    GLint u_fog_color;
+    GLint u_fog_start;
+    GLint u_fog_end;
+    GLint u_cube_mvp;
+    GLint u_cube_eye;
+    GLint u_cube_alpha_test;
+    GLint u_cube_alpha_func;
+    GLint u_cube_alpha_ref;
     GLenum matrix_mode;
     float modelview[16];
     float projection[16];
+    float texture[16];
     float modelview_stack[32][16];
     float projection_stack[32][16];
     int modelview_depth;
     int projection_depth;
     float color[4];
-    float texcoord[2][2];
+    float texcoord[2][4];
     int active_tex_unit;
     int client_tex_unit;
     int texture_2d_enabled[2];
+    int cube_map_enabled[2];
     int tex_env_mode[2];
     int alpha_test;
     GLenum alpha_func;
     float alpha_ref;
+    int fog_enable;
+    float fog_color[4];
+    float fog_start;
+    float fog_end;
+    float fog_density;
+    int fog_mode;
     WebGL2ClientArray vertex_array;
     WebGL2ClientArray color_array;
     WebGL2ClientArray texcoord_array[2];
     WebGL2ClientArray normal_array;
+    int light_enabled[8];
+    float light_ambient[8][3];
     int in_begin;
     GLenum begin_mode;
     WebGL2Vertex *immediate;
@@ -151,7 +182,11 @@ static void mat_mul(float *out, const float *a, const float *b)
 
 static float *current_matrix(void)
 {
-    return gl2.matrix_mode == GL_PROJECTION ? gl2.projection : gl2.modelview;
+    if (gl2.matrix_mode == GL_PROJECTION)
+        return gl2.projection;
+    if (gl2.matrix_mode == GL_TEXTURE)
+        return gl2.texture;
+    return gl2.modelview;
 }
 
 static void mat_postmul_current(const float *rhs)
@@ -171,6 +206,7 @@ static void gl2_init_state(void)
     gl2.matrix_mode = GL_MODELVIEW;
     mat_identity(gl2.modelview);
     mat_identity(gl2.projection);
+    mat_identity(gl2.texture);
     gl2.color[0] = 1.0f;
     gl2.color[1] = 1.0f;
     gl2.color[2] = 1.0f;
@@ -181,6 +217,15 @@ static void gl2_init_state(void)
     gl2.tex_env_mode[1] = GL_MODULATE;
     gl2.alpha_func = GL_ALWAYS;
     gl2.alpha_ref = 0.0f;
+    gl2.fog_enable = 0;
+    gl2.fog_color[0] = 0.0f;
+    gl2.fog_color[1] = 0.0f;
+    gl2.fog_color[2] = 0.0f;
+    gl2.fog_color[3] = 1.0f;
+    gl2.fog_start = 0.0f;
+    gl2.fog_end = 4000.0f;
+    gl2.fog_density = 0.0f;
+    gl2.fog_mode = 3;
 }
 
 static GLuint compile_shader(GLenum type, const char *src)
@@ -200,22 +245,50 @@ static GLuint compile_shader(GLenum type, const char *src)
     return shader;
 }
 
+static GLuint link_program(const char *vs_src, const char *fs_src, const char *label)
+{
+    GLuint vert;
+    GLuint frag;
+    GLuint program;
+    GLint ok = 0;
+
+    vert = compile_shader(GL_VERTEX_SHADER, vs_src);
+    frag = compile_shader(GL_FRAGMENT_SHADER, fs_src);
+    program = glCreateProgram();
+    glAttachShader(program, vert);
+    glAttachShader(program, frag);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        GLsizei len = 0;
+        glGetProgramInfoLog(program, sizeof(log), &len, log);
+        fprintf(stderr, "webgl2 compat %s link failed: %.*s [o1-gfx]\n", label, (int)len, log);
+    }
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    return program;
+}
+
 static void ensure_program(void)
 {
     static const char *vs =
         "#version 300 es\n"
         "layout(location=0) in vec3 a_pos;\n"
         "layout(location=1) in vec4 a_color;\n"
-        "layout(location=2) in vec2 a_tex0;\n"
+        "layout(location=2) in vec3 a_tex0;\n"
         "layout(location=3) in vec2 a_tex1;\n"
         "uniform mat4 u_mvp;\n"
         "out vec4 v_color;\n"
         "out vec2 v_tex0;\n"
         "out vec2 v_tex1;\n"
+        "out float v_eye_z;\n"
         "void main() {\n"
-        "  gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
+        "  vec4 eye = u_mvp * vec4(a_pos, 1.0);\n"
+        "  gl_Position = eye;\n"
+        "  v_eye_z = abs(eye.w) > 0.0001 ? abs(eye.w) : abs(eye.z);\n"
         "  v_color = a_color;\n"
-        "  v_tex0 = a_tex0;\n"
+        "  v_tex0 = a_tex0.xy;\n"
         "  v_tex1 = a_tex1;\n"
         "}\n";
     static const char *fs =
@@ -224,10 +297,76 @@ static void ensure_program(void)
         "in vec4 v_color;\n"
         "in vec2 v_tex0;\n"
         "in vec2 v_tex1;\n"
+        "in float v_eye_z;\n"
         "uniform sampler2D u_tex0;\n"
         "uniform sampler2D u_tex1;\n"
         "uniform int u_use_tex0;\n"
         "uniform int u_use_tex1;\n"
+        "uniform float u_lmap_scale;\n"
+        "uniform int u_use_light;\n"
+        "uniform vec3 u_light;\n"
+        "uniform int u_alpha_test;\n"
+        "uniform int u_alpha_func;\n"
+        "uniform float u_alpha_ref;\n"
+        "uniform int u_fog_enable;\n"
+        "uniform vec3 u_fog_color;\n"
+        "uniform float u_fog_start;\n"
+        "uniform float u_fog_end;\n"
+        "out vec4 fragColor;\n"
+        "bool alphaPass(float a) {\n"
+        "  if (u_alpha_func == 512) return false;\n"
+        "  if (u_alpha_func == 513) return a < u_alpha_ref;\n"
+        "  if (u_alpha_func == 514) return abs(a - u_alpha_ref) < 0.0001;\n"
+        "  if (u_alpha_func == 515) return a <= u_alpha_ref;\n"
+        "  if (u_alpha_func == 516) return a > u_alpha_ref;\n"
+        "  if (u_alpha_func == 517) return abs(a - u_alpha_ref) >= 0.0001;\n"
+        "  if (u_alpha_func == 518) return a >= u_alpha_ref;\n"
+        "  return true;\n"
+        "}\n"
+        "void main() {\n"
+        "  /* Opaque lightmapped world: colormap * lightmap * overbright. Vertex RGB is not\n"
+        "   * multiplied (cod2-demo-viewer + TECHNIQUE_LIGHTMAP_*). Vertex alpha still used. */\n"
+        "  vec4 c = (u_use_tex1 != 0) ? vec4(1.0, 1.0, 1.0, v_color.a) : v_color;\n"
+        "  vec4 t0 = vec4(1.0);\n"
+        "  if (u_use_tex0 != 0) {\n"
+        "    t0 = texture(u_tex0, v_tex0);\n"
+        "    c *= t0;\n"
+        "  }\n"
+        "  if (u_use_tex1 != 0) {\n"
+        "    vec4 t1 = texture(u_tex1, v_tex1);\n"
+        "    c.rgb *= t1.rgb * u_lmap_scale;\n"
+        "  }\n"
+        "  if (u_use_light != 0) {\n"
+        "    c.rgb *= u_light;\n"
+        "  }\n"
+        "  if (u_alpha_test != 0 && !alphaPass(t0.a * v_color.a)) discard;\n"
+        "  if (u_fog_enable != 0) {\n"
+        "    float denom = u_fog_end - u_fog_start;\n"
+        "    float f = (abs(denom) > 0.001) ? clamp((u_fog_end - v_eye_z) / denom, 0.0, 1.0) : 1.0;\n"
+        "    c.rgb = mix(u_fog_color, c.rgb, f);\n"
+        "  }\n"
+        "  fragColor = c;\n"
+        "}\n";
+    static const char *vs_cube =
+        "#version 300 es\n"
+        "layout(location=0) in vec3 a_pos;\n"
+        "layout(location=1) in vec4 a_color;\n"
+        "layout(location=2) in vec3 a_tex0;\n"
+        "uniform mat4 u_mvp;\n"
+        "uniform vec3 u_eye;\n"
+        "out vec4 v_color;\n"
+        "out vec3 v_dir;\n"
+        "void main() {\n"
+        "  gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
+        "  v_color = a_color;\n"
+        "  v_dir = a_pos - u_eye;\n"
+        "}\n";
+    static const char *fs_cube =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "in vec4 v_color;\n"
+        "in vec3 v_dir;\n"
+        "uniform samplerCube u_cube;\n"
         "uniform int u_alpha_test;\n"
         "uniform int u_alpha_func;\n"
         "uniform float u_alpha_ref;\n"
@@ -243,42 +382,38 @@ static void ensure_program(void)
         "  return true;\n"
         "}\n"
         "void main() {\n"
-        "  vec4 c = v_color;\n"
-        "  if (u_use_tex0 != 0) c *= texture(u_tex0, v_tex0);\n"
-        "  if (u_use_tex1 != 0) c *= texture(u_tex1, v_tex1);\n"
+        "  vec4 c = v_color * texture(u_cube, normalize(v_dir));\n"
         "  if (u_alpha_test != 0 && !alphaPass(c.a)) discard;\n"
         "  fragColor = c;\n"
         "}\n";
-    GLuint vert;
-    GLuint frag;
-    GLint ok = 0;
 
     gl2_init_state();
     if (gl2.program)
         return;
 
-    vert = compile_shader(GL_VERTEX_SHADER, vs);
-    frag = compile_shader(GL_FRAGMENT_SHADER, fs);
-    gl2.program = glCreateProgram();
-    glAttachShader(gl2.program, vert);
-    glAttachShader(gl2.program, frag);
-    glLinkProgram(gl2.program);
-    glGetProgramiv(gl2.program, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        GLsizei len = 0;
-        glGetProgramInfoLog(gl2.program, sizeof(log), &len, log);
-        fprintf(stderr, "webgl2 compat program link failed: %.*s\n", (int)len, log);
-    }
-    glDeleteShader(vert);
-    glDeleteShader(frag);
+    gl2.program = link_program(vs, fs, "2d");
+    gl2.program_cube = link_program(vs_cube, fs_cube, "cube");
 
     gl2.u_mvp = glGetUniformLocation(gl2.program, "u_mvp");
+    gl2.u_texmat = glGetUniformLocation(gl2.program, "u_texmat");
     gl2.u_use_tex0 = glGetUniformLocation(gl2.program, "u_use_tex0");
     gl2.u_use_tex1 = glGetUniformLocation(gl2.program, "u_use_tex1");
+    gl2.u_lmap_scale = glGetUniformLocation(gl2.program, "u_lmap_scale");
+    gl2.u_use_light = glGetUniformLocation(gl2.program, "u_use_light");
+    gl2.u_light = glGetUniformLocation(gl2.program, "u_light");
     gl2.u_alpha_test = glGetUniformLocation(gl2.program, "u_alpha_test");
     gl2.u_alpha_func = glGetUniformLocation(gl2.program, "u_alpha_func");
     gl2.u_alpha_ref = glGetUniformLocation(gl2.program, "u_alpha_ref");
+    gl2.u_fog_enable = glGetUniformLocation(gl2.program, "u_fog_enable");
+    gl2.u_fog_color = glGetUniformLocation(gl2.program, "u_fog_color");
+    gl2.u_fog_start = glGetUniformLocation(gl2.program, "u_fog_start");
+    gl2.u_fog_end = glGetUniformLocation(gl2.program, "u_fog_end");
+
+    gl2.u_cube_mvp = glGetUniformLocation(gl2.program_cube, "u_mvp");
+    gl2.u_cube_eye = glGetUniformLocation(gl2.program_cube, "u_eye");
+    gl2.u_cube_alpha_test = glGetUniformLocation(gl2.program_cube, "u_alpha_test");
+    gl2.u_cube_alpha_func = glGetUniformLocation(gl2.program_cube, "u_alpha_func");
+    gl2.u_cube_alpha_ref = glGetUniformLocation(gl2.program_cube, "u_alpha_ref");
 
     glGenVertexArrays(1, &gl2.vao);
     glGenBuffers(1, &gl2.vbo);
@@ -287,22 +422,72 @@ static void ensure_program(void)
     glUseProgram(gl2.program);
     glUniform1i(glGetUniformLocation(gl2.program, "u_tex0"), 0);
     glUniform1i(glGetUniformLocation(gl2.program, "u_tex1"), 1);
+
+    glUseProgram(gl2.program_cube);
+    glUniform1i(glGetUniformLocation(gl2.program_cube, "u_cube"), 0);
 }
 
-static void bind_compat_arrays(const WebGL2Vertex *verts, int vert_count, int use_tex0, int use_tex1)
+static void bind_compat_arrays(const WebGL2Vertex *verts, int vert_count, int use_tex0, int use_tex1, int use_cube)
 {
     float mvp[16];
 
     ensure_program();
 
     mat_mul(mvp, gl2.projection, gl2.modelview);
-    glUseProgram(gl2.program);
-    glUniformMatrix4fv(gl2.u_mvp, 1, GL_FALSE, mvp);
-    glUniform1i(gl2.u_use_tex0, use_tex0);
-    glUniform1i(gl2.u_use_tex1, use_tex1);
-    glUniform1i(gl2.u_alpha_test, gl2.alpha_test);
-    glUniform1i(gl2.u_alpha_func, gl2.alpha_func);
-    glUniform1f(gl2.u_alpha_ref, gl2.alpha_ref);
+    if (use_cube) {
+        const float *m = gl2.modelview;
+        float eye[3];
+        /* Camera world position from orthonormal modelview: -R^T * t */
+        eye[0] = -(m[0] * m[12] + m[1] * m[13] + m[2] * m[14]);
+        eye[1] = -(m[4] * m[12] + m[5] * m[13] + m[6] * m[14]);
+        eye[2] = -(m[8] * m[12] + m[9] * m[13] + m[10] * m[14]);
+        glUseProgram(gl2.program_cube);
+        glUniformMatrix4fv(gl2.u_cube_mvp, 1, GL_FALSE, mvp);
+        if (gl2.u_cube_eye >= 0)
+            glUniform3fv(gl2.u_cube_eye, 1, eye);
+        glUniform1i(gl2.u_cube_alpha_test, gl2.alpha_test);
+        glUniform1i(gl2.u_cube_alpha_func, gl2.alpha_func);
+        glUniform1f(gl2.u_cube_alpha_ref, gl2.alpha_ref);
+    } else {
+        glUseProgram(gl2.program);
+        glUniformMatrix4fv(gl2.u_mvp, 1, GL_FALSE, mvp);
+        if (gl2.u_texmat >= 0)
+            glUniformMatrix4fv(gl2.u_texmat, 1, GL_FALSE, gl2.texture);
+        glUniform1i(gl2.u_use_tex0, use_tex0);
+        glUniform1i(gl2.u_use_tex1, use_tex1);
+        if (gl2.u_lmap_scale >= 0)
+            glUniform1f(gl2.u_lmap_scale, use_tex1 ? 2.0f : 1.0f);
+        {
+            float lr = 0.0f, lg = 0.0f, lb = 0.0f;
+            int li;
+            int any = 0;
+            int use_light;
+            for (li = 0; li < 8; li++) {
+                if (!gl2.light_enabled[li])
+                    continue;
+                any = 1;
+                lr += gl2.light_ambient[li][0];
+                lg += gl2.light_ambient[li][1];
+                lb += gl2.light_ambient[li][2];
+            }
+            use_light = (!use_tex1 && any && (lr + lg + lb) > 0.02f);
+            if (gl2.u_use_light >= 0)
+                glUniform1i(gl2.u_use_light, use_light);
+            if (gl2.u_light >= 0)
+                glUniform3f(gl2.u_light, lr * 2.0f, lg * 2.0f, lb * 2.0f);
+        }
+        glUniform1i(gl2.u_alpha_test, gl2.alpha_test);
+        glUniform1i(gl2.u_alpha_func, gl2.alpha_func);
+        glUniform1f(gl2.u_alpha_ref, gl2.alpha_ref);
+        if (gl2.u_fog_enable >= 0)
+            glUniform1i(gl2.u_fog_enable, gl2.fog_enable);
+        if (gl2.u_fog_color >= 0)
+            glUniform3f(gl2.u_fog_color, gl2.fog_color[0], gl2.fog_color[1], gl2.fog_color[2]);
+        if (gl2.u_fog_start >= 0)
+            glUniform1f(gl2.u_fog_start, gl2.fog_start);
+        if (gl2.u_fog_end >= 0)
+            glUniform1f(gl2.u_fog_end, gl2.fog_end);
+    }
 
     glBindVertexArray(gl2.vao);
     glBindBuffer(GL_ARRAY_BUFFER, gl2.vbo);
@@ -314,7 +499,7 @@ static void bind_compat_arrays(const WebGL2Vertex *verts, int vert_count, int us
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(WebGL2Vertex), (void *)offsetof(WebGL2Vertex, xyz));
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(WebGL2Vertex), (void *)offsetof(WebGL2Vertex, color));
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(WebGL2Vertex), (void *)offsetof(WebGL2Vertex, tex0));
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(WebGL2Vertex), (void *)offsetof(WebGL2Vertex, tex0));
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(WebGL2Vertex), (void *)offsetof(WebGL2Vertex, tex1));
 }
 
@@ -380,6 +565,7 @@ static void fill_vertex_from_arrays(WebGL2Vertex *dst, unsigned int index)
     dst->color[3] = gl2.color[3];
     dst->tex0[0] = 0.0f;
     dst->tex0[1] = 0.0f;
+    dst->tex0[2] = 0.0f;
     dst->tex1[0] = 0.0f;
     dst->tex1[1] = 0.0f;
 
@@ -413,7 +599,14 @@ static void fill_vertex_from_arrays(WebGL2Vertex *dst, unsigned int index)
             tex[0] = read_component(base, gl2.texcoord_array[i].type, 0);
             if (gl2.texcoord_array[i].size > 1)
                 tex[1] = read_component(base + component_size(gl2.texcoord_array[i].type), gl2.texcoord_array[i].type, 0);
+            if (i == 0 && gl2.texcoord_array[i].size > 2)
+                dst->tex0[2] = read_component(base + 2 * component_size(gl2.texcoord_array[i].type), gl2.texcoord_array[i].type, 0);
         }
+    }
+    if (gl2.cube_map_enabled[0] && !gl2.texture_2d_enabled[0] && gl2.texcoord_array[0].size < 3) {
+        dst->tex0[0] = dst->xyz[0];
+        dst->tex0[1] = dst->xyz[1];
+        dst->tex0[2] = dst->xyz[2];
     }
 }
 
@@ -545,6 +738,7 @@ WEBGL2_WEAK void webgl2_glDrawElements(unsigned int mode, int count, unsigned in
     int legacy_count = 0;
     int use_tex0;
     int use_tex1;
+    int use_cube;
 
     gl2_init_state();
     if (!gl2.vertex_array.enabled || !gl2.vertex_array.pointer || !indices || count <= 0) {
@@ -559,6 +753,50 @@ WEBGL2_WEAK void webgl2_glDrawElements(unsigned int mode, int count, unsigned in
     }
     if (max_index > 1048576)
         return;
+
+    /*
+     * A wasm trap ("memory access out of bounds") loses the call site. Check
+     * every client array's last touched byte against the linear memory size
+     * and report the offender instead of trapping.
+     */
+    {
+        uintptr_t heapSize = (uintptr_t)emscripten_get_heap_size();
+        const WebGL2ClientArray *arrays[4];
+        const char *names[4] = { "vertex", "color", "tex0", "tex1" };
+        int a;
+        arrays[0] = &gl2.vertex_array;
+        arrays[1] = &gl2.color_array;
+        arrays[2] = &gl2.texcoord_array[0];
+        arrays[3] = &gl2.texcoord_array[1];
+        for (a = 0; a < 4; a++) {
+            const WebGL2ClientArray *ar = arrays[a];
+            int enabled = (a == 0) ? gl2.vertex_array.enabled
+                        : (a == 1) ? gl2.color_array.enabled
+                                   : gl2.texcoord_array[a - 2].enabled;
+            if (!enabled || !ar->pointer)
+                continue;
+            if ((uintptr_t)ar->pointer + (uintptr_t)max_index * (unsigned)ar->stride + 64 > heapSize) {
+                static int oobReports;
+                if (oobReports < 12) {
+                    oobReports++;
+                    printf("[o1-oob] %s array OOB: ptr=%p stride=%d maxIdx=%u end=0x%llx heap=0x%llx count=%d [o1-oob]\n",
+                           names[a], (const void *)ar->pointer, ar->stride, max_index,
+                           (unsigned long long)((uintptr_t)ar->pointer + (uintptr_t)max_index * (unsigned)ar->stride),
+                           (unsigned long long)heapSize, count);
+                }
+                return;
+            }
+        }
+        if ((uintptr_t)indices + (size_t)count * index_type_size(type) + 8 > heapSize) {
+            static int oobIdxReports;
+            if (oobIdxReports < 12) {
+                oobIdxReports++;
+                printf("[o1-oob] index array OOB: ptr=%p count=%d heap=0x%llx [o1-oob]\n",
+                       indices, count, (unsigned long long)heapSize);
+            }
+            return;
+        }
+    }
 
     verts = (WebGL2Vertex *)malloc((max_index + 1) * sizeof(WebGL2Vertex));
     legacy_indices = build_legacy_triangle_indices(mode, 0, count, type, indices, &legacy_count);
@@ -576,7 +814,8 @@ WEBGL2_WEAK void webgl2_glDrawElements(unsigned int mode, int count, unsigned in
 
     use_tex0 = gl2.texture_2d_enabled[0] && gl2.texcoord_array[0].enabled;
     use_tex1 = gl2.texture_2d_enabled[1] && gl2.texcoord_array[1].enabled;
-    bind_compat_arrays(verts, (int)max_index + 1, use_tex0, use_tex1);
+    use_cube = gl2.cube_map_enabled[0] && !gl2.texture_2d_enabled[0];
+    bind_compat_arrays(verts, (int)max_index + 1, use_tex0, use_tex1, use_cube);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl2.ibo);
     if (legacy_indices) {
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(legacy_count * sizeof(uint32_t)), index_copy, GL_STREAM_DRAW);
@@ -598,6 +837,7 @@ WEBGL2_WEAK void webgl2_glDrawArrays(unsigned int mode, int first, int count)
     int legacy_count = 0;
     int use_tex0;
     int use_tex1;
+    int use_cube;
 
     gl2_init_state();
     if (!gl2.vertex_array.enabled || !gl2.vertex_array.pointer || count <= 0) {
@@ -614,7 +854,8 @@ WEBGL2_WEAK void webgl2_glDrawArrays(unsigned int mode, int first, int count)
 
     use_tex0 = gl2.texture_2d_enabled[0] && gl2.texcoord_array[0].enabled;
     use_tex1 = gl2.texture_2d_enabled[1] && gl2.texcoord_array[1].enabled;
-    bind_compat_arrays(verts, count, use_tex0, use_tex1);
+    use_cube = gl2.cube_map_enabled[0] && !gl2.texture_2d_enabled[0];
+    bind_compat_arrays(verts, count, use_tex0, use_tex1, use_cube);
     legacy_indices = build_legacy_triangle_indices(mode, 0, count, GL_UNSIGNED_INT, NULL, &legacy_count);
     if (legacy_indices) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl2.ibo);
@@ -640,13 +881,23 @@ WEBGL2_WEAK void webgl2_glEnable(unsigned int cap)
     gl2_init_state();
     if (cap == GL_TEXTURE_2D) {
         gl2.texture_2d_enabled[gl2.active_tex_unit] = 1;
+        gl2.cube_map_enabled[gl2.active_tex_unit] = 0;
+        return;
+    }
+    if (cap == GL_TEXTURE_CUBE_MAP) {
+        gl2.cube_map_enabled[gl2.active_tex_unit] = 1;
+        gl2.texture_2d_enabled[gl2.active_tex_unit] = 0;
         return;
     }
     if (cap == GL_ALPHA_TEST) {
         gl2.alpha_test = 1;
         return;
     }
-    if (cap == 0x0B50 || cap == 0x0B60 || cap == 0x0B57 || cap == 0x0B90)
+    if (cap == 0x0B60) {
+        gl2.fog_enable = 1;
+        return;
+    }
+    if (cap == 0x0B50 || cap == 0x0B57 || cap == 0x0B90)
         return;
     glEnable(cap);
 }
@@ -658,11 +909,19 @@ WEBGL2_WEAK void webgl2_glDisable(unsigned int cap)
         gl2.texture_2d_enabled[gl2.active_tex_unit] = 0;
         return;
     }
+    if (cap == GL_TEXTURE_CUBE_MAP) {
+        gl2.cube_map_enabled[gl2.active_tex_unit] = 0;
+        return;
+    }
     if (cap == GL_ALPHA_TEST) {
         gl2.alpha_test = 0;
         return;
     }
-    if (cap == 0x0B50 || cap == 0x0B60 || cap == 0x0B57 || cap == 0x0B90)
+    if (cap == 0x0B60) {
+        gl2.fog_enable = 0;
+        return;
+    }
+    if (cap == 0x0B50 || cap == 0x0B57 || cap == 0x0B90)
         return;
     glDisable(cap);
 }
@@ -761,8 +1020,11 @@ static void push_immediate_vertex(float x, float y, float z)
     v->xyz[1] = y;
     v->xyz[2] = z;
     memcpy(v->color, gl2.color, sizeof(v->color));
-    memcpy(v->tex0, gl2.texcoord[0], sizeof(v->tex0));
-    memcpy(v->tex1, gl2.texcoord[1], sizeof(v->tex1));
+    v->tex0[0] = gl2.texcoord[0][0];
+    v->tex0[1] = gl2.texcoord[0][1];
+    v->tex0[2] = gl2.texcoord[0][2];
+    v->tex1[0] = gl2.texcoord[1][0];
+    v->tex1[1] = gl2.texcoord[1][1];
 }
 
 WEBGL2_WEAK void glEnd(void)
@@ -771,6 +1033,7 @@ WEBGL2_WEAK void glEnd(void)
     int legacy_count = 0;
     int use_tex0;
     int use_tex1;
+    int use_cube;
 
     gl2_init_state();
     if (!gl2.in_begin)
@@ -782,7 +1045,8 @@ WEBGL2_WEAK void glEnd(void)
 
     use_tex0 = gl2.texture_2d_enabled[0];
     use_tex1 = gl2.texture_2d_enabled[1];
-    bind_compat_arrays(gl2.immediate, gl2.immediate_count, use_tex0, use_tex1);
+    use_cube = gl2.cube_map_enabled[0] && !gl2.texture_2d_enabled[0];
+    bind_compat_arrays(gl2.immediate, gl2.immediate_count, use_tex0, use_tex1, use_cube);
     legacy_indices = build_legacy_triangle_indices(gl2.begin_mode, 0, gl2.immediate_count, GL_UNSIGNED_INT, NULL, &legacy_count);
     if (legacy_indices) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl2.ibo);
@@ -823,7 +1087,14 @@ WEBGL2_WEAK void glTexCoord2f(float s, float t)
 WEBGL2_WEAK void glMatrixMode(unsigned int mode)
 {
     gl2_init_state();
-    if (mode == GL_MODELVIEW || mode == GL_PROJECTION)
+    /*
+     * Desktop GL has a real TEXTURE matrix stack. CDirect3DDevice switches
+     * to GL_TEXTURE and glLoadIdentity() before every indexed draw (and
+     * again when binding a lightmap). If TEXTURE is aliased onto
+     * MODELVIEW, that identity wipe drops world-space BSP verts off screen
+     * while viewmodel verts near the origin fill the frame.
+     */
+    if (mode == GL_MODELVIEW || mode == GL_PROJECTION || mode == GL_TEXTURE)
         gl2.matrix_mode = mode;
 }
 
@@ -843,6 +1114,8 @@ WEBGL2_WEAK void glLoadMatrixf(const float *m)
 WEBGL2_WEAK void glPushMatrix(void)
 {
     gl2_init_state();
+    if (gl2.matrix_mode == GL_TEXTURE)
+        return;
     if (gl2.matrix_mode == GL_PROJECTION) {
         if (gl2.projection_depth < 32)
             memcpy(gl2.projection_stack[gl2.projection_depth++], gl2.projection, sizeof(gl2.projection));
@@ -855,6 +1128,8 @@ WEBGL2_WEAK void glPushMatrix(void)
 WEBGL2_WEAK void glPopMatrix(void)
 {
     gl2_init_state();
+    if (gl2.matrix_mode == GL_TEXTURE)
+        return;
     if (gl2.matrix_mode == GL_PROJECTION) {
         if (gl2.projection_depth > 0)
             memcpy(gl2.projection, gl2.projection_stack[--gl2.projection_depth], sizeof(gl2.projection));
@@ -959,9 +1234,35 @@ WEBGL2_WEAK int glDeleteProgramsARB(int n, const unsigned int *programs) { (void
 WEBGL2_WEAK int glDrawBuffer(unsigned int mode) { (void)mode; return 0; }
 WEBGL2_WEAK int glFinishFenceAPPLE(unsigned int fence) { (void)fence; return 0; }
 WEBGL2_WEAK int glFlushVertexArrayRangeAPPLE(int length, const void *pointer) { (void)length; (void)pointer; return 0; }
-WEBGL2_WEAK int glFogf(unsigned int pname, float param) { (void)pname; (void)param; return 0; }
-WEBGL2_WEAK void glFogfv(unsigned int pname, const float *params) { (void)pname; (void)params; }
-WEBGL2_WEAK int glFogi(unsigned int pname, int param) { (void)pname; (void)param; return 0; }
+WEBGL2_WEAK void glFogf(unsigned int pname, float param)
+{
+    gl2_init_state();
+    if (pname == 0x0B62) /* GL_FOG_DENSITY */
+        gl2.fog_density = param;
+    else if (pname == 0x0B63) /* GL_FOG_START */
+        gl2.fog_start = param;
+    else if (pname == 0x0B64) /* GL_FOG_END */
+        gl2.fog_end = param;
+}
+WEBGL2_WEAK void glFogfv(unsigned int pname, const float *params)
+{
+    gl2_init_state();
+    if (!params)
+        return;
+    if (pname == 0x0B66) { /* GL_FOG_COLOR */
+        gl2.fog_color[0] = params[0];
+        gl2.fog_color[1] = params[1];
+        gl2.fog_color[2] = params[2];
+        gl2.fog_color[3] = params[3];
+    }
+}
+WEBGL2_WEAK int glFogi(unsigned int pname, int param)
+{
+    gl2_init_state();
+    if (pname == 0x0B65) /* GL_FOG_MODE */
+        gl2.fog_mode = param;
+    return 0;
+}
 WEBGL2_WEAK int glGenFencesAPPLE(int n, unsigned int *fences)
 {
     int i;
@@ -1010,5 +1311,19 @@ WEBGL2_WEAK int glTexGenfv(unsigned int coord, unsigned int pname, const float *
 WEBGL2_WEAK int glTexGeni(unsigned int coord, unsigned int pname, int param) { (void)coord; (void)pname; (void)param; return 0; }
 WEBGL2_WEAK int glVertexArrayParameteriAPPLE(unsigned int pname, int param) { (void)pname; (void)param; return 0; }
 WEBGL2_WEAK int glVertexArrayRangeAPPLE(int length, const void *pointer) { (void)length; (void)pointer; return 0; }
+
+void webgl2_set_ff_light(int index, int enable, const float *ambient_rgb)
+{
+    gl2_init_state();
+    if (index < 0 || index >= 8)
+        return;
+    if (enable >= 0)
+        gl2.light_enabled[index] = enable;
+    if (ambient_rgb) {
+        gl2.light_ambient[index][0] = ambient_rgb[0];
+        gl2.light_ambient[index][1] = ambient_rgb[1];
+        gl2.light_ambient[index][2] = ambient_rgb[2];
+    }
+}
 
 #endif

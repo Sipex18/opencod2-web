@@ -803,13 +803,37 @@ unsigned char g_platform_name[32] = {
 
 /* wasm duplicate omitted: g_imageProgNames */
 
-unsigned char s_sundvars[96] = {
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+/* WASM fix: same issue as "functions"/"methods" above — the generator can't
+ * translate the .long <string-literal> relocations in data.S for this table
+ * (see src/blobs/data.S "s_sundvars:"), so it was left as a zero-filled
+ * placeholder. Every entry being NULL made Com_LoadDvarsFromBuffer's first
+ * lookup loop call Dvar_FindVar(NULL) -> Com_Error("null name in
+ * generateHashValue") the moment R_LoadSun() read a map's .sun file,
+ * hard-crashing the server right after BSP entities finished loading.
+ * Rebuilt here with the real dvar names, in the exact order registered by
+ * R_RegisterSunDvars() (r_sky.c) — matches R_GetSundvarsSize() == 21. */
+const char *s_sundvars[21] = {
+    "r_sunsprite_shader",
+    "r_sunsprite_size",
+    "r_sunflare_shader",
+    "r_sunflare_min_size",
+    "r_sunflare_min_angle",
+    "r_sunflare_max_size",
+    "r_sunflare_max_angle",
+    "r_sunflare_max_alpha",
+    "r_sunflare_fadein",
+    "r_sunflare_fadeout",
+    "r_sunblind_min_angle",
+    "r_sunblind_max_angle",
+    "r_sunblind_max_darken",
+    "r_sunblind_fadein",
+    "r_sunblind_fadeout",
+    "r_sunglare_min_angle",
+    "r_sunglare_max_angle",
+    "r_sunglare_max_lighten",
+    "r_sunglare_fadein",
+    "r_sunglare_fadeout",
+    "r_sun_fx_position",
 };
 
 unsigned char R_BoundsForDrawSurfTable[32] = {
@@ -874,14 +898,47 @@ void *chatField[6] = {
 
 char sv_serverId_value[32] = {0};
 
-unsigned char cg_soundRoomTypes[108] = {
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+/* WASM fix: same zero-filled-placeholder issue as "s_sundvars"/"cg_shock_dvar_names"
+ * above. cg_soundRoomTypes backs Dvar_RegisterEnum("cg_shock_soundRoomType", ...)
+ * (cg_main_mp.c:990) and the enum-value validator NULL-terminates by scanning for
+ * the first NULL entry (Dvar_RegisterEnum, dvar.c:1862-1866); with every slot NULL
+ * every value (including config-authored ones like "underwater"/"generic") failed
+ * validation with "'X' is not a valid value for dvar 'cg_shock_soundRoomType'".
+ * HEURISTIC (flagged per project rule 2): referencia/** has no decompiled string
+ * table for this array (data.S only carries the zeroed relocation placeholder), so
+ * this is reconstructed from the standard EAX 2.0 "Environment" preset list used
+ * verbatim (26 presets, lowercase, space-separated) by every idTech3-derived title
+ * with EAX-style sound room reverb (CoD/CoD2/Q3/RTCW). 27 slots (108/4) = 26 names
+ * + 1 NULL terminator, matching Dvar_RegisterEnum's scan. Low risk: this is a fixed,
+ * universally documented preset order, not map-specific data. */
+const char *cg_soundRoomTypes[27] = {
+    "generic",
+    "padded cell",
+    "room",
+    "bathroom",
+    "living room",
+    "stone room",
+    "auditorium",
+    "concert hall",
+    "cave",
+    "arena",
+    "hangar",
+    "carpeted hallway",
+    "hallway",
+    "stone corridor",
+    "alley",
+    "forest",
+    "city",
+    "mountains",
+    "quarry",
+    "plain",
+    "parking lot",
+    "sewer pipe",
+    "underwater",
+    "drugged",
+    "dizzy",
+    "psychotic",
+    NULL
 };
 
 unsigned char cg_drawSoundOverlayStrings[20] = {
@@ -1590,15 +1647,43 @@ unsigned char svc_strings[1024] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-unsigned char cg_shock_dvar_names[128] = {
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
-     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+/* WASM fix: same zero-filled-placeholder issue as "s_sundvars" above (see
+ * src/blobs/data.S "cg_shock_dvar_names:") — Com_LoadDvarsFromBuffer /
+ * Com_SaveDvarsToBuffer would hit Dvar_FindVar(NULL) on the first entry the
+ * moment a shellshock preset is loaded/saved. Rebuilt with the real dvar
+ * names, in the order registered in CG_Init (cg_main_mp.c); callers only
+ * ever pass count=29, so the last (30th) entry is unused padding. */
+const char *cg_shock_dvar_names[30] = {
+    "cg_shock_screenBlendTime",
+    "cg_shock_screenBlendFadeTime",
+    "cg_shock_viewKickPeriod",
+    "cg_shock_viewKickRadius",
+    "cg_shock_viewKickFadeTime",
+    "cg_shock_sound",
+    "cg_shock_soundFadeInTime",
+    "cg_shock_soundFadeOutTime",
+    "cg_shock_soundLoopFadeTime",
+    "cg_shock_soundLoopEndDelay",
+    "cg_shock_soundRoomType",
+    "cg_shock_soundDryLevel",
+    "cg_shock_soundWetLevel",
+    "cg_shock_soundModEndDelay",
+    "cg_shock_volume_auto",
+    "cg_shock_volume_auto2d",
+    "cg_shock_volume_menu",
+    "cg_shock_volume_weapon",
+    "cg_shock_volume_voice",
+    "cg_shock_volume_item",
+    "cg_shock_volume_body",
+    "cg_shock_volume_local",
+    "cg_shock_volume_music",
+    "cg_shock_volume_announcer",
+    "cg_shock_volume_shellshock",
+    "cg_shock_mouse",
+    "cg_shock_mouse_maxpitchspeed",
+    "cg_shock_mouse_maxyawspeed",
+    "cg_shock_mouse_sensitivityscale",
+    "cg_shock_mouse_fadeTime",
 };
 
 unsigned char s_barrelTags[32] = {
@@ -1606,13 +1691,18 @@ unsigned char s_barrelTags[32] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-unsigned char cg_activeLocalEntities[4] = {
-     0x00, 0x00, 0x00, 0x00
-};
-
-unsigned char cg_localEntities[28] = {
-     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+/* WASM fix: generator cannot translate .long <symbol> relocations from
+ * src/blobs/data.S, so these were zero-filled. NULL made CG_InitLocalEntities
+ * memset/link at address 0; the first CG_AllocLocalEntity then hit
+ * Com_Error("CG_FreeLocalEntity: not active"). Mirror data.S:
+ *   cg_activeLocalEntities -> cg_eachClientActiveLocalEntities
+ *   cg_localEntities[0]    -> cg_eachClientLocalEntities (0x5e00 pool) */
+extern unsigned char cg_eachClientActiveLocalEntities[];
+extern unsigned char cg_eachClientLocalEntities[];
+void *cg_activeLocalEntities = cg_eachClientActiveLocalEntities;
+void *cg_localEntities[7] = {
+    cg_eachClientLocalEntities,
+    0, 0, 0, 0, 0, 0
 };
 
 /* wasm duplicate omitted: accuracyDirName */

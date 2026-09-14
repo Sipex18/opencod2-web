@@ -24,8 +24,8 @@
  *     since Miles' actual filter network is closed-source DSP we don't
  *     reproduce. See the comment above SND_SetRoomtype below and the reverb
  *     bus comment in web_audio.js.
- *   - SND_RawSamples (VOIP / cinematic raw PCM audio) is a no-op; those
- *     subsystems are out of scope for this pass.
+ *   - SND_RawSamples queues PCM into Web Audio (cinematics / VOIP PCM).
+ *     Capture (microphone) is still not wired — Voice_Init stays skipped.
  *   - 2D one-shot sounds are always centered (matches the original Miles
  *     path, which also always sets equal L/R levels for 2D samples).
  *   - 3D one-shot sample panning: the original relies on Miles' "Fast 2D
@@ -415,30 +415,18 @@ static int s_fallbackDuration[53];
 
 void SND_LoadSoundFile(SoundFile *soundFile)
 {
-    char realname[256];
-    void *buffer;
-    int len;
-
     if (!g_snd.Initialized2d) {
         soundFile->fileMem = NULL;
         return;
     }
 
-    snprintf(realname, sizeof(realname), "sound/%s", soundFile->soundName);
-
-    len = FS_ReadFile(realname, &buffer);
-    if (len <= 0 || !buffer) {
-        Com_Printf("^1ERROR: Sound file '%s' not found\n", realname);
-        soundFile->fileMem = NULL;
-        return;
-    }
-
-    /* Best-effort async pre-decode; SND_StartAlias2DSample/3DSample/StreamOnChannel
-     * re-supply the bytes at play time too, so this is not load-bearing for
-     * correctness, only for having the AudioBuffer ready before gameplay. */
-    WebSnd_JS_Preload(realname, buffer, len);
-    FS_FreeFile(buffer);
-
+    /*
+     * Do not FS_ReadFile/preload every alias during Com_LoadSoundAliasSounds.
+     * Menu/vid_restart reloads thousands of WAVs synchronously and freezes the
+     * tab (console stops right after Cmd_AddCommand snd_list). Play paths
+     * (SND_StartAlias*) still supply bytes to Web Audio when needed.
+     */
+    (void)soundFile->soundName;
     soundFile->fileMem = (struct MssSound *)&s_webSoundFileLoadedMarker;
 }
 
@@ -506,25 +494,53 @@ void SND_UpdateStreamChannelReverb(int index)
 }
 
 /* ---------------------------------------------------------------------- */
-/* Raw PCM samples (VOIP / cinematics) — no-ops (see file header)         */
+/* Raw PCM samples (VOIP / cinematics) — Web Audio buffer queue           */
+/* Mirrors src/PC/win32/snd_driver.c SND_RawSamples: 8/16-bit, 1/2 ch.    */
 /* ---------------------------------------------------------------------- */
 
 void SND_EndRawSamples(void)
 {
+    MAIN_THREAD_EM_ASM({
+        var a = globalThis.cod2Audio;
+        if (a && a.snd && a.snd.endRaw)
+            a.snd.endRaw();
+    });
 }
 
 int SND_RawSamplesTime(void)
 {
-    return 0;
+    return MAIN_THREAD_EM_ASM_INT({
+        var a = globalThis.cod2Audio;
+        return (a && a.snd && a.snd.rawTimeMs) ? (a.snd.rawTimeMs() | 0) : 0;
+    });
 }
 
 void SND_RawSamples(int samples, int rate, int width, int s_channels, const byte *data)
 {
-    (void)samples;
-    (void)rate;
-    (void)width;
-    (void)s_channels;
-    (void)data;
+    int bytes;
+
+    if (!g_snd.Initialized2d || !data || samples <= 0)
+        return;
+    if (width != 1 && width != 2)
+        return;
+    if (s_channels != 1 && s_channels != 2)
+        return;
+    if (rate <= 0)
+        rate = 22050;
+
+    bytes = samples * width * s_channels;
+    MAIN_THREAD_EM_ASM(
+        {
+            var a = globalThis.cod2Audio;
+            if (!a || !a.snd || !a.snd.playRaw)
+                return;
+            var ptr = $4 | 0;
+            var len = $5 | 0;
+            var copy = new Uint8Array(len);
+            copy.set(HEAPU8.subarray(ptr, ptr + len));
+            a.snd.playRaw($0 | 0, $1 | 0, $2 | 0, $3 | 0, copy);
+        },
+        samples, rate, width, s_channels, (int)(uintptr_t)data, bytes);
 }
 
 /* ---------------------------------------------------------------------- */

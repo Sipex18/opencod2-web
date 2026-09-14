@@ -15,6 +15,9 @@ int Web_GetMonitorMaxHz(void);
 /* Resize #canvas backing store on the browser main thread; returns 1 on exact match. */
 int Web_TryResizeCanvas(int wantW, int wantH);
 
+/* Keep #canvas CSS full-viewport (Video Mode must not shrink the on-screen window). */
+void Web_ForceCanvasFullBleedCss(void);
+
 /* Triggered by JS window resize event; runs vid_restart only if current r_mode == Auto (7). */
 void Web_OnWindowResize(void);
 
@@ -58,6 +61,10 @@ static inline int Web_TryResizeCanvas(int wantW, int wantH)
     (void)wantW;
     (void)wantH;
     return 0;
+}
+
+static inline void Web_ForceCanvasFullBleedCss(void)
+{
 }
 
 static inline void Web_OnWindowResize(void)

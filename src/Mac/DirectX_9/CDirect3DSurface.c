@@ -145,10 +145,17 @@ HRESULT CDirect3DSurface_UnlockRect(const CDirect3DSurface *_this)
         unsigned int texID = *(unsigned int *)((byte *)surface->owner + 0x54);
         if (texID) {
             int prevTex = 0;
-            glGetIntegerv(0x8069 , &prevTex);
-            glBindTexture(0x0DE1 , texID);
-            CDirect3DSurface_UpdateOpenGLSurfaceObject(_this, 1);
-            glBindTexture(0x0DE1, prevTex);
+            if (surface->surfaceType == 1) {
+                glGetIntegerv(0x8514, &prevTex); /* GL_TEXTURE_BINDING_CUBE_MAP */
+                glBindTexture(0x8513, texID);    /* GL_TEXTURE_CUBE_MAP */
+                CDirect3DSurface_UpdateOpenGLSurfaceObject(_this, 1);
+                glBindTexture(0x8513, prevTex);
+            } else {
+                glGetIntegerv(0x8069, &prevTex); /* GL_TEXTURE_BINDING_2D */
+                glBindTexture(0x0DE1, texID);
+                CDirect3DSurface_UpdateOpenGLSurfaceObject(_this, 1);
+                glBindTexture(0x0DE1, prevTex);
+            }
         }
     }
 

@@ -78,7 +78,8 @@ list(APPEND WEB_C
   src/unix/linux_common.c src/unix/linux_input.c src/unix/linux_net.c src/unix/sysdiff_statehash.c
   src/PC/zlib/adler32.c src/PC/zlib/infblock.c src/PC/zlib/infcodes.c src/PC/zlib/inffast.c
   src/PC/zlib/inflate.c src/PC/zlib/inftrees.c src/PC/zlib/infutil.c src/PC/zlib/zutil.c
-  src/web/webgl2_compat.c src/web/wasm_aliases.c src/web/cod2_wasmfs_mount.c src/web/builtin_engine_assets.c src/web/web_vid_scale.c src/web/web_master.c src/web/web_snd_driver.c src/web/web_net.c)
+  src/web/webgl2_compat.c src/web/wasm_aliases.c src/web/cod2_wasmfs_mount.c src/web/builtin_engine_assets.c src/web/web_vid_scale.c src/web/web_master.c src/web/web_snd_driver.c src/web/web_net.c
+  src/web/cgevent_keepalive.c)
 
 add_executable(cod2 ${WEB_C} ${WEB_GEN_C})
 target_compile_definitions(cod2 PRIVATE WEB_BUILD=1 SDL_DISABLE_IMMINTRIN_H)
@@ -92,11 +93,11 @@ set_source_files_properties(src/PC/qcommon/crash_handler.c PROPERTIES
   COMPILE_DEFINITIONS "COD2_GIT_HASH=\"${COD2_GIT_HASH}\"")
 
 set(WEB_LINK
-  -O2
+  -O2 -g2
   -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sSTACK_SIZE=5242880
-  -sFORCE_FILESYSTEM=1 -sASSERTIONS=0 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=0
-  -sWARN_ON_UNDEFINED_SYMBOLS=0 -sMALLOC=emmalloc
+  -sFORCE_FILESYSTEM=1 -sASSERTIONS=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=0
+  -sWARN_ON_UNDEFINED_SYMBOLS=0 -sMALLOC=emmalloc -sSUPPORT_LONGJMP=emscripten
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,UTF8ToString
   --shell-file ${COD2_SRC_DIR}/web/shell_nzp.html
   -Wl,--allow-multiple-definition
@@ -121,6 +122,7 @@ else()
 endif()
 # SHELL: keeps duplicate --post-js flags (CMake otherwise de-dupes the flag).
 target_link_options(cod2 PRIVATE ${WEB_LINK}
+  "SHELL:--js-library ${COD2_SRC_DIR}/web/library_cod2_vid.js"
   "SHELL:--post-js ${COD2_SRC_DIR}/web/gl_proxied_frame_fix.js"
   "SHELL:--post-js ${COD2_SRC_DIR}/web/web_master.js"
   "SHELL:--post-js ${COD2_SRC_DIR}/web/web_net.js"
@@ -128,10 +130,14 @@ target_link_options(cod2 PRIVATE ${WEB_LINK}
 set_target_properties(cod2 PROPERTIES SUFFIX ".html"
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# the browser-side loader sits next to cod2.html (shell.html loads it as a sibling).
+# the browser-side loader sits next to cod2.html (the shell loads it as a sibling).
 add_custom_command(TARGET cod2 POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/cod2_fs.js ${CMAKE_BINARY_DIR}/cod2_fs.js
-  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/remote-config.js ${CMAKE_BINARY_DIR}/remote-config.js)
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/remote-config.js ${CMAKE_BINARY_DIR}/remote-config.js
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/cod2-icon.png ${CMAKE_BINARY_DIR}/cod2-icon.png
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/favicon.png ${CMAKE_BINARY_DIR}/favicon.png
+  COMMAND ${CMAKE_COMMAND} -E copy ${COD2_SRC_DIR}/web/apple-touch-icon.png ${CMAKE_BINARY_DIR}/apple-touch-icon.png
+  COMMAND ${CMAKE_COMMAND} -E env python3 ${CMAKE_SOURCE_DIR}/tools/patch_web_proxy_receive.py ${CMAKE_BINARY_DIR}/cod2.js)
 
 # =============================================================================
 elseif(WIN32)

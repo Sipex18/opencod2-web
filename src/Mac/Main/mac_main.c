@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -173,12 +174,24 @@ void Sys_Error(const char *error, ...)
     /* Avoid infinite Com_Quit_f / exit() — that yields black canvas + unreachable. */
     fprintf(stderr, "Sys_Error: %s\n", text);
     emscripten_cancel_main_loop();
-    EM_ASM({
-        var msg = UTF8ToString($0);
-        if (typeof Module !== 'undefined' && typeof Module.onCod2Fatal === 'function') {
-            Module.onCod2Fatal(msg);
-        }
-    }, text);
+    /*
+     * PROXY_TO_PTHREAD: UI hooks live on the browser Module. Copy to a static
+     * buffer so MAIN_THREAD_ASYNC_EM_ASM can read the string after this frame.
+     */
+    {
+        static char s_fatalText[4096];
+        snprintf(s_fatalText, sizeof(s_fatalText), "%s", text);
+        MAIN_THREAD_ASYNC_EM_ASM({
+            var msg = UTF8ToString($0);
+            var M = null;
+            try { if (typeof Module !== 'undefined') M = Module; } catch (e0) {}
+            if (!M || typeof M.onCod2Fatal !== 'function') {
+                try { if (typeof window !== 'undefined') M = window.Module; } catch (e1) {}
+            }
+            if (M && typeof M.onCod2Fatal === 'function')
+                M.onCod2Fatal(msg);
+        }, s_fatalText);
+    }
     return;
 #else
     for (;;) {
@@ -281,6 +294,15 @@ static HINSTANCE g_hInstance;
 #ifdef __EMSCRIPTEN__
 static void Sys_WebFrame(void)
 {
+#ifdef __EMSCRIPTEN__
+    {
+        static int s_webFrames;
+        if (s_webFrames < 3) {
+            Com_Printf("webdbg: Sys_WebFrame #%d\n", s_webFrames);
+            s_webFrames++;
+        }
+    }
+#endif
     Com_Frame();
 }
 #endif
@@ -346,6 +368,22 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     Com_Printf("Working directory: %s\n", cwd);
 
 #ifdef __EMSCRIPTEN__
+    Com_Printf("webdbg: entering emscripten main loop\n");
+    /*
+     * Com_Init has returned: GL context + CL_Init are done. Notify the shell
+     * on the UI thread (ASYNC — do not deadlock the worker during boot).
+     */
+    MAIN_THREAD_ASYNC_EM_ASM({
+        try {
+            var M = null;
+            try { if (typeof Module !== 'undefined') M = Module; } catch (e0) {}
+            if (!M || typeof M.onCod2Ready !== 'function') {
+                try { if (typeof window !== 'undefined') M = window.Module; } catch (e1) {}
+            }
+            if (M && typeof M.onCod2Ready === 'function')
+                M.onCod2Ready();
+        } catch (e) {}
+    });
     emscripten_set_main_loop(Sys_WebFrame, 0, 1);
     return 0;
 #else
@@ -388,10 +426,14 @@ void Sys_Quit(void)
 #ifdef __EMSCRIPTEN__
     fprintf(stderr, "Sys_Quit\n");
     emscripten_cancel_main_loop();
-    EM_ASM({
-        if (typeof Module !== 'undefined' && typeof Module.onCod2Quit === 'function') {
-            Module.onCod2Quit();
+    MAIN_THREAD_ASYNC_EM_ASM({
+        var M = null;
+        try { if (typeof Module !== 'undefined') M = Module; } catch (e0) {}
+        if (!M || typeof M.onCod2Quit !== 'function') {
+            try { if (typeof window !== 'undefined') M = window.Module; } catch (e1) {}
         }
+        if (M && typeof M.onCod2Quit === 'function')
+            M.onCod2Quit();
     });
 #else
     exit(0);

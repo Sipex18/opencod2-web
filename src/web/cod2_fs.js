@@ -297,7 +297,8 @@
       return String(a.path || '').localeCompare(String(b.path || ''));
     });
     var bytesTotal = 0, i;
-    var CONCURRENCY = 2;
+    /* Five ~500–740MB IWDs on the VPS pack; 2 streams serialized the first run. */
+    var CONCURRENCY = 6;
     for (i = 0; i < files.length; i++) bytesTotal += (files[i].size | 0);
 
     var meta = { ready: false, files: new Array(files.length), source: 'remote', baseUrl: baseUrl };
