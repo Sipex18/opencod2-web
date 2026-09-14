@@ -3060,6 +3060,137 @@ static void FS_WebSaveIwdIndex(webIwd_t *iwd, long iwdSize, int fileCount)
     Z_FreeInternal(order);
 }
 
+/*
+ * Index a ZIP central directory with a single buffered read.
+ *
+ * minizip's unzGetCurrentFileInfo seeks and then reads every field of the
+ * record separately - about 18 I/O calls per entry. On the web build each one
+ * is a round trip through the WASMFS OPFS proxy, which made the 12k-entry
+ * localized_english_iw01.iwd take 55 s to index. The directory is contiguous,
+ * so reading it once and walking it in memory costs two reads per archive.
+ *
+ * Returns the number of files added, or -1 when the archive has to go through
+ * minizip (Zip64, truncated, or otherwise unexpected).
+ */
+static int FS_WebIndexIwdFast(webIwd_t *iwd, const char *path)
+{
+    enum { EOCD_SCAN_MAX = 66000, EOCD_MIN = 22 };
+    FILE *fp;
+    long size;
+    byte *buf = NULL;
+    long bufLen;
+    long i;
+    long cdOffset = -1;
+    long cdSize = -1;
+    int entryCount = -1;
+    int fileCount = 0;
+    long off;
+
+    size = FS_WebFileSize(path);
+    if (size < EOCD_MIN)
+        return -1;
+
+    fp = FS_FileOpen(path, "rb");
+    if (!fp)
+        return -1;
+
+    /* The end-of-central-directory record sits in the last 64 KiB plus comment. */
+    bufLen = (size < EOCD_SCAN_MAX) ? size : EOCD_SCAN_MAX;
+    buf = (byte *)Z_MallocInternal(bufLen);
+    if (!buf || FS_FileSeek(fp, size - bufLen, 0) != 0 ||
+        FS_FileRead(buf, 1, bufLen, fp) != (size_t)bufLen) {
+        if (buf)
+            Z_FreeInternal(buf);
+        FS_FileClose(fp);
+        return -1;
+    }
+
+    for (i = bufLen - EOCD_MIN; i >= 0; i--) {
+        int commentLen;
+
+        if (!(buf[i] == 0x50 && buf[i + 1] == 0x4b &&
+              buf[i + 2] == 0x05 && buf[i + 3] == 0x06))
+            continue;
+        commentLen = buf[i + 20] | (buf[i + 21] << 8);
+        if (i + EOCD_MIN + commentLen != bufLen)
+            continue;
+        entryCount = buf[i + 10] | (buf[i + 11] << 8);
+        cdSize = (long)(buf[i + 12] | (buf[i + 13] << 8) |
+                        (buf[i + 14] << 16) | ((long)buf[i + 15] << 24));
+        cdOffset = (long)(buf[i + 16] | (buf[i + 17] << 8) |
+                          (buf[i + 18] << 16) | ((long)buf[i + 19] << 24));
+        break;
+    }
+    Z_FreeInternal(buf);
+
+    /* Zip64 keeps the real values in a separate record: leave it to minizip. */
+    if (entryCount < 0 || entryCount == 0xffff || cdSize <= 0 ||
+        cdOffset < 0 || cdSize == 0xffffffffL || cdOffset == 0xffffffffL ||
+        cdOffset + cdSize > size) {
+        FS_FileClose(fp);
+        return -1;
+    }
+
+    buf = (byte *)Z_MallocInternal(cdSize);
+    if (!buf || FS_FileSeek(fp, cdOffset, 0) != 0 ||
+        FS_FileRead(buf, 1, cdSize, fp) != (size_t)cdSize) {
+        if (buf)
+            Z_FreeInternal(buf);
+        FS_FileClose(fp);
+        return -1;
+    }
+    FS_FileClose(fp);
+
+    for (off = 0; off + 46 <= cdSize && fileCount < entryCount; ) {
+        int nameLen;
+        int extraLen;
+        int commentLen;
+        int uncompressedSize;
+        long unsigned int localOffset;
+        int len;
+        char filename[256];
+        webIwdFile_t *file;
+
+        if (!(buf[off] == 0x50 && buf[off + 1] == 0x4b &&
+              buf[off + 2] == 0x01 && buf[off + 3] == 0x02))
+            break;
+
+        uncompressedSize = (int)(buf[off + 24] | (buf[off + 25] << 8) |
+                                 (buf[off + 26] << 16) | ((long)buf[off + 27] << 24));
+        nameLen = buf[off + 28] | (buf[off + 29] << 8);
+        extraLen = buf[off + 30] | (buf[off + 31] << 8);
+        commentLen = buf[off + 32] | (buf[off + 33] << 8);
+        localOffset = (long unsigned int)(buf[off + 42] | (buf[off + 43] << 8) |
+                                          (buf[off + 44] << 16) | ((long)buf[off + 45] << 24));
+
+        if (off + 46 + nameLen > cdSize)
+            break;
+
+        len = (nameLen < (int)sizeof(filename) - 1) ? nameLen : (int)sizeof(filename) - 1;
+        memcpy(filename, buf + off + 46, len);
+        filename[len] = '\0';
+        FS_WebNormalizePath(filename);
+
+        len = strlen(filename);
+        if (len > 0 && filename[len - 1] != '/') {
+            file = (webIwdFile_t *)Z_MallocInternal(sizeof(*file));
+            Com_Memset(file, 0, sizeof(*file));
+            I_strncpyz(file->name, filename, sizeof(file->name));
+            file->pos = localOffset;
+            file->size = uncompressedSize;
+            file->iwd = iwd;
+            file->next = iwd->files;
+            iwd->files = file;
+            fileCount++;
+        }
+
+        off += 46 + nameLen + extraLen + commentLen;
+    }
+
+    Z_FreeInternal(buf);
+    return fileCount;
+}
+
 static void FS_WebAddIwd(const char *path)
 {
     unzFile uf;
@@ -3108,6 +3239,11 @@ static void FS_WebAddIwd(const char *path)
     }
 
     Com_Printf("FS_Web: indexing %s\n", path);
+
+    fileCount = FS_WebIndexIwdFast(iwd, path);
+    if (fileCount >= 0)
+        goto indexed;
+
     uf = unzOpen(path);
     if (!uf) {
         Com_Printf("FS_Web: unzOpen failed for %s\n", path);
@@ -3147,6 +3283,7 @@ static void FS_WebAddIwd(const char *path)
 
     unzClose(uf);
 
+indexed:
     iwd->next = fs_webIwds;
     fs_webIwds = iwd;
     Com_Printf("FS_Web: indexed %s (%d files)\n", path, fileCount);

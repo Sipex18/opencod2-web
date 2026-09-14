@@ -100,7 +100,20 @@ void LAN_ResetPings(int source)
     }
 
     for (int i = 0; i < count; i++) {
+#ifdef __EMSCRIPTEN__
+        /*
+         * Native sets -1 here and refills it from the UDP getinfo replies.
+         * The browser has no UDP, so -1 would strand every row behind the
+         * ping <= 0 check in UI_BuildServerDisplayList. 999 is the engine's
+         * "unknown" sentinel: the row stays listed and CL_WebMaster_UpdatePing
+         * overwrites it once the proxy poll reports a real RTT. It also keeps
+         * CL_UpdateDirtyPings_f (which only re-pings entries at -1) from
+         * queueing UDP probes that can never be answered.
+         */
+        servers[i].ping = 999;
+#else
         servers[i].ping = -1;
+#endif
     }
 }
 
