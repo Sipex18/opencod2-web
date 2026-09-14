@@ -878,6 +878,25 @@ static void FX_SetMaterialAndSequenceParams(byte *primTemp, Effect *particle, in
 
 extern void Effect_SetTimeStartEnd(void *effect, int startTime, int endTime);
 extern void Effect_SetBoltFrame(const void *effect, const void *boltFramePtr);
+/*
+ * The Effect family vtables in src/blobs/literals.S are unfilled
+ * (.space 128, 0), so an object that reaches a virtual call can have a null
+ * entry - FX_AddPrimitive traps the whole frame on it when a bullet lands.
+ * Every virtual call on a primitive goes through here so an unreconstructed
+ * vtable degrades to "the effect did not spawn" instead of "the game stops".
+ */
+
+static void FX_DestroyPrimitiveIfConstructed(void *p)
+{
+    void **vtable;
+
+    if (!p)
+        return;
+    vtable = (void **)*(void ***)p;
+    if (vtable && vtable[1])
+        ((void (*)(void *))vtable[1])(p);
+}
+
 static Bool FX_AddPrimitive_impl(byte *prim, Effect *particle, const vec_t *origin)
 {
     EffectPrimitive *ep = (EffectPrimitive *)prim;
@@ -939,7 +958,17 @@ static Bool FX_AddPrimitive_impl(byte *prim, Effect *particle, const vec_t *orig
     (((Effect *)(particle))->deathEffect) = (struct Effect *)MediaHandles_GetEffect(((char *)primTemp + offsetof(PrimitiveTemplate, mImpactFxHandles)));
 
     typedef void (*CreateChFn)(void *, void *);
-    ((CreateChFn)(*(void ***)particle)[8])(particle, primTemp);
+    {
+        void **vtable = (void **)*(void ***)particle;
+        if (!vtable || !vtable[8]) {
+            /* The Effect family vtables in src/blobs/literals.S are unfilled
+             * (.space 128, 0), so this slot is null. Skip the primitive rather
+             * than calling through null; returning 0 makes the caller destroy
+             * the particle, which is guarded too. */
+            return 0;
+        }
+        ((CreateChFn)vtable[8])(particle, primTemp);
+    }
 
     Effect_SetBoltFrame((const Effect *)particle, &ep->boltFrame);
 
@@ -963,8 +992,7 @@ void FX_AddCloud(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const i
         return;
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
     vec3_t newOrigin;
@@ -1003,9 +1031,7 @@ void FX_AddFlash(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const i
 
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
 
@@ -1083,8 +1109,7 @@ void FX_AddCylinder(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, cons
         return;
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
     vec3_t newOrigin;
@@ -1132,8 +1157,7 @@ void FX_AddLine(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const in
 
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
 
@@ -1199,8 +1223,7 @@ void FX_AddParticle(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, cons
 
     int added = FX_AddPrimitive(prim, &p->base, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
 
@@ -1236,8 +1259,7 @@ void FX_AddTail(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const in
         return;
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
     vec3_t newOrigin;
@@ -1280,8 +1302,7 @@ void FX_AddEmitter(EffectPrimitive *prim, vec3_t *ax, const vec_t *origin, const
         return;
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
     vec3_t vecAng;
@@ -1375,8 +1396,7 @@ void FX_AddOrientedParticle(EffectPrimitive *prim, vec3_t *ax, const vec_t *orig
         return;
     int added = FX_AddPrimitive(prim, p, origin);
     if (!(byte)added) {
-        typedef void (*Fn)(void *);
-        ((Fn)(*(void ***)p)[1])(p);
+        FX_DestroyPrimitiveIfConstructed(p);
         return;
     }
     vec3_t newOrigin;
