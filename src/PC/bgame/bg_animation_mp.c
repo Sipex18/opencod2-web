@@ -1146,7 +1146,7 @@ static void __attribute_regparm__(3)
                 tempBits[0] = -1;
                 tempBits[1] = -1;
             } else {
-                int defineIndex = BG_IndexForString(currentString, (animStringItem_t *)((byte *)defineStr + (condIndex << 7)), 1);
+                int defineIndex = BG_IndexForString(currentString, defineStr[condIndex], 1);
 
                 if (defineIndex >= 0) {
                     tempBits[0] = defineBits[condIndex][defineIndex][0];
@@ -1440,7 +1440,7 @@ static void __attribute_regparm__(3)
     memset(weaponStrings, 0, 0x400);
     BG_LoadWeaponStrings();
 
-    memset(defineStr, 0, 0x480);
+    memset(defineStr, 0, sizeof(defineStr));
     memset(defineStrings, 0, sizeof(defineStrings));
     memset(numDefines, 0, sizeof(numDefines));
     defineStringsOffset = 0;
@@ -1764,7 +1764,7 @@ void BG_InitWeaponString(int index, const char *name)
         hash = 0;
     }
 
-    *(int *)((char *)weaponStrings + index * 8 + 4) = hash;
+    weaponStrings[index].hash = hash;
 }
 
 void BG_LoadAnim(void)
