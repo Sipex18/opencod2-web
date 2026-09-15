@@ -1064,7 +1064,15 @@ void SV_SpawnServer(const char *server)
     }
 
     svg->state = 2;
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: after state=2"); }
+#endif
     SV_Heartbeat_f();
-
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: after heartbeat"); }
+#endif
     Com_Printf("-----------------------------------\n");
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: at the end"); }
+#endif
 }

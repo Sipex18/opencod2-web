@@ -629,8 +629,14 @@ static void SV_Map_f(void)
     isDevmap = I_stricmp(SV_Cmd_Argv(0), "devmap");
     FS_ConvertPath(mapname);
     SV_SpawnServer(mapname);
-
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("map: after SV_SpawnServer"); }
+#endif
     Dvar_SetBool(*(const dvar_t **)imp_sv_cheats, isDevmap == 0);
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("map: after Dvar_SetBool"); }
+#endif
+
 }
 
 void SV_AddOperatorCommands(void)
