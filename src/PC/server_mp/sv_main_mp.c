@@ -74,9 +74,11 @@ __asm__(".Lsvpkt_fmt: .asciz \"\"\n");
 int SvDbgGuardHits;
 void SvDbgGuard(const char *where)
 {
-    if (*(volatile unsigned int *)0 != 0x636D7365u) {
-        if (SvDbgGuardHits++ < 4)
-            Com_Printf("[svdbg] GUARD CORRUPTED after: %s\n", where);
+    unsigned int word = *(volatile unsigned int *)0;
+    if (word != 0x636D7365u) {
+        if (SvDbgGuardHits++ < 6)
+            Com_Printf("[svdbg] GUARD CORRUPTED after: %s (word=0x%08x)\n",
+                       where, word);
     }
 }
 #endif
