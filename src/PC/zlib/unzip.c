@@ -14,7 +14,16 @@ enum {
     UNZ_PARAMERROR = -102,
     UNZ_BADZIPFILE = -103,
     UNZ_INTERNALERROR = -104,
-    UNZ_BUFSIZE = 0x4000,
+    /*
+     * 16 KB was the original size, which is fine against a local disk but not
+     * against the web filesystem: on the WASMFS/OPFS build every read and
+     * every seek in unzReadCurrentFile is a ProxyWorker round-trip to the
+     * browser main thread. Reading a 5.7 MB compressed mp_burgundy.d3dbsp in
+     * 16 KB chunks is ~365 reads plus ~365 seeks, and that is the 7-9 second
+     * silent gap between "sounds done" and "Game Initialization" in the
+     * console log. 256 KB cuts it to ~23 of each.
+     */
+    UNZ_BUFSIZE = 0x40000,
     UNZ_LOCAL_HEADER_SIZE = 0x1e,
     UNZ_SIZECENTRALDIRITEM = 0x2e
 };
