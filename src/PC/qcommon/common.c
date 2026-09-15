@@ -1669,7 +1669,13 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     }
 #endif
 
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("cf: after Com_EventLoop"); }
+#endif
     Cbuf_Execute();
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("cf: after Cbuf_Execute (vid_restart runs here)"); }
+#endif
     com_lastFrameTime = com_frameTime;
 
 #ifdef __EMSCRIPTEN__
@@ -1717,15 +1723,7 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
         com_timescaleValue = 1.0f;
 
     CL_SwitchToLocalClient(0);
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: before SV_Frame\n");
-    SvDbgGuard("cf: before SV_Frame");
-#endif
     SV_Frame(maxMsec);
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: after SV_Frame\n");
-    SvDbgGuard("cf: after SV_Frame");
-#endif
 
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
@@ -1771,9 +1769,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #endif
     CL_SwitchToLocalClient(0);
 #ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: before CL_Frame\n");
-#endif
-#ifdef __EMSCRIPTEN__
     SvDbgGuard("cf: before CL_Frame");
 #endif
     CL_Frame(maxMsec);
@@ -1782,17 +1777,11 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #endif
 
 #ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: after CL_Frame\n");
-#endif
-#ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after CL_Frame #%d\n", web_frame_dbg);
     }
 #endif
     CL_SwitchToLocalClient(0);
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: before SCR_UpdateScreenInternal\n");
-#endif
 #ifdef __EMSCRIPTEN__
     SvDbgGuard("cf: before SCR_UpdateScreenInternal");
 #endif
@@ -1802,15 +1791,9 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #endif
 
 #ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: after SCR_UpdateScreenInternal\n");
-#endif
-#ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after SCR #%d\n", web_frame_dbg);
     }
-#endif
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: before SCR_RunCinematic\n");
 #endif
 #ifdef __EMSCRIPTEN__
     SvDbgGuard("cf: before SCR_RunCinematic");
@@ -1820,9 +1803,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     SvDbgGuard("cf: after SCR_RunCinematic");
 #endif
 
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: after SCR_RunCinematic\n");
-#endif
 
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
@@ -1831,9 +1811,6 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     }
 #endif
 
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] cf: tail\n");
-#endif
     /* com_statmon lives in src/blobs/bss.c as a BSSINT and is only filled in
      * by r_dvars.c at R_Init; reading through it before that is a null
      * dereference, which is how the block below ran at all. */
@@ -1883,6 +1860,9 @@ void Com_Frame(void)
 {
     jmp_buf *abortframe = (jmp_buf *)Sys_GetValue(2);
 
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("cf: Com_Frame entry"); }
+#endif
     if (!setjmp(*abortframe)) {
         Com_Frame_Try_Block_Function();
         com_frameNumber++;

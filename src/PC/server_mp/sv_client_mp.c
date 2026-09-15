@@ -1437,24 +1437,14 @@ setup_client:
         }
     }
 
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] dc: loop done connectedClients=%d\n", connectedClients);
-#endif
 
 #ifdef __EMSCRIPTEN__
     SvDbgGuard("dc: before heartbeat");
 #endif
     if (connectedClients == 1 || connectedClients == maxClients) {
         SV_Heartbeat_f();
-#ifdef __EMSCRIPTEN__
-        Com_Printf("[svdbg] dc: heartbeat done\n");
-#endif
     }
 
-#ifdef __EMSCRIPTEN__
-    Com_Printf("[svdbg] dc: returning\n");
-    SvDbgGuard("dc: return");
-#endif
 }
 
 void SV_FreeClients(void)
