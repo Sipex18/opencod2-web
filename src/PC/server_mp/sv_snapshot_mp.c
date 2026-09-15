@@ -1882,6 +1882,10 @@ void SV_SendClientMessages(void)
     sv->bpsTotalBytes = 0;
     sv->ubpsTotalBytes = 0;
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] scm: enter\n");
+#endif
+
     c = psvs->clients;
     maxClients = (*(dvar_t **)(imp_sv_maxclients))->current.integer;
     numclients = 0;

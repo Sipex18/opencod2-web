@@ -1411,6 +1411,15 @@ setup_client:
 #ifdef __EMSCRIPTEN__
     if (from.type == NA_LOOPBACK)
         Com_Printf("SV_DirectConnect: loopback connected, gamestate deferred\n");
+    /*
+     * The run dies on Emscripten's heap guard at address zero (the 'emsc'
+     * marker) a few milliseconds after the line above, and nothing logs in
+     * between. Something here writes through a null struct pointer, so mark
+     * each step: whichever of these is the last to print is the one that did
+     * it.
+     */
+    Com_Printf("[svdbg] dc: clients=%p maxClients=%d cl=%p\n",
+               (void *)svs->clients, maxClients, (void *)cl);
 #endif
 
     connectedClients = 0;
@@ -1420,9 +1429,20 @@ setup_client:
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] dc: loop done connectedClients=%d\n", connectedClients);
+#endif
+
     if (connectedClients == 1 || connectedClients == maxClients) {
         SV_Heartbeat_f();
+#ifdef __EMSCRIPTEN__
+        Com_Printf("[svdbg] dc: heartbeat done\n");
+#endif
     }
+
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] dc: returning\n");
+#endif
 }
 
 void SV_FreeClients(void)
