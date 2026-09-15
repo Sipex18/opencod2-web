@@ -66,7 +66,7 @@ __asm__(".Lsvpkt_fmt: .asciz \"\"\n");
 #endif
 #ifdef __EMSCRIPTEN__
 /*
- * Emscripten parks the word 0x636D7365 ('emsc') at address 0 and checks it at
+ * Emscripten parks the word 0x63736D65 ('emsc') at address 0 and checks it at
  * the top of every main loop iteration, so its abort only narrows the write to
  * "somewhere in the previous frame". Reading the same word from here after
  * each step says which step did it.
@@ -75,7 +75,7 @@ int SvDbgGuardHits;
 void SvDbgGuard(const char *where)
 {
     unsigned int word = *(volatile unsigned int *)0;
-    if (word != 0x636D7365u) {
+    if (word != 0x63736D65u) {
         if (SvDbgGuardHits++ < 6)
             Com_Printf("[svdbg] GUARD CORRUPTED after: %s (word=0x%08x)\n",
                        where, word);
