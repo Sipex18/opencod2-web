@@ -963,6 +963,9 @@ void SV_SpawnServer(const char *server)
         DBG_Hunk_PrintUsage("SV: before SV_InitGameProgs");
     }
     SV_InitGameProgs(savepersist);
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: after SV_InitGameProgs"); }
+#endif
 
     isDedicated = *(int *)((byte *)(void *)imp_com_dedicated + 8);
     if (isDedicated) {
@@ -976,6 +979,10 @@ void SV_SpawnServer(const char *server)
     for (i = 0; i < 3; i++) {
 #endif
         svsg->time += 100;
+#ifdef __EMSCRIPTEN__
+        if (i < 2 || i == 29)
+            { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: SV_RunFrame i=%d" /* i */); }
+#endif
         SV_RunFrame();
     }
 #ifdef __EMSCRIPTEN__
