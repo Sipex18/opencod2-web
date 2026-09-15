@@ -1707,7 +1707,13 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
         com_timescaleValue = 1.0f;
 
     CL_SwitchToLocalClient(0);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: before SV_Frame\n");
+#endif
     SV_Frame(maxMsec);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: after SV_Frame\n");
+#endif
 
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
@@ -1752,7 +1758,13 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     }
 #endif
     CL_SwitchToLocalClient(0);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: before CL_Frame\n");
+#endif
     CL_Frame(maxMsec);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: after CL_Frame\n");
+#endif
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after CL_Frame #%d\n", web_frame_dbg);
