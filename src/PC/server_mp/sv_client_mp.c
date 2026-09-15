@@ -1243,6 +1243,9 @@ void SV_BanClient(client_t *cl)
 
 void SV_DirectConnect(netadr_t from)
 {
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("dc: entry"); }
+#endif
     char userinfo[1024];
     int version;
     int challenge;
