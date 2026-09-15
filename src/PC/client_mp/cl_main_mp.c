@@ -2571,6 +2571,9 @@ void CL_Vid_Restart_f(void)
      * into the live session instead.
      */
         Com_Printf("vid_restart: soft path enter [o1-resizefix]\n");
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: entry"); }
+#endif
     {
         static const int modeW[] = {640, 800, 1024, 1280, 1280, 1600, 1920};
         static const int modeH[] = {480, 600, 768, 720, 1024, 900, 1080};
@@ -2785,6 +2788,9 @@ void CL_Vid_Restart_f(void)
          * MSAA on/off boundary, destroy+recreate PROXY_ALWAYS context, then
          * reload GPU resources via the lost-device path (Reset is a no-op on Mac/GL).
          */
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: before AA block"); }
+#endif
         {
             const dvar_t *aaDvar = Dvar_FindVar("r_aaSamples");
             int aaWant = 1;
@@ -2812,6 +2818,9 @@ void CL_Vid_Restart_f(void)
             }
         }
 
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: after AA block"); }
+#endif
         {
             int wantW = w;
             int wantH = h;
@@ -2843,6 +2852,9 @@ void CL_Vid_Restart_f(void)
             }
         }
 
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: after resize block"); }
+#endif
         float aspectWin = (float)w / (float)h;
         if (aspect == 1)
             aspectWin = 4.0f / 3.0f;
@@ -2890,8 +2902,14 @@ void CL_Vid_Restart_f(void)
         backEnd.sceneViewport.width = w;
         backEnd.sceneViewport.height = h;
 
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: after struct writes"); }
+#endif
         SetScreenScaling(1.0f, 1.0f, 0, 0, w, h);
 
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: after SetScreenScaling"); }
+#endif
 #ifdef __EMSCRIPTEN__
         /* Keep UI placement bias in sync after soft resolution change. */
         {
@@ -2915,6 +2933,9 @@ void CL_Vid_Restart_f(void)
             }
         }
 
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("vid: after uiInfo block"); }
+#endif
         /*
          * After snd_restart, SND_Shutdown unloads UI aliases and the soft
          * vid_restart path skips CL_StartHunkUsers — so reload UI aliases
