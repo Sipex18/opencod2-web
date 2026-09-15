@@ -978,6 +978,9 @@ void SV_SpawnServer(const char *server)
         svsg->time += 100;
         SV_RunFrame();
     }
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: after runframe loop"); }
+#endif
 
     sv = (byte *)imp_sv;
     if (*(int *)(sv + SV_NUMENTITIES_OFF) > 1) {
@@ -1018,6 +1021,9 @@ void SV_SpawnServer(const char *server)
     }
 
     {
+#ifdef __EMSCRIPTEN__
+        { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: after baseline loop"); }
+#endif
         serverStatic_t *svsPtr = (serverStatic_t *)imp_svs;
         maxclients = (*(dvar_t **)imp_sv_maxclients)->current.integer;
         for (i = 0; i < maxclients; i++) {
@@ -1046,6 +1052,9 @@ void SV_SpawnServer(const char *server)
         Dvar_SetString(*(dvar_t **)imp_sv_iwdNames, "");
     }
 
+#ifdef __EMSCRIPTEN__
+    { extern void SvDbgGuard(const char *); SvDbgGuard("svsp: before referenced-iwds"); }
+#endif
     s = FS_ReferencedIwdChecksums();
     Dvar_SetString(*(dvar_t **)imp_sv_referencedIwds, s);
     s = FS_ReferencedIwdNames();
