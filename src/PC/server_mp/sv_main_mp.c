@@ -934,7 +934,9 @@ void SV_Frame(int msec)
 #ifdef __EMSCRIPTEN__
             /* Solo listen + cl_paused must still drip gamestate fragments;
              * otherwise the client sits forever on CS_PRIMED. */
+            Com_Printf("[svdbg] frame: paused path -> SV_SendClientMessages\n");
             SV_SendClientMessages();
+            Com_Printf("[svdbg] frame: paused path done\n");
 #endif
             return;
         }
@@ -959,7 +961,10 @@ void SV_Frame(int msec)
             if (cl->state >= 2 &&
                 (cl->netchan.unsentFragments || cl->gamestateMessageNum < 0 ||
                  (cl->state == 3 && cl->messageAcknowledge <= cl->gamestateMessageNum))) {
+                Com_Printf("[svdbg] frame: early path (residual=%d) -> SV_SendClientMessages\n",
+                           sv.timeResidual);
                 SV_SendClientMessages();
+                Com_Printf("[svdbg] frame: early path done\n");
                 break;
             }
         }
@@ -1089,13 +1094,29 @@ void SV_Frame(int msec)
 
         CL_FlushDebugData(1);
         SV_ResetSkeletonCache();
+#ifdef __EMSCRIPTEN__
+        Com_Printf("[svdbg] frame: before G_RunFrame(%d)\n", svs.time);
+#endif
         G_RunFrame(svs.time);
+#ifdef __EMSCRIPTEN__
+        Com_Printf("[svdbg] frame: after G_RunFrame\n");
+#endif
         Scr_SetLoading(0);
 
         if (frameMsec <= sv.timeResidual) {
+#ifdef __EMSCRIPTEN__
+            Com_Printf("[svdbg] frame: before SV_ArchiveSnapshot\n");
+#endif
             SV_ArchiveSnapshot();
+#ifdef __EMSCRIPTEN__
+            Com_Printf("[svdbg] frame: after SV_ArchiveSnapshot\n");
+#endif
         }
     } while (frameMsec <= sv.timeResidual);
+
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] frame: after the run loop\n");
+#endif
 
     timeout = svs.time - sv_timeout->current.integer * 1000;
     zombieTimeout = svs.time - sv_zombietime->current.integer * 1000;
@@ -1128,7 +1149,9 @@ void SV_Frame(int msec)
         cl->timeoutCount = 0;
     }
 
+    Com_Printf("[svdbg] frame: tail -> SV_SendClientMessages\n");
     SV_SendClientMessages();
+    Com_Printf("[svdbg] frame: tail done\n");
     SV_ArchiveSnapshot();
     SV_MasterHeartbeat("COD-2");
     return;
