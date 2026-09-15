@@ -92,7 +92,12 @@ extern void longjmp(jmp_buf env, int val);
 #endif
 extern dvar_t *com_dedicated;
 extern int dvar_modifiedFlags;
-extern int *com_fileAccessed;
+/* int, matching the declaration in com_files.c and the 96-byte
+ * com_fileAccessed[] in src/blobs/bss.c. It was declared here as an
+ * int* , so `com_fileAccessed = 1` over in com_files.c became a pointer
+ * with the value 1 and `*com_fileAccessed = 0` below wrote to address 1 -
+ * straight through Emscripten's 'emsc' guard word at address 0. */
+extern int com_fileAccessed;
 extern void Dvar_ClearModified(const dvar_t *dvar);
 extern void SetAnimCheck(int enabled);
 extern void NET_Sleep(int msec);
@@ -1798,16 +1803,23 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     }
 #endif
 
-    if (com_statmon->current.enabled) {
-        if (*com_fileAccessed) {
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: tail\n");
+#endif
+    /* com_statmon lives in src/blobs/bss.c as a BSSINT and is only filled in
+     * by r_dvars.c at R_Init; reading through it before that is a null
+     * dereference, which is how the block below ran at all. */
+    if (com_statmon && com_statmon->current.enabled) {
+        if (com_fileAccessed) {
             StatMon_Warning(1, 3000, "File Accessed");
-            *com_fileAccessed = 0;
+            com_fileAccessed = 0;
         }
         {
             int prevTime = timeClientFrame;
             int now = Sys_Milliseconds();
             timeClientFrame = now;
-            if (com_statmon->current.enabled && (now - prevTime) > 33 && prevTime != 0) {
+            if (com_statmon && com_statmon->current.enabled &&
+                (now - prevTime) > 33 && prevTime != 0) {
                 StatMon_Warning(0, 3000, "33 msec frame hit");
             }
         }
