@@ -1771,13 +1771,25 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     }
 #endif
     CL_SwitchToLocalClient(0);
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: before SCR_UpdateScreenInternal\n");
+#endif
     SCR_UpdateScreenInternal();
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: after SCR_UpdateScreenInternal\n");
+#endif
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
         Com_Printf("webdbg: Com_Frame after SCR #%d\n", web_frame_dbg);
     }
 #endif
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: before SCR_RunCinematic\n");
+#endif
     SCR_RunCinematic();
+#ifdef __EMSCRIPTEN__
+    Com_Printf("[svdbg] cf: after SCR_RunCinematic\n");
+#endif
 
 #ifdef __EMSCRIPTEN__
     if (web_frame_dbg < 3) {
