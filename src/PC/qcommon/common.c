@@ -8,6 +8,11 @@
 #endif
 #include <ctype.h>
 
+#ifdef __EMSCRIPTEN__
+void SvDbgGuard(const char *where);
+extern int SvDbgGuardHits;
+#endif
+
 extern char cl_cdkey[52];
 extern char cl_cdkeychecksum[12];
 
@@ -1714,10 +1719,12 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
     CL_SwitchToLocalClient(0);
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: before SV_Frame\n");
+    SvDbgGuard("cf: before SV_Frame");
 #endif
     SV_Frame(maxMsec);
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: after SV_Frame\n");
+    SvDbgGuard("cf: after SV_Frame");
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -1766,7 +1773,14 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: before CL_Frame\n");
 #endif
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: before CL_Frame");
+#endif
     CL_Frame(maxMsec);
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: after CL_Frame");
+#endif
+
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: after CL_Frame\n");
 #endif
@@ -1779,7 +1793,14 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: before SCR_UpdateScreenInternal\n");
 #endif
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: before SCR_UpdateScreenInternal");
+#endif
     SCR_UpdateScreenInternal();
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: after SCR_UpdateScreenInternal");
+#endif
+
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: after SCR_UpdateScreenInternal\n");
 #endif
@@ -1791,7 +1812,14 @@ BM_NOINLINE void Com_Frame_Try_Block_Function(void)
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: before SCR_RunCinematic\n");
 #endif
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: before SCR_RunCinematic");
+#endif
     SCR_RunCinematic();
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("cf: after SCR_RunCinematic");
+#endif
+
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] cf: after SCR_RunCinematic\n");
 #endif

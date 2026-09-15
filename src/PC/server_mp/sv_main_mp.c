@@ -64,6 +64,23 @@ extern void Com_DPrintf(const char *fmt, ...);
 #ifndef __EMSCRIPTEN__
 __asm__(".Lsvpkt_fmt: .asciz \"\"\n");
 #endif
+#ifdef __EMSCRIPTEN__
+/*
+ * Emscripten parks the word 0x636D7365 ('emsc') at address 0 and checks it at
+ * the top of every main loop iteration, so its abort only narrows the write to
+ * "somewhere in the previous frame". Reading the same word from here after
+ * each step says which step did it.
+ */
+int SvDbgGuardHits;
+void SvDbgGuard(const char *where)
+{
+    if (*(volatile unsigned int *)0 != 0x636D7365u) {
+        if (SvDbgGuardHits++ < 4)
+            Com_Printf("[svdbg] GUARD CORRUPTED after: %s\n", where);
+    }
+}
+#endif
+
 void SV_PktEvtDbg(const char *fmt, int netchanResult, int clState, int serverId, int relAck)
 {
     (void)fmt;

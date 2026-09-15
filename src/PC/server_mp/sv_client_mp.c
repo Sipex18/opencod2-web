@@ -6,6 +6,11 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+void SvDbgGuard(const char *where);
+extern int SvDbgGuardHits;
+#endif
+
 extern ucmd_t ucmds[12];
 
 extern char *ClientConnect(int clientNum, int scriptPersId);
@@ -1409,6 +1414,9 @@ setup_client:
      * (do NOT parse/init cgame from inside this stack — that freezes the UI). */
     cl->gamestateMessageNum = -1;
 #ifdef __EMSCRIPTEN__
+    SvDbgGuard("dc: after gamestateMessageNum");
+#endif
+#ifdef __EMSCRIPTEN__
     if (from.type == NA_LOOPBACK)
         Com_Printf("SV_DirectConnect: loopback connected, gamestate deferred\n");
     /*
@@ -1433,6 +1441,9 @@ setup_client:
     Com_Printf("[svdbg] dc: loop done connectedClients=%d\n", connectedClients);
 #endif
 
+#ifdef __EMSCRIPTEN__
+    SvDbgGuard("dc: before heartbeat");
+#endif
     if (connectedClients == 1 || connectedClients == maxClients) {
         SV_Heartbeat_f();
 #ifdef __EMSCRIPTEN__
@@ -1442,6 +1453,7 @@ setup_client:
 
 #ifdef __EMSCRIPTEN__
     Com_Printf("[svdbg] dc: returning\n");
+    SvDbgGuard("dc: return");
 #endif
 }
 
